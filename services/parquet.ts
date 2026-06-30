@@ -1,0 +1,107 @@
+/**
+ * Server-side Parquet read/write using parquetjs.
+ * Only used in API routes (server-side, not client).
+ */
+
+import { mkdirSync, existsSync, unlinkSync } from 'fs'
+import { join } from 'path'
+import type { ColumnDef } from './types'
+
+const parquet = require('parquetjs')
+
+const DATA_DIR = join(process.cwd(), 'generated_data')
+
+function ensureDir(dir: string) {
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+}
+
+function typeToParquet(colType: string): string {
+  switch (colType) {
+    case 'number': return 'DOUBLE'
+    case 'boolean': return 'INT64'  // store 0/1 as int
+    case 'date': return 'UTF8'
+    case 'foreign_key': return 'UTF8'
+    default: return 'UTF8'
+  }
+}
+
+function buildParquetSchema(columns: ColumnDef[]): Record<string, { type: string }> {
+  const schema: Record<string, { type: string }> = {}
+  for (const col of columns) {
+    schema[col.name] = { type: typeToParquet(col.type) }
+  }
+  return schema
+}
+
+/**
+ * Write rows to a Parquet file.
+ * Path: generated_data/{projectId}/{tableName}.parquet
+ */
+export async function writeParquet(
+  projectId: string,
+  tableName: string,
+  columns: ColumnDef[],
+  rows: Record<string, unknown>[]
+): Promise<string> {
+  const dir = join(DATA_DIR, projectId)
+  ensureDir(dir)
+  const filePath = join(dir, `${tableName}.parquet`)
+
+  const schema = new parquet.ParquetSchema(buildParquetSchema(columns))
+  const writer = await parquet.ParquetWriter.openFile(schema, filePath)
+
+  try {
+    for (const row of rows) {
+      const out: Record<string, unknown> = {}
+      for (const col of columns) {
+        let val = row[col.name]
+        // Convert booleans to 0/1
+        if (col.type === 'boolean') {
+          val = val ? 1 : 0
+        }
+        out[col.name] = val ?? null
+      }
+      await writer.appendRow(out)
+    }
+
+    await writer.close()
+  } catch (err) {
+    // Clean up partial file on failure
+    try { await writer.close() } catch {}
+    try { unlinkSync(filePath) } catch {}
+    throw err
+  }
+  return filePath
+}
+
+/**
+ * Read rows from a Parquet file.
+ */
+export async function readParquet(
+  projectId: string,
+  tableName: string
+): Promise<Record<string, unknown>[]> {
+  const filePath = join(DATA_DIR, projectId, `${tableName}.parquet`)
+  if (!existsSync(filePath)) {
+    return []
+  }
+
+  const reader = await parquet.ParquetReader.openFile(filePath)
+  const cursor = reader.getCursor()
+  const rows: Record<string, unknown>[] = []
+  let row = null
+  while ((row = await cursor.next())) {
+    rows.push(row)
+  }
+  await reader.close()
+  return rows
+}
+
+/**
+ * Check if Parquet data exists for a table.
+ */
+export function parquetExists(projectId: string, tableName: string): boolean {
+  return existsSync(join(DATA_DIR, projectId, `${tableName}.parquet`))
+}

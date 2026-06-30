@@ -33,9 +33,19 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# data files (runtime config + generated)
+/data
+/configs
+/generated_data
+
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Claude
+.claude/
+CLAUDE.md
+AGENTS.md

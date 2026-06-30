@@ -79,7 +79,7 @@ JSON · CSV · Excel (XLSX) · XML · SQL INSERT · Parquet
 ```
 nuwa/
   app/                 # Next.js App Router 页面与 API 路由
-  services/            # 核心逻辑（生成、导出、统计、国际化、状态管理）
+  services/            # 核心逻辑（生成、导出、统计、全局化、状态管理）
   components/          # 共享 React 组件
   scripts/setup.js     # 首次运行时创建所需目录
   configs/             # 服务端 LLM 配置（不上传 git）

@@ -78,7 +78,7 @@ export function deleteCachedCode(key: string): void {
  * Validate that a code string is a valid, executable JavaScript expression.
  */
 export function isValidExpression(code: string): boolean {
-  if (!code || code.length > 200) return false
+  if (!code || code.length > 350) return false
   if (/[\u4e00-\u9fff]/.test(code)) return false
   const expr = code.includes('return ') ? code : `return (${code})`
   // Realistic test stubs — provide working refData + pick so code like

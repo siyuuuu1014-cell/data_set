@@ -255,10 +255,10 @@ export async function llmGenerateCode(
   }
   const DATE_FORMAT_CODE: Record<string, string> = {
     date: ".toISOString().split('T')[0]",
-    datetime: "(()=>{const d=new Date(...);const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`})()",
+    datetime: ".toISOString().replace('T',' ').slice(0,19)",
     date_slash: ".toISOString().split('T')[0].replace(/-/g,'/')",
-    date_us: "(()=>{const d=new Date(...);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())}/${d.getFullYear()}`})()",
-    date_eu: "(()=>{const d=new Date(...);const p=n=>String(n).padStart(2,'0');return `${p(d.getDate())}-${p(d.getMonth()+1)}-${d.getFullYear()}`})()",
+    date_us: ".toISOString().split('T')[0].replace(/(\\d{4})-(\\d{2})-(\\d{2})/,'$2/$3/$1')",
+    date_eu: ".toISOString().split('T')[0].replace(/(\\d{4})-(\\d{2})-(\\d{2})/,'$3-$2-$1')",
     iso: ".toISOString()",
     unix_s: "Math.floor(new Date(...).getTime()/1000)",
     unix_ms: "new Date(...).getTime()",
@@ -349,7 +349,7 @@ function extractExpression(raw: string): { code: string | null; error?: string }
 
   // Step 3: try each line as a candidate (longest JS-looking lines first)
   const candidates = lines
-    .filter(l => l.length <= 200 && !/[\u4e00-\u9fff]/.test(l))
+    .filter(l => l.length <= 350 && !/[\u4e00-\u9fff]/.test(l))
     .sort((a, b) => b.length - a.length)
 
   // Also try extracting from inline backticks

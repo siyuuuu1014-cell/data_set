@@ -14,68 +14,68 @@ import { computeColumnStats, type ColumnStats, type NumStats, type TextStats, ty
 let _colIdCounter = Date.now()
 function genColId(): string { return 'col_' + (_colIdCounter++).toString(36) }
 
-const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
-  { value: 'text', label: '文本 (LLM)' },
-  { value: 'number', label: '数字 (代码)' },
-  { value: 'boolean', label: '布尔值' },
-  { value: 'date', label: '日期' },
-  { value: 'id', label: 'ID (自增/雪花)' },
-  { value: 'phone', label: '电话' },
-  { value: 'city', label: '城市' },
-  { value: 'foreign_key', label: '外键' },
-  { value: 'foreign_key_array', label: '外键数组' },
+const COLUMN_TYPES: { value: ColumnType; key: string }[] = [
+  { value: 'text', key: 'coltype.text' },
+  { value: 'number', key: 'coltype.number' },
+  { value: 'boolean', key: 'coltype.boolean' },
+  { value: 'date', key: 'coltype.date' },
+  { value: 'id', key: 'coltype.id' },
+  { value: 'phone', key: 'coltype.phone' },
+  { value: 'city', key: 'coltype.city' },
+  { value: 'foreign_key', key: 'coltype.foreign_key' },
+  { value: 'foreign_key_array', key: 'coltype.foreign_key_array' },
 ]
 
-const TYPE_LABEL: Record<ColumnType, string> = {
-  text: '文本', number: '数字', boolean: '布尔值', date: '日期',
-  id: 'ID', phone: '电话', city: '城市', foreign_key: '外键',
-  foreign_key_array: '外键数组',
+const TYPE_KEY: Record<ColumnType, string> = {
+  text: 'coltype.text_short', number: 'coltype.number_short', boolean: 'coltype.boolean_short', date: 'coltype.date_short',
+  id: 'coltype.id_short', phone: 'coltype.phone_short', city: 'coltype.city_short', foreign_key: 'coltype.foreign_key',
+  foreign_key_array: 'coltype.foreign_key_array',
 }
 
-const PHONE_COUNTRIES: { value: PhoneCountry; label: string }[] = [
-  { value: 'CN', label: '中国 (+86)' },
-  { value: 'US', label: '美国 (+1)' },
-  { value: 'JP', label: '日本 (+81)' },
-  { value: 'KR', label: '韩国 (+82)' },
-  { value: 'GB', label: '英国 (+44)' },
-  { value: 'DE', label: '德国 (+49)' },
-  { value: 'FR', label: '法国 (+33)' },
-  { value: 'IN', label: '印度 (+91)' },
-  { value: 'BR', label: '巴西 (+55)' },
-  { value: 'AU', label: '澳大利亚 (+61)' },
+const PHONE_COUNTRIES: { value: PhoneCountry; key: string }[] = [
+  { value: 'CN', key: 'country.CN' },
+  { value: 'US', key: 'country.US' },
+  { value: 'JP', key: 'country.JP' },
+  { value: 'KR', key: 'country.KR' },
+  { value: 'GB', key: 'country.GB' },
+  { value: 'DE', key: 'country.DE' },
+  { value: 'FR', key: 'country.FR' },
+  { value: 'IN', key: 'country.IN' },
+  { value: 'BR', key: 'country.BR' },
+  { value: 'AU', key: 'country.AU' },
 ]
 
-const ID_FORMATS: { value: IdFormat; label: string }[] = [
-  { value: 'uuid4', label: 'UUID v4' },
-  { value: 'uuid7', label: 'UUID v7' },
-  { value: 'snowflake', label: '雪花ID (Snowflake)' },
-  { value: 'auto_increment', label: '自增 (1,2,3...)' },
-  { value: 'cuid2', label: 'CUID2' },
-  { value: 'objectid', label: 'MongoDB ObjectID' },
-  { value: 'nanoid', label: 'Nano ID' },
-  { value: 'ulid', label: 'ULID' },
+const ID_FORMATS: { value: IdFormat; key: string }[] = [
+  { value: 'uuid4', key: 'idfmt.uuid4' },
+  { value: 'uuid7', key: 'idfmt.uuid7' },
+  { value: 'snowflake', key: 'idfmt.snowflake' },
+  { value: 'auto_increment', key: 'idfmt.auto_increment' },
+  { value: 'cuid2', key: 'idfmt.cuid2' },
+  { value: 'objectid', key: 'idfmt.objectid' },
+  { value: 'nanoid', key: 'idfmt.nanoid' },
+  { value: 'ulid', key: 'idfmt.ulid' },
 ]
 
-const DATE_FORMATS: { value: DateFormat; label: string }[] = [
-  { value: 'date', label: 'yyyy-MM-dd' },
-  { value: 'datetime', label: 'yyyy-MM-dd HH:mm:ss' },
-  { value: 'iso', label: 'ISO 8601' },
-  { value: 'date_slash', label: 'yyyy/MM/dd' },
-  { value: 'date_us', label: 'MM/dd/yyyy' },
-  { value: 'date_eu', label: 'dd-MM-yyyy' },
-  { value: 'time', label: 'HH:mm:ss' },
-  { value: 'unix_s', label: 'Unix 时间戳 (秒)' },
-  { value: 'unix_ms', label: 'Unix 时间戳 (毫秒)' },
+const DATE_FORMATS: { value: DateFormat; key: string }[] = [
+  { value: 'date', key: 'datefmt.date' },
+  { value: 'datetime', key: 'datefmt.datetime' },
+  { value: 'iso', key: 'datefmt.iso' },
+  { value: 'date_slash', key: 'datefmt.date_slash' },
+  { value: 'date_us', key: 'datefmt.date_us' },
+  { value: 'date_eu', key: 'datefmt.date_eu' },
+  { value: 'time', key: 'datefmt.time' },
+  { value: 'unix_s', key: 'datefmt.unix_s' },
+  { value: 'unix_ms', key: 'datefmt.unix_ms' },
 ]
 
-const PRESET_DATE_RANGES: Omit<DateRange, 'ratio'>[] = [
-  { label: '近7日', minDays: 0, maxDays: 7 },
-  { label: '近15日', minDays: 0, maxDays: 15 },
-  { label: '近30日', minDays: 0, maxDays: 30 },
-  { label: '近3个月', minDays: 0, maxDays: 90 },
-  { label: '近6个月', minDays: 0, maxDays: 180 },
-  { label: '近1年', minDays: 0, maxDays: 365 },
-  { label: '近3年', minDays: 0, maxDays: 1095 },
+const PRESET_DATE_RANGES: { key: string; minDays: number; maxDays: number }[] = [
+  { key: 'daterange.7d', minDays: 0, maxDays: 7 },
+  { key: 'daterange.15d', minDays: 0, maxDays: 15 },
+  { key: 'daterange.30d', minDays: 0, maxDays: 30 },
+  { key: 'daterange.90d', minDays: 0, maxDays: 90 },
+  { key: 'daterange.180d', minDays: 0, maxDays: 180 },
+  { key: 'daterange.1y', minDays: 0, maxDays: 365 },
+  { key: 'daterange.3y', minDays: 0, maxDays: 1095 },
 ]
 
 function emptyColumn(): ColumnDef {
@@ -111,7 +111,7 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
         // Already small enough, just read as data URL
         const reader = new FileReader()
         reader.onload = () => resolve(reader.result as string)
-        reader.onerror = () => reject(new Error('图片读取失败'))
+        reader.onerror = () => reject(new Error('Failed to read image'))
         reader.readAsDataURL(file)
         return
       }
@@ -125,14 +125,14 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
       ctx.drawImage(img, 0, 0, width, height)
       resolve(canvas.toDataURL('image/jpeg', quality))
     }
-    img.onerror = () => reject(new Error('图片加载失败'))
+    img.onerror = () => reject(new Error('Failed to load image'))
     img.src = URL.createObjectURL(file)
   })
 }
 
 function ensureDateDistribution(col: ColumnDef): DateRange[] {
   if (!col.dateDistribution || col.dateDistribution.length === 0) {
-    const dist = PRESET_DATE_RANGES.map(r => ({ ...r, ratio: 0 }))
+    const dist: DateRange[] = PRESET_DATE_RANGES.map(r => ({ label: r.key, minDays: r.minDays, maxDays: r.maxDays, ratio: 0 }))
     col.dateDistribution = dist
     return dist
   }
@@ -179,20 +179,15 @@ export default function TableEditorPage() {
   }, [showExportMenu])
 
   const handleExportNuwa = async () => {
-    const all = getTables(id)
-    const tablesWithData = await Promise.all(
-      all.map(async (t) => {
-        try {
-          const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(t.name)}`)
-          if (res.ok) {
-            const { rows } = await res.json() as { rows: Record<string, unknown>[] }
-            return { ...t, rows }
-          }
-        } catch {}
-        return t
-      })
-    )
-    const nuwaData = { version: 1, project: { id, name: project?.name || '', createdAt: project?.createdAt || '' }, tables: tablesWithData }
+    let rows = table.rows
+    try {
+      const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
+      if (res.ok) {
+        const data = await res.json() as { rows: Record<string, unknown>[] }
+        rows = data.rows
+      }
+    } catch {}
+    const nuwaData = { version: 1, table: { ...table, rows } }
     const blob = new Blob([JSON.stringify(nuwaData, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -209,7 +204,7 @@ export default function TableEditorPage() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      if (!data.tables) throw new Error('无效的 .nuwa 文件格式')
+      if (!data.tables) throw new Error('Invalid .nuwa file format')
       for (const nuwaTable of data.tables) {
         const localTable = allTables.find(t => t.name === nuwaTable.name)
         if (!localTable) continue
@@ -234,7 +229,7 @@ export default function TableEditorPage() {
         setGeneratedColumns(new Set(table!.columns.map(c => c.id)))
       }
     } catch (err) {
-      setGenError(err instanceof Error ? err.message : '导入失败')
+      setGenError(err instanceof Error ? err.message : t('table.import_fail'))
     } finally {
       setImportingNuwa(false)
     }
@@ -269,9 +264,9 @@ export default function TableEditorPage() {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
-          <p className="text-lg text-gv-text-dim">数据表不存在</p>
+          <p className="text-lg text-gv-text-dim">{t('table.not_found')}</p>
           <Link href={`/project/${id}`} className="text-sm text-gv-pink hover:underline mt-2 inline-block">
-            返回项目
+            {t('table.back_to_project')}
           </Link>
         </div>
       </div>
@@ -300,7 +295,7 @@ export default function TableEditorPage() {
       setDisplayedRows(blankRows)
       setGeneratedColumns(new Set())
     } catch (err) {
-      setGenError(err instanceof Error ? err.message : '生成失败')
+      setGenError(err instanceof Error ? err.message : t('table.gen_fail_short'))
     } finally {
       setGenerating(false)
     }
@@ -319,14 +314,14 @@ export default function TableEditorPage() {
     })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
-      throw new Error(`保存数据失败: ${data.error || res.status}`)
+      throw new Error(`${t('table.save_data_fail')}: ${data.error || res.status}`)
     }
   }
 
   const handleGenerateColumn = async (col: ColumnDef) => {
     setGenError('')
     if (col.type === 'text' && !col.nullable && !col.llmPrompt?.trim()) {
-      setGenError(`列"${col.name}"的提示词为空，请补充提示词或勾选"允许空值"`)
+      setGenError(`${t('table.prompt_empty_warn', col.name)}`)
       return
     }
     setColumnGenerating(col.id)
@@ -336,7 +331,7 @@ export default function TableEditorPage() {
       if (col.foreignTable) {
         const parentTable = allTables.find(t => t.id === col.foreignTable || t.name === col.foreignTable)
         if (!parentTable) {
-          throw new Error(`引用的表"${col.foreignTable}"不存在`)
+          throw new Error(t('table.fk_table_missing', col.foreignTable))
         }
         if (parentTable.rows.length > 0) {
           refData[parentTable.id] = parentTable.rows
@@ -357,7 +352,7 @@ export default function TableEditorPage() {
             // Parquet not available
           }
           if (!refData[parentTable.name] || refData[parentTable.name].length === 0) {
-            throw new Error(`引用的表"${parentTable.name}"还没有数据，请先生成该表的数据`)
+            throw new Error(t('table.fk_no_data', parentTable.name))
           }
         }
       }
@@ -383,7 +378,7 @@ export default function TableEditorPage() {
       await saveToParquet(rows)
       setGeneratedColumns(prev => new Set(prev).add(col.id))
     } catch (err) {
-      setGenError(err instanceof Error ? err.message : '生成失败')
+      setGenError(err instanceof Error ? err.message : t('table.gen_fail_short'))
     } finally {
       setColumnGenerating(null)
     }
@@ -393,7 +388,7 @@ export default function TableEditorPage() {
     const file = e.target.files?.[0]
     if (!file) return
     if (file.size > 10 * 1024 * 1024) {
-      setGenError('图片大小不能超过 10MB')
+      setGenError(t('table.image_too_large'))
       return
     }
     setImageUploading(true)
@@ -401,10 +396,10 @@ export default function TableEditorPage() {
     try {
       const base64 = await resizeImage(file)
       const { callLlmVision } = await import('@/services/llm')
-      const raw = await callLlmVision(VISION_SYSTEM_PROMPT, '请识别图片中的表格列结构', [base64])
+      const raw = await callLlmVision(VISION_SYSTEM_PROMPT, 'Identify the table column structure in the image', [base64])
       const parsed = extractJsonArray(raw)
       if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
-        setGenError('未能从图片中识别出有效的列结构。请确保图片包含表格信息。')
+        setGenError(t('table.image_no_columns'))
         return
       }
       const newCols: ColumnDef[] = parsed.map((item: Record<string, unknown>) => ({
@@ -419,7 +414,7 @@ export default function TableEditorPage() {
       setEditMode(true)
       if (fileInputRef.current) fileInputRef.current.value = ''
     } catch (err) {
-      setGenError(err instanceof Error ? err.message : '图片识别失败')
+      setGenError(err instanceof Error ? err.message : t('table.image_fail'))
     } finally {
       setImageUploading(false)
     }
@@ -491,9 +486,9 @@ export default function TableEditorPage() {
   )
 
   return (
-    <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8">
+    <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           <Link href={`/project/${id}`} className="text-gv-text-dim hover:text-gv-pink transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -503,23 +498,11 @@ export default function TableEditorPage() {
           <h2 className="text-lg font-semibold text-gv-text">{table.name}</h2>
         </div>
         <div className="flex items-center gap-2">
-          {/* image recognition hidden */}
-          <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
           <input ref={nuwaFileRef} type="file" accept=".nuwa" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportNuwa(f); if (nuwaFileRef.current) nuwaFileRef.current.value = '' }} />
           <button onClick={() => nuwaFileRef.current?.click()} disabled={importingNuwa}
             className="btn-outline rounded-lg px-3 py-1.5 text-sm inline-flex items-center gap-1 disabled:opacity-50">
-            {importingNuwa ? (
-              <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            ) : (
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-            )}
-            导入 .nuwa
+            {importingNuwa ? '...' : t('table.import_nuwa')}
           </button>
           <div className="relative">
             <button
@@ -543,7 +526,7 @@ export default function TableEditorPage() {
                 <a href={`/api/data/download?projectId=${id}&tableName=${encodeURIComponent(table.name)}`} onClick={() => setShowExportMenu(false)}
                   className="block w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Parquet</a>
                 <button onClick={() => { handleExportNuwa(); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors border-t border-gv-border/50">导出 .nuwa</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors border-t border-gv-border/50">{t('table.export_nuwa')}</button>
               </div>
             )}
           </div>
@@ -551,9 +534,9 @@ export default function TableEditorPage() {
       </div>
 
       {/* Two-column layout */}
-      <div className="flex gap-6 items-start">
+      <div className="flex gap-4 items-start">
         {/* LEFT 1/4 — Column schema + edit */}
-        <div className="w-1/4 flex-shrink-0 space-y-4">
+        <div className="w-1/4 flex-shrink-0 space-y-3">
 
       {editMode ? (
         <div className="card p-4">
@@ -581,7 +564,7 @@ export default function TableEditorPage() {
                 onDragEnd={handleDragEnd}
               >
                 <div className="flex items-center gap-2">
-                  <div className="cursor-grab active:cursor-grabbing text-gv-text-muted hover:text-gv-pink select-none transition-colors" title="拖动排序">
+                  <div className="cursor-grab active:cursor-grabbing text-gv-text-muted hover:text-gv-pink select-none transition-colors" title={t('table.drag_hint')}>
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
                     </svg>
@@ -593,7 +576,7 @@ export default function TableEditorPage() {
                       className="w-full input-field py-2 text-sm" />
                     <select value={col.type} onChange={(e) => updateEditCol(col.id, { type: e.target.value as ColumnType })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      {COLUMN_TYPES.map(ct => (<option key={ct.value} value={ct.value}>{ct.label}</option>))}
+                      {COLUMN_TYPES.map(ct => (<option key={ct.value} value={ct.value}>{t(ct.key)}</option>))}
                     </select>
                   </div>
                   {editColumns.length > 1 && (
@@ -605,7 +588,7 @@ export default function TableEditorPage() {
                 </div>
                 {col.type === 'text' && (
                   <textarea value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
-                    placeholder="描述如何生成此列文本..."
+                    placeholder={t('table.text_prompt_placeholder')}
                     rows={2}
                     className="input-field w-full py-2 text-sm" />
                 )}
@@ -613,26 +596,26 @@ export default function TableEditorPage() {
                   <div className="space-y-2">
                     <div className="flex gap-2">
                       <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
-                        placeholder="描述你要的数字规则，如：中国随机纬度"
+                        placeholder={t('table.number_prompt_placeholder')}
                         className="flex-1 input-field py-1.5 text-xs" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
-                          updateEditCol(col.id, { generationCode: '生成中...' })
+                          updateEditCol(col.id, { generationCode: '...' })
                           const { llmGenerateCode } = await import('@/services/data-gen')
                           const result = await llmGenerateCode(col.llmPrompt!.trim(), 'number')
-                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
+                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || 'Error'}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
                         className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
-                        AI 生成代码
+                        {t('table.ai_gen_code')}
                       </button>
                     </div>
                     <textarea value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
-                      placeholder="JavaScript 代码，返回值作为列值。可手写或点上方 AI 生成。"
+                      placeholder={t('table.code_placeholder')}
                       rows={3}
                       className="input-field w-full py-2 text-sm font-mono" />
-                    {col.generationCode && col.generationCode !== '生成中...' && (
+                    {col.generationCode && col.generationCode !== '...' && (
                       <button type="button"
                         onClick={() => {
                           try {
@@ -647,13 +630,13 @@ export default function TableEditorPage() {
                             for (let i = 0; i < 5; i++) {
                               results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
                             }
-                            alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
+                            alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
-                            alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
+                            alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
                           }
                         }}
                         className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
-                        测试代码（预览5条）
+                        {t('table.test_code')}
                       </button>
                     )}
                   </div>
@@ -662,12 +645,12 @@ export default function TableEditorPage() {
                   <div className="space-y-2">
                     <select value={col.foreignTable || ''} onChange={(e) => updateEditCol(col.id, { foreignTable: e.target.value })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      <option value="">选择引用表...</option>
+                      <option value="">{t('table.select_ref_table')}</option>
                       {allTables.filter(t => t.id !== table.id).map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
                     </select>
                     <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      <option value="">自动匹配列</option>
+                      <option value="">{t('table.auto_match_col')}</option>
                       {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                     </select>
                   </div>
@@ -676,14 +659,14 @@ export default function TableEditorPage() {
                   <div className="space-y-3">
                     <select value={col.dateFormat || 'date'} onChange={(e) => updateEditCol(col.id, { dateFormat: e.target.value as DateFormat })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{f.label}</option>))}
+                      {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{t(f.key)}</option>))}
                     </select>
                     <div>
-                      <p className="text-xs text-gv-text-dim mb-1">时间分布比例（%）</p>
+                      <p className="text-xs text-gv-text-dim mb-1">{t('table.date_distribution')}</p>
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                         {ensureDateDistribution(col).map((range, ri) => (
                           <div key={ri} className="flex items-center gap-1.5">
-                            <span className="text-xs text-gv-text-dim w-20 flex-shrink-0">{range.label}</span>
+                            <span className="text-xs text-gv-text-dim w-20 flex-shrink-0">{t(range.label)}</span>
                             <input
                               type="number" min={0} max={100}
                               value={range.ratio}
@@ -700,25 +683,25 @@ export default function TableEditorPage() {
                     </div>
                     <div className="flex gap-2">
                       <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
-                        placeholder="描述日期规则，如：最近30天随机日期"
+                        placeholder={t('table.date_prompt_placeholder')}
                         className="flex-1 input-field py-1.5 text-xs" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
-                          updateEditCol(col.id, { generationCode: '生成中...' })
+                          updateEditCol(col.id, { generationCode: '...' })
                           const { llmGenerateCode } = await import('@/services/data-gen')
                           const result = await llmGenerateCode(col.llmPrompt!.trim(), 'date', { dateFormat: col.dateFormat, dateDistribution: col.dateDistribution })
-                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
+                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || 'Error'}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
                         className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
-                        AI 生成代码
+                        {t('table.ai_gen_code')}
                       </button>
                     </div>
                     <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
-                      placeholder="JavaScript 代码，可手写或点上方 AI 生成"
+                      placeholder={t('table.code_placeholder_short')}
                       className="input-field w-full py-2 text-xs font-mono" />
-                    {col.generationCode && col.generationCode !== '生成中...' && (
+                    {col.generationCode && col.generationCode !== '...' && (
                       <button type="button"
                         onClick={() => {
                           try {
@@ -733,38 +716,38 @@ export default function TableEditorPage() {
                             for (let i = 0; i < 5; i++) {
                               results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
                             }
-                            alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
+                            alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
-                            alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
+                            alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
                           }
                         }}
                         className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
-                        测试代码（预览5条）
+                        {t('table.test_code')}
                       </button>
                     )}
                   </div>
                 )}
                 {col.type === 'boolean' && (
                   <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
-                    placeholder="可选，留空随机 true/false"
+                    placeholder={t('table.bool_placeholder')}
                     className="input-field w-full py-2 text-sm font-mono" />
                 )}
                 {col.type === 'id' && (
                   <select value={col.idFormat || 'uuid4'} onChange={(e) => updateEditCol(col.id, { idFormat: e.target.value as IdFormat })}
                     className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                    {ID_FORMATS.map(f => (<option key={f.value} value={f.value}>{f.label}</option>))}
+                    {ID_FORMATS.map(f => (<option key={f.value} value={f.value}>{t(f.key)}</option>))}
                   </select>
                 )}
                 {col.type === 'phone' && (
                   <select value={col.phoneCountry || 'CN'} onChange={(e) => updateEditCol(col.id, { phoneCountry: e.target.value as PhoneCountry })}
                     className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                    {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{c.label}</option>))}
+                    {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{t(c.key)}</option>))}
                   </select>
                 )}
                 {col.type === 'city' && (
                   <select value={col.cityCountry || 'CN'} onChange={(e) => updateEditCol(col.id, { cityCountry: e.target.value as PhoneCountry })}
                     className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                    {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{c.label}</option>))}
+                    {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{t(c.key)}</option>))}
                   </select>
                 )}
                 {/* Nullable setting for all column types */}
@@ -779,11 +762,11 @@ export default function TableEditorPage() {
                       })}
                       className="rounded accent-gv-pink"
                     />
-                    <span className="text-xs text-gv-text-dim">允许空值 (null)</span>
+                    <span className="text-xs text-gv-text-dim">{t('table.allow_null')}</span>
                   </label>
                   {col.nullable && (
                     <div className="flex items-center gap-2 mt-2 pl-1">
-                      <span className="text-xs text-gv-text-muted w-10">比例</span>
+                      <span className="text-xs text-gv-text-muted w-10">{t('table.null_ratio')}</span>
                       <input
                         type="range"
                         min={0} max={100}
@@ -800,8 +783,8 @@ export default function TableEditorPage() {
               </div>
               <button type="button" onClick={() => addEditColumn(i)}
                 className="w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors"
-                title="在此处插入新列">
-                + 插入列
+                title={t('table.insert_col_hint')}>
+                {t('table.insert_col')}
               </button>
               </React.Fragment>
             ))}
@@ -818,10 +801,10 @@ export default function TableEditorPage() {
         <div className="card p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gv-text">
-              列结构
+              {t('table.columns')}
               {displayedRows.length > 0 && (
                 <span className="ml-2 text-xs font-normal text-gv-text-dim">
-                  (已生成 {generatedColumns.size}/{table.columns.length} 列)
+                  {t('table.columns_generated', generatedColumns.size, table.columns.length)}
                 </span>
               )}
             </h3>
@@ -857,7 +840,7 @@ export default function TableEditorPage() {
                   col.type === 'id' ? 'bg-gv-green/10 text-gv-green-dark' :
                   'bg-gv-bg text-gv-text-dim'
                 }`}>
-                  {TYPE_LABEL[col.type]}
+                  {t(TYPE_KEY[col.type])}
                 </span>
               </div>
               {/* Col 3: prompt / code / format info */}
@@ -865,29 +848,29 @@ export default function TableEditorPage() {
                 {col.type === 'text' && (
                   col.llmPrompt?.trim()
                     ? <div className="text-xs text-gv-text-dim truncate" title={col.llmPrompt}>{col.llmPrompt}</div>
-                    : <div className="text-xs text-gv-pink-dark">{col.nullable ? '允许空值' : '提示词为空'}</div>
+                    : <div className="text-xs text-gv-pink-dark">{col.nullable ? t('table.nullable') : t('table.prompt_empty')}</div>
                 )}
                 {col.generationCode && (
                   <div className="text-xs text-gv-text-muted truncate font-mono" title={col.generationCode}>{col.generationCode}</div>
                 )}
                 {col.type === 'date' && col.dateFormat && col.dateFormat !== 'date' && (
                   <div className="text-xs text-gv-pink font-medium">
-                    {DATE_FORMATS.find(f => f.value === col.dateFormat)?.label || col.dateFormat}
+                    {t(DATE_FORMATS.find(f => f.value === col.dateFormat)?.key || '') || col.dateFormat}
                   </div>
                 )}
                 {col.type === 'id' && (
                   <div className="text-xs text-gv-green-dark font-medium">
-                    {ID_FORMATS.find(f => f.value === (col.idFormat || 'uuid4'))?.label || 'UUID v4'}
+                    {t(ID_FORMATS.find(f => f.value === (col.idFormat || 'uuid4'))?.key || 'idfmt.uuid4')}
                   </div>
                 )}
                 {col.type === 'phone' && (
                   <div className="text-xs text-gv-pink font-medium">
-                    {PHONE_COUNTRIES.find(c => c.value === (col.phoneCountry || 'CN'))?.label || '中国 (+86)'}
+                    {t(PHONE_COUNTRIES.find(c => c.value === (col.phoneCountry || 'CN'))?.key || 'country.CN')}
                   </div>
                 )}
                 {col.type === 'city' && (
                   <div className="text-xs text-gv-green-dark font-medium">
-                    {PHONE_COUNTRIES.find(c => c.value === (col.cityCountry || 'CN'))?.label || '中国'}
+                    {t(PHONE_COUNTRIES.find(c => c.value === (col.cityCountry || 'CN'))?.key || 'country.CN')}
                   </div>
                 )}
                 {col.foreignTable && (
@@ -915,7 +898,7 @@ export default function TableEditorPage() {
                     onClick={() => handleGenerateColumn(col)}
                     disabled={columnGenerating != null}
                     className="rounded-lg border border-gv-border px-1.5 py-0.5 text-xs font-medium text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    title={`生成 ${col.name} 列数据`}
+                    title={t('table.gen_col_hint', col.name)}
                   >
                     {columnGenerating === col.id ? (
                       <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
@@ -930,11 +913,11 @@ export default function TableEditorPage() {
           ))}
         </div>
         {hasUnresolvedFK && (
-          <p className="text-xs text-gv-pink-dark mt-2">部分外键引用的表尚不存在。</p>
+          <p className="text-xs text-gv-pink-dark mt-2">{t('table.fk_missing_warn')}</p>
         )}
         {emptyPromptCols.length > 0 && (
           <p className="text-xs text-gv-pink-dark mt-2">
-            {emptyPromptCols.map(c => c.name).join(', ')} 的提示词为空，无法生成。请点击"{t('table.edit_schema')}"补充。
+            {t('table.fk_ref', emptyPromptCols.map(c => c.name).join(', '))}
           </p>
         )}
       </div>
@@ -944,11 +927,11 @@ export default function TableEditorPage() {
       {!editMode && (
         <>
           {hasUnresolvedFK && (
-            <p className="text-xs text-gv-pink-dark">部分外键引用的表尚不存在。</p>
+            <p className="text-xs text-gv-pink-dark">{t('table.fk_missing_warn')}</p>
           )}
           {emptyPromptCols.length > 0 && (
             <p className="text-xs text-gv-pink-dark">
-              {emptyPromptCols.map(c => c.name).join(', ')} 的提示词为空，无法生成。
+              {t('table.prompt_empty_warn', emptyPromptCols.map(c => c.name).join(', '))}
             </p>
           )}
         </>
@@ -956,46 +939,32 @@ export default function TableEditorPage() {
       </div> {/* end left panel */}
 
       {/* RIGHT 3/4 — Generate + Table */}
-      <div className="flex-1 space-y-4">
-        {/* Generate Panel */}
-        <div className="card p-5">
-        <h3 className="text-sm font-semibold text-gv-text mb-4">{t('table.generate')}</h3>
-
-        {table.columns.some(c => c.type === 'text') && (
-          !llmConfigured ? (
-            <div className="rounded-lg bg-gv-pink/10 border border-gv-pink/30 p-3 mb-4 text-sm text-gv-pink-dark">
-              {t('app.unconfigured')}。<Link href="/settings" className="ml-1 underline font-medium">{t('home.settings_hint')}</Link>
-            </div>
-          ) : (
-            <div className="rounded-lg bg-gv-green/10 border border-gv-green/30 p-3 mb-4 text-sm text-gv-green-dark">
-              LLM API 已配置，将在生成时调用模型生成文本数据。
-            </div>
-          )
-        )}
-
-        {genError && (
-          <div className="rounded-lg bg-gv-pink/10 border border-gv-pink/30 p-3 mb-4 text-sm text-gv-pink-dark whitespace-pre-wrap">
-            {genError}
-          </div>
-        )}
-
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-gv-text-dim">{t('table.row_count')}</label>
+      <div className="flex-1 min-w-0 space-y-3">
+        {/* Compact toolbar */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5">
             <input type="number" value={rowCount} onChange={(e) => setRowCount(Number(e.target.value))}
               min={1} max={1000}
-              className="w-24 input-field py-2 text-sm" />
+              className="w-16 input-field py-1.5 text-sm text-center" />
+            <span className="text-xs text-gv-text-dim">{t('table.row_count')}</span>
           </div>
           <button onClick={handleGenerate} disabled={generating}
-            className="btn-primary rounded-lg px-6 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-            {generating ? t('table.generating') : '创建空记录'}
+            className="btn-primary rounded-lg px-4 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+            {generating ? t('table.generating') : t('table.create_empty')}
           </button>
-          <span className="text-sm text-gv-text-muted">{t('table.rows')}: {displayedRows.length}</span>
+          {displayedRows.length > 0 && (
+            <span className="text-xs text-gv-text-muted">{displayedRows.length} {t('table.rows')}</span>
+          )}
+          {!llmConfigured && table.columns.some(c => c.type === 'text') && (
+            <Link href="/settings" className="text-xs text-gv-pink hover:underline">{t('table.no_llm')}</Link>
+          )}
         </div>
-      </div>
+        {genError && (
+          <div className="rounded-lg bg-gv-pink/10 border border-gv-pink/30 p-2 text-xs text-gv-pink-dark whitespace-pre-wrap">{genError}</div>
+        )}
 
       {/* Stats Panel */}
-      {displayedRows.length > 0 && <StatsPanel columns={table.columns} rows={displayedRows} />}
+      {displayedRows.length > 0 && <StatsPanel columns={table.columns} rows={displayedRows} t={t} />}
 
       {/* Data Table */}
       <div className="card overflow-hidden">
@@ -1013,12 +982,12 @@ export default function TableEditorPage() {
           <>
             <div className="flex items-center justify-between px-4 py-2 border-b border-gv-border/50 bg-gv-bg/50">
               <div className="flex items-center gap-2 text-xs text-gv-text-dim">
-                <span>每页</span>
+                <span>{t('table.per_page')}</span>
                 {[50, 100].map(n => (
                   <button key={n} onClick={() => { setPageSize(n); setCurrentPage(1) }}
                     className={`px-2 py-0.5 rounded border transition-colors ${pageSize === n ? 'border-gv-pink bg-gv-pink/10 text-gv-pink' : 'border-gv-border hover:border-gv-pink/50'}`}>{n}</button>
                 ))}
-                <span>行 · 共 {displayedRows.length} 行</span>
+                <span>{t('table.page_info', displayedRows.length)}</span>
               </div>
               {(() => {
                 const totalPages = Math.ceil(displayedRows.length / pageSize)
@@ -1069,13 +1038,13 @@ export default function TableEditorPage() {
   )
 }
 
-function StatsPanel({ columns, rows }: { columns: ColumnDef[]; rows: Record<string, unknown>[] }) {
+function StatsPanel({ columns, rows, t }: { columns: ColumnDef[]; rows: Record<string, unknown>[]; t: (key: string, ...args: (string | number)[]) => string }) {
   const [open, setOpen] = useState(false)
   if (!open) {
     return (
       <button onClick={() => setOpen(true)}
         className="mt-4 w-full rounded-lg border-2 border-dashed border-gv-border py-3 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/40 transition-colors">
-        数据概况
+        {t('stats.title')}
       </button>
     )
   }
@@ -1083,7 +1052,7 @@ function StatsPanel({ columns, rows }: { columns: ColumnDef[]; rows: Record<stri
   return (
     <div className="mt-4 card p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-gv-text">数据概况</h3>
+        <h3 className="text-sm font-semibold text-gv-text">{t('stats.title')}</h3>
         <button onClick={() => setOpen(false)} className="text-gv-text-muted hover:text-gv-pink transition-colors">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
@@ -1091,30 +1060,30 @@ function StatsPanel({ columns, rows }: { columns: ColumnDef[]; rows: Record<stri
       <div className="grid gap-4 sm:grid-cols-2">
         {columns.map(col => {
           const stats = computeColumnStats(col, rows)
-          return <StatCard key={col.id} col={col} stats={stats} />
+          return <StatCard key={col.id} col={col} stats={stats} t={t} />
         })}
       </div>
       <button onClick={() => setOpen(false)}
         className="mt-4 w-full rounded-lg border border-gv-border py-2 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/40 transition-colors">
-        关闭数据概况
+        {t('stats.close')}
       </button>
     </div>
   )
 }
 
-function StatCard({ col, stats }: { col: ColumnDef; stats: ColumnStats }) {
+function StatCard({ col, stats, t }: { col: ColumnDef; stats: ColumnStats; t: (key: string, ...args: (string | number)[]) => string }) {
   return (
     <div className="rounded-lg border border-gv-border p-3 text-xs bg-gv-bg/50">
       <div className="font-medium text-sm text-gv-text mb-2">{col.name}</div>
-      {stats.type === 'number' && <NumStatCard stats={stats} />}
-      {stats.type === 'text' && <TextStatCard stats={stats} />}
-      {stats.type === 'date' && <DateStatCard stats={stats} />}
-      {stats.type === 'boolean' && <BoolStatCard stats={stats} />}
-      {stats.type === 'id' && <IdStatCard stats={stats} />}
-      {stats.type === 'foreign_key' && <FkStatCard stats={stats} />}
-      {stats.type === 'phone' && <PhoneStatCard stats={stats} />}
-      {stats.type === 'city' && <CityStatCard stats={stats} />}
-      {stats.type === 'unknown' && <p className="text-gv-text-dim">共 {stats.count} 条数据</p>}
+      {stats.type === 'number' && <NumStatCard stats={stats} t={t} />}
+      {stats.type === 'text' && <TextStatCard stats={stats} t={t} />}
+      {stats.type === 'date' && <DateStatCard stats={stats} t={t} />}
+      {stats.type === 'boolean' && <BoolStatCard stats={stats} t={t} />}
+      {stats.type === 'id' && <IdStatCard stats={stats} t={t} />}
+      {stats.type === 'foreign_key' && <FkStatCard stats={stats} t={t} />}
+      {stats.type === 'phone' && <PhoneStatCard stats={stats} t={t} />}
+      {stats.type === 'city' && <CityStatCard stats={stats} t={t} />}
+      {stats.type === 'unknown' && <p className="text-gv-text-dim">{t('stats.total_rows', stats.count)}</p>}
     </div>
   )
 }
@@ -1126,18 +1095,18 @@ function tinyBar(v: number, max: number) {
   )
 }
 
-function NumStatCard({ stats }: { stats: NumStats }) {
+function NumStatCard({ stats, t }: { stats: NumStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxHist = Math.max(...stats.histogram.map(h => h.count), 1)
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>均值</span><span className="font-mono text-gv-text">{stats.mean.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>中位数</span><span className="font-mono text-gv-text">{stats.median.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>标准差</span><span className="font-mono text-gv-text">{stats.std.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>最小 / 最大</span><span className="font-mono text-gv-text">{stats.min} / {stats.max}</span></div>
-      <div className="flex justify-between"><span>Q1 / Q3</span><span className="font-mono text-gv-text">{stats.q1.toFixed(1)} / {stats.q3.toFixed(1)}</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.mean')}</span><span className="font-mono text-gv-text">{stats.mean.toFixed(2)}</span></div>
+      <div className="flex justify-between"><span>{t('stats.median')}</span><span className="font-mono text-gv-text">{stats.median.toFixed(2)}</span></div>
+      <div className="flex justify-between"><span>{t('stats.std')}</span><span className="font-mono text-gv-text">{stats.std.toFixed(2)}</span></div>
+      <div className="flex justify-between"><span>{t('stats.min_max')}</span><span className="font-mono text-gv-text">{stats.min} / {stats.max}</span></div>
+      <div className="flex justify-between"><span>{t('stats.q1_q3')}</span><span className="font-mono text-gv-text">{stats.q1.toFixed(1)} / {stats.q3.toFixed(1)}</span></div>
       <div className="mt-2">
-        <p className="text-gv-text-muted mb-1">分布</p>
+        <p className="text-gv-text-muted mb-1">{t('stats.distribution')}</p>
         {stats.histogram.map((h, i) => (
           <div key={i} className="flex items-center gap-1 text-xs">
             <span className="w-14 text-right font-mono">{h.binStart}</span>
@@ -1152,17 +1121,17 @@ function NumStatCard({ stats }: { stats: NumStats }) {
   )
 }
 
-function TextStatCard({ stats }: { stats: TextStats }) {
+function TextStatCard({ stats, t }: { stats: TextStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxW = Math.max(...stats.topWords.map(w => w.count), 1)
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>平均长度</span><span className="font-mono text-gv-text">{stats.avgLength.toFixed(0)} 字符</span></div>
-      <div className="flex justify-between"><span>最短 / 最长</span><span className="font-mono text-gv-text">{stats.minLength} / {stats.maxLength}</span></div>
-      <div className="flex justify-between"><span>唯一值</span><span className="font-mono text-gv-text">{stats.uniqueCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.avg_len')}</span><span className="font-mono text-gv-text">{stats.avgLength.toFixed(0)} {t('stats.chars')}</span></div>
+      <div className="flex justify-between"><span>{t('stats.min_max_len')}</span><span className="font-mono text-gv-text">{stats.minLength} / {stats.maxLength}</span></div>
+      <div className="flex justify-between"><span>{t('stats.unique')}</span><span className="font-mono text-gv-text">{stats.uniqueCount}</span></div>
       {stats.topWords.length > 0 && (
         <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">高频词</p>
+          <p className="text-gv-text-muted mb-1">{t('stats.top_words')}</p>
           {stats.topWords.map((w, i) => (
             <div key={i} className="flex items-center gap-1">
               <span className="font-mono w-20 truncate">{w.word}</span>
@@ -1174,7 +1143,7 @@ function TextStatCard({ stats }: { stats: TextStats }) {
       )}
       {stats.cityWords.length > 0 && (
         <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">城市提及</p>
+          <p className="text-gv-text-muted mb-1">{t('stats.city_mentions')}</p>
           {stats.cityWords.map((c, i) => (
             <div key={i} className="flex items-center gap-1">
               <span className="font-mono w-16 truncate text-xs">{c.city}</span>
@@ -1189,17 +1158,17 @@ function TextStatCard({ stats }: { stats: TextStats }) {
   )
 }
 
-function DateStatCard({ stats }: { stats: DateStats }) {
+function DateStatCard({ stats, t }: { stats: DateStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxM = Math.max(...stats.byMonth.map(m => m.count), 1)
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>最早</span><span className="font-mono text-xs truncate max-w-[140px]">{stats.min}</span></div>
-      <div className="flex justify-between"><span>最晚</span><span className="font-mono text-xs truncate max-w-[140px]">{stats.max}</span></div>
-      <div className="flex justify-between"><span>跨度</span><span className="font-mono text-gv-text">{stats.spanDays} 天</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.earliest')}</span><span className="font-mono text-xs truncate max-w-[140px]">{stats.min}</span></div>
+      <div className="flex justify-between"><span>{t('stats.latest')}</span><span className="font-mono text-xs truncate max-w-[140px]">{stats.max}</span></div>
+      <div className="flex justify-between"><span>{t('stats.span')}</span><span className="font-mono text-gv-text">{stats.spanDays} {t('stats.days')}</span></div>
       {stats.byMonth.length > 0 && (
         <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">按月分布</p>
+          <p className="text-gv-text-muted mb-1">{t('stats.by_month')}</p>
           {stats.byMonth.map((m, i) => (
             <div key={i} className="flex items-center gap-1">
               <span className="font-mono w-16">{m.month}</span>
@@ -1213,13 +1182,13 @@ function DateStatCard({ stats }: { stats: DateStats }) {
   )
 }
 
-function BoolStatCard({ stats }: { stats: BoolStats }) {
+function BoolStatCard({ stats, t }: { stats: BoolStats; t: (key: string, ...args: (string | number)[]) => string }) {
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
       <div className="flex justify-between"><span>True (1)</span><span className="font-mono text-gv-text">{stats.trueCount}</span></div>
       <div className="flex justify-between"><span>False (0)</span><span className="font-mono text-gv-text">{stats.falseCount}</span></div>
-      <div className="flex justify-between"><span>True 占比</span><span className="font-mono text-gv-text">{(stats.trueRatio * 100).toFixed(1)}%</span></div>
+      <div className="flex justify-between"><span>{t('stats.true_ratio')}</span><span className="font-mono text-gv-text">{(stats.trueRatio * 100).toFixed(1)}%</span></div>
       <div className="mt-1 bg-gv-bg rounded-full h-2 overflow-hidden">
         <div className="h-full bg-gradient-to-r from-gv-green to-gv-pink rounded-full transition-all" style={{ width: `${stats.trueRatio * 100}%` }} />
       </div>
@@ -1227,27 +1196,27 @@ function BoolStatCard({ stats }: { stats: BoolStats }) {
   )
 }
 
-function IdStatCard({ stats }: { stats: IdStats }) {
+function IdStatCard({ stats, t }: { stats: IdStats; t: (key: string, ...args: (string | number)[]) => string }) {
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>唯一值</span><span className="font-mono text-gv-text">{stats.uniqueCount}</span></div>
-      <div className="flex justify-between"><span>重复</span><span className="font-mono text-gv-text">{stats.duplicateCount}</span></div>
-      <div className="flex justify-between"><span>唯一率</span><span className="font-mono text-gv-text">{stats.count > 0 ? ((stats.uniqueCount / stats.count) * 100).toFixed(1) : 0}%</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.unique')}</span><span className="font-mono text-gv-text">{stats.uniqueCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.duplicates')}</span><span className="font-mono text-gv-text">{stats.duplicateCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.unique_rate')}</span><span className="font-mono text-gv-text">{stats.count > 0 ? ((stats.uniqueCount / stats.count) * 100).toFixed(1) : 0}%</span></div>
     </div>
   )
 }
 
-function FkStatCard({ stats }: { stats: FkStats }) {
+function FkStatCard({ stats, t }: { stats: FkStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxV = Math.max(...stats.topValues.map(v => v.count), 1)
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>去重后</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
-      <div className="flex justify-between"><span>空值</span><span className="font-mono text-gv-text">{stats.nullCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.distinct')}</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.nulls')}</span><span className="font-mono text-gv-text">{stats.nullCount}</span></div>
       {stats.topValues.length > 0 && (
         <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">高频值</p>
+          <p className="text-gv-text-muted mb-1">{t('stats.top_values')}</p>
           {stats.topValues.map((v, i) => (
             <div key={i} className="flex items-center gap-1">
               <span className="font-mono text-xs truncate w-16">{v.value}</span>
@@ -1261,24 +1230,24 @@ function FkStatCard({ stats }: { stats: FkStats }) {
   )
 }
 
-function PhoneStatCard({ stats }: { stats: PhoneStats }) {
+function PhoneStatCard({ stats, t }: { stats: PhoneStats; t: (key: string, ...args: (string | number)[]) => string }) {
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>去重后</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
-      <div className="flex justify-between"><span>空值</span><span className="font-mono text-gv-text">{stats.nullCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.distinct')}</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.nulls')}</span><span className="font-mono text-gv-text">{stats.nullCount}</span></div>
     </div>
   )
 }
 
-function CityStatCard({ stats }: { stats: CityStats }) {
+function CityStatCard({ stats, t }: { stats: CityStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxP = Math.max(...stats.byProvince.map(p => p.count), 1)
   return (
     <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>数量</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>去重后</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
+      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
+      <div className="flex justify-between"><span>{t('stats.distinct')}</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
       <div className="mt-2">
-        <p className="text-gv-text-muted mb-1">按省分布</p>
+        <p className="text-gv-text-muted mb-1">{t('stats.by_province')}</p>
         {stats.byProvince.map((p, i) => (
           <div key={i} className="flex items-center gap-1">
             <span className="w-16 truncate text-xs">{p.province}</span>

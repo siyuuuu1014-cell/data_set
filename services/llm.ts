@@ -20,21 +20,30 @@ export async function callLlm(
   return data.content || ''
 }
 
+const BATCH_CHUNK = 20
+
 export async function callLlmBatch(
   systemPrompt: string,
   userPrompts: string[]
 ): Promise<string[]> {
-  const res = await fetch('/api/llm', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ systemPrompt, userPrompts }),
-  })
+  const results: string[] = []
 
-  const data = await res.json()
-  if (!res.ok) {
-    throw new Error(data.error || `LLM API error ${res.status}`)
+  for (let i = 0; i < userPrompts.length; i += BATCH_CHUNK) {
+    const chunk = userPrompts.slice(i, i + BATCH_CHUNK)
+    const res = await fetch('/api/llm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt, userPrompts: chunk }),
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.error || `LLM API error ${res.status}`)
+    }
+    results.push(...(data.results || []))
   }
-  return data.results || []
+
+  return results
 }
 
 export async function callLlmVision(

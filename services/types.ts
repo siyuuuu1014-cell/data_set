@@ -35,6 +35,8 @@ export interface ColumnDef {
   dateDistribution?: DateRange[]
   phoneCountry?: PhoneCountry
   cityCountry?: PhoneCountry
+  nullable?: boolean
+  nullRatio?: number   // 0-100, percentage of null values
 }
 
 export interface TableDef {

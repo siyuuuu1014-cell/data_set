@@ -1,10 +1,11 @@
 'use client'
 
+import React from 'react'
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
-import type { ColumnDef, ColumnType, IdFormat, PhoneCountry } from '@/services/types'
+import type { ColumnDef, ColumnType, IdFormat, PhoneCountry, DateFormat, DateRange } from '@/services/types'
 import Link from 'next/link'
 
 let _colIdCounter = Date.now()
@@ -52,6 +53,36 @@ const PHONE_COUNTRIES: { value: PhoneCountry; label: string }[] = [
   { value: 'AU', label: '澳大利亚 (+61)' },
 ]
 
+const DATE_FORMATS: { value: DateFormat; label: string }[] = [
+  { value: 'date', label: 'yyyy-MM-dd' },
+  { value: 'datetime', label: 'yyyy-MM-dd HH:mm:ss' },
+  { value: 'iso', label: 'ISO 8601' },
+  { value: 'date_slash', label: 'yyyy/MM/dd' },
+  { value: 'date_us', label: 'MM/dd/yyyy' },
+  { value: 'date_eu', label: 'dd-MM-yyyy' },
+  { value: 'unix_s', label: 'Unix 时间戳 (秒)' },
+  { value: 'unix_ms', label: 'Unix 时间戳 (毫秒)' },
+]
+
+const PRESET_DATE_RANGES: Omit<DateRange, 'ratio'>[] = [
+  { label: '近7日', minDays: 0, maxDays: 7 },
+  { label: '近15日', minDays: 0, maxDays: 15 },
+  { label: '近30日', minDays: 0, maxDays: 30 },
+  { label: '近3个月', minDays: 0, maxDays: 90 },
+  { label: '近6个月', minDays: 0, maxDays: 180 },
+  { label: '近1年', minDays: 0, maxDays: 365 },
+  { label: '近3年', minDays: 0, maxDays: 1095 },
+]
+
+function ensureDateDistribution(col: ColumnDef): DateRange[] {
+  if (!col.dateDistribution || col.dateDistribution.length === 0) {
+    const dist = PRESET_DATE_RANGES.map(r => ({ ...r, ratio: 0 }))
+    col.dateDistribution = dist
+    return dist
+  }
+  return col.dateDistribution
+}
+
 function emptyColumn(): ColumnDef {
   return { id: genColId(), name: '', type: 'text', llmPrompt: '', generationCode: '' }
 }
@@ -85,8 +116,13 @@ export default function NewTablePage() {
     setColumns(prev => prev.map(c => (c.id === colId ? { ...c, ...updates } : c)))
   }
 
-  const addColumn = () => {
-    setColumns(prev => [...prev, emptyColumn()])
+  const addColumn = (afterIndex?: number) => {
+    setColumns(prev => {
+      if (afterIndex !== undefined && afterIndex >= 0 && afterIndex < prev.length) {
+        return [...prev.slice(0, afterIndex + 1), emptyColumn(), ...prev.slice(afterIndex + 1)]
+      }
+      return [...prev, emptyColumn()]
+    })
   }
 
   const removeColumn = (colId: string) => {
@@ -355,19 +391,12 @@ export default function NewTablePage() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <label className="text-sm font-medium text-gv-text">{t('table.col_def')}</label>
-            <button
-              type="button"
-              onClick={addColumn}
-              className="text-sm text-gv-pink hover:text-gv-pink-dark font-medium transition-colors"
-            >
-              + {t('table.add_col')}
-            </button>
           </div>
 
           <div className="space-y-4">
             {columns.map((col, i) => (
+              <React.Fragment key={col.id}>
               <div
-                key={col.id}
                 className="card p-4 space-y-3"
               >
                 <div className="flex items-center gap-3">
@@ -466,15 +495,34 @@ export default function NewTablePage() {
                 )}
 
                 {col.type === 'date' && (
-                  <div>
-                    <label className="block text-xs text-gv-text-dim mb-1">生成代码 (可选，JavaScript返回值作为日期)</label>
-                    <textarea
-                      value={col.generationCode || ''}
-                      onChange={(e) => updateCol(col.id, { generationCode: e.target.value })}
-                      placeholder="留空则生成随机日期"
-                      rows={3}
-                      className="input-field w-full py-2 text-sm font-mono"
-                    />
+                  <div className="space-y-3">
+                    <select value={col.dateFormat || 'date'} onChange={(e) => updateCol(col.id, { dateFormat: e.target.value as DateFormat })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{f.label}</option>))}
+                    </select>
+                    <div>
+                      <p className="text-xs text-gv-text-dim mb-1">时间分布比例（%）</p>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                        {ensureDateDistribution(col).map((range, ri) => (
+                          <div key={ri} className="flex items-center gap-1.5">
+                            <span className="text-xs text-gv-text-dim w-20 flex-shrink-0">{range.label}</span>
+                            <input
+                              type="number" min={0} max={100}
+                              value={range.ratio}
+                              onChange={(e) => {
+                                const dist = [...ensureDateDistribution(col)]
+                                dist[ri] = { ...dist[ri], ratio: Number(e.target.value) || 0 }
+                                updateCol(col.id, { dateDistribution: dist })
+                              }}
+                              className="flex-1 input-field py-1 text-xs min-w-0"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <input type="text" value={col.generationCode || ''} onChange={(e) => updateCol(col.id, { generationCode: e.target.value })}
+                      placeholder="高级：自定义 JavaScript 生成代码"
+                      className="input-field w-full py-2 text-xs font-mono" />
                   </div>
                 )}
 
@@ -520,7 +568,41 @@ export default function NewTablePage() {
                     </select>
                   </div>
                 )}
+                {/* Nullable setting for all column types */}
+                <div className="border-t border-gv-border/50 pt-2 mt-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={col.nullable || false}
+                      onChange={(e) => updateCol(col.id, {
+                        nullable: e.target.checked,
+                        nullRatio: e.target.checked ? (col.nullRatio ?? 5) : undefined,
+                      })}
+                      className="rounded accent-gv-pink"
+                    />
+                    <span className="text-xs text-gv-text-dim">允许空值 (null)</span>
+                  </label>
+                  {col.nullable && (
+                    <div className="flex items-center gap-2 mt-2 pl-1">
+                      <span className="text-xs text-gv-text-muted w-10">比例</span>
+                      <input
+                        type="range"
+                        min={0} max={100}
+                        value={col.nullRatio ?? 5}
+                        onChange={(e) => updateCol(col.id, { nullRatio: Number(e.target.value) })}
+                        className="flex-1 accent-gv-pink h-1"
+                      />
+                      <span className="text-xs font-mono text-gv-text w-9 text-right">{col.nullRatio ?? 5}%</span>
+                    </div>
+                  )}
+                </div>
               </div>
+              <button type="button" onClick={() => addColumn(i)}
+                className="w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors"
+                title="在此处插入新列">
+                + 插入列
+              </button>
+              </React.Fragment>
             ))}
           </div>
         </div>

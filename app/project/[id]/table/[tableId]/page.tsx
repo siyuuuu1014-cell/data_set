@@ -1,5 +1,6 @@
 'use client'
 
+import React from 'react'
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams } from 'next/navigation'
@@ -65,13 +66,13 @@ const DATE_FORMATS: { value: DateFormat; label: string }[] = [
 ]
 
 const PRESET_DATE_RANGES: Omit<DateRange, 'ratio'>[] = [
-  { label: '近7天', minDays: 0, maxDays: 7 },
-  { label: '7-30天', minDays: 7, maxDays: 30 },
-  { label: '1-3个月', minDays: 30, maxDays: 90 },
-  { label: '3-6个月', minDays: 90, maxDays: 180 },
-  { label: '6-12个月', minDays: 180, maxDays: 365 },
-  { label: '1-2年', minDays: 365, maxDays: 730 },
-  { label: '2年以上', minDays: 730, maxDays: 0 },
+  { label: '近7日', minDays: 0, maxDays: 7 },
+  { label: '近15日', minDays: 0, maxDays: 15 },
+  { label: '近30日', minDays: 0, maxDays: 30 },
+  { label: '近3个月', minDays: 0, maxDays: 90 },
+  { label: '近6个月', minDays: 0, maxDays: 180 },
+  { label: '近1年', minDays: 0, maxDays: 365 },
+  { label: '近3年', minDays: 0, maxDays: 1095 },
 ]
 
 function emptyColumn(): ColumnDef {
@@ -256,8 +257,13 @@ export default function TableEditorPage() {
     setEditColumns(prev => prev.map(c => (c.id === colId ? { ...c, ...updates } : c)))
   }
 
-  const addEditColumn = () => {
-    setEditColumns(prev => [...prev, emptyColumn()])
+  const addEditColumn = (afterIndex?: number) => {
+    setEditColumns(prev => {
+      if (afterIndex !== undefined && afterIndex >= 0 && afterIndex < prev.length) {
+        return [...prev.slice(0, afterIndex + 1), emptyColumn(), ...prev.slice(afterIndex + 1)]
+      }
+      return [...prev, emptyColumn()]
+    })
   }
 
   const removeEditColumn = (colId: string) => {
@@ -338,7 +344,8 @@ export default function TableEditorPage() {
                 className="input-field w-full py-2 text-sm" />
             </div>
             {editColumns.map((col, i) => (
-              <div key={col.id}
+              <React.Fragment key={col.id}>
+              <div
                 className={`rounded-lg border p-3 space-y-2 transition-all duration-200 ${
                   dragIndex === i ? 'opacity-50 border-gv-pink shadow-[0_0_16px_var(--color-gv-pink-glow)]' : 'border-gv-border'
                 }`}
@@ -448,12 +455,42 @@ export default function TableEditorPage() {
                     {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{c.label}</option>))}
                   </select>
                 )}
+                {/* Nullable setting for all column types */}
+                <div className="border-t border-gv-border/50 pt-2 mt-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={col.nullable || false}
+                      onChange={(e) => updateEditCol(col.id, {
+                        nullable: e.target.checked,
+                        nullRatio: e.target.checked ? (col.nullRatio ?? 5) : undefined,
+                      })}
+                      className="rounded accent-gv-pink"
+                    />
+                    <span className="text-xs text-gv-text-dim">允许空值 (null)</span>
+                  </label>
+                  {col.nullable && (
+                    <div className="flex items-center gap-2 mt-2 pl-1">
+                      <span className="text-xs text-gv-text-muted w-10">比例</span>
+                      <input
+                        type="range"
+                        min={0} max={100}
+                        value={col.nullRatio ?? 5}
+                        onChange={(e) => updateEditCol(col.id, { nullRatio: Number(e.target.value) })}
+                        className="flex-1 accent-gv-pink h-1"
+                      />
+                      <span className="text-xs font-mono text-gv-text w-9 text-right">{col.nullRatio ?? 5}%</span>
+                    </div>
+                  )}
+                </div>
               </div>
+              <button type="button" onClick={() => addEditColumn(i)}
+                className="w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors"
+                title="在此处插入新列">
+                + 插入列
+              </button>
+              </React.Fragment>
             ))}
-            <button type="button" onClick={addEditColumn}
-              className="w-full rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors">
-              + {t('table.add_col')}
-            </button>
           </div>
           <div className="flex gap-2 mt-4">
             <button onClick={saveEdit}
@@ -525,6 +562,11 @@ export default function TableEditorPage() {
                 <span className="text-xs text-gv-pink">
                   → {allTables.find(t => t.id === col.foreignTable)?.name || col.foreignTable}
                   {col.foreignColumn ? `.${col.foreignColumn}` : ''}
+                </span>
+              )}
+              {col.nullable && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-gv-pink/10 text-gv-pink font-medium">
+                  {col.nullRatio && col.nullRatio > 0 ? `null ${col.nullRatio}%` : 'nullable'}
                 </span>
               )}
               <div className="ml-auto flex-shrink-0">

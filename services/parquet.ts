@@ -27,10 +27,10 @@ function typeToParquet(colType: string): string {
   }
 }
 
-function buildParquetSchema(columns: ColumnDef[]): Record<string, { type: string }> {
-  const schema: Record<string, { type: string }> = {}
+function buildParquetSchema(columns: ColumnDef[]): Record<string, { type: string; optional?: boolean }> {
+  const schema: Record<string, { type: string; optional?: boolean }> = {}
   for (const col of columns) {
-    schema[col.name] = { type: typeToParquet(col.type) }
+    schema[col.name] = { type: typeToParquet(col.type), optional: true }
   }
   return schema
 }

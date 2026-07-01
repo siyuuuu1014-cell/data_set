@@ -77,8 +77,6 @@ async function anthropicGenerate(config: LlmConfig, systemPrompt: string, userPr
   }, 'Anthropic')
 
   const data = await res.json()
-  console.log('[Anthropic Response]', JSON.stringify(data).slice(0, 500))
-
   // Standard Anthropic format: { content: [{ type: "text", text: "..." }] }
   if (data.content?.[0]?.text) {
     return data.content[0].text
@@ -164,7 +162,6 @@ Return exactly ${prompts.length} values in this format: ["value1", "value2", ...
 }
 
 function parseBatchResponse(res: string): string[] {
-  console.log('[Batch Response]', res.slice(0, 300))
 
   // Try to find a JSON array in the response
   const jsonMatch = res.match(/\[[\s\S]*?\]/)
@@ -175,7 +172,7 @@ function parseBatchResponse(res: string): string[] {
         return parsed.map(String)
       }
     } catch {
-      console.log('[Batch] JSON array parse failed, trying alternatives')
+      // JSON array parse failed, trying alternatives
     }
   }
 

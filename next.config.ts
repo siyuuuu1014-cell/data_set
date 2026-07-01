@@ -1,13 +1,10 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   // parquetjs lazy-loads lzo for LZO compression, which we never use.
-  // Point it to a stub to avoid build resolution errors.
-  turbopack: {
-    resolveAlias: {
-      lzo: "./lib/lzo-stub.js",
-    },
-  },
+  // Mark parquetjs as external to skip bundling its optional deps.
+  serverExternalPackages: ["parquetjs"],
 };
 
 export default nextConfig;

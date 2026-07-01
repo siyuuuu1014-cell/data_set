@@ -663,7 +663,7 @@ export default function NewTablePage() {
                           if (!col.llmPrompt?.trim()) return
                           updateCol(col.id, { generationCode: '生成中...' })
                           const { llmGenerateCode } = await import('@/services/data-gen')
-                          const result = await llmGenerateCode(col.llmPrompt!.trim(), 'date')
+                          const result = await llmGenerateCode(col.llmPrompt!.trim(), 'date', { dateFormat: col.dateFormat, dateDistribution: col.dateDistribution })
                           updateCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}

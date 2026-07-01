@@ -1,4 +1,4 @@
-import type { ColumnDef, TableDef } from './types'
+import type { ColumnDef, DateRange, TableDef } from './types'
 import { callLlm, callLlmBatch } from './llm'
 import { generateDate, generateBoolean, generateId, resetAutoIncrement, formatDate, generateDateFromDistribution, generatePhone, generateCity, type CodeGenContext } from './code-gen'
 
@@ -221,7 +221,7 @@ async function generateDateColumn(
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
-    const result = await llmGenerateCode(col.llmPrompt, 'date')
+    const result = await llmGenerateCode(col.llmPrompt, 'date', { dateFormat: col.dateFormat, dateDistribution: col.dateDistribution })
     if (result.code) {
       col.generationCode = result.code
       return executeColumnCode(col, result.code, rowCount, refData, columnResults)
@@ -237,7 +237,49 @@ async function generateDateColumn(
 
 // ──── LLM generates JavaScript code from a prompt ────
 
-export async function llmGenerateCode(prompt: string, type: 'number' | 'date'): Promise<{ code: string | null; error?: string }> {
+export async function llmGenerateCode(
+  prompt: string,
+  type: 'number' | 'date',
+  options?: { dateFormat?: string; dateDistribution?: DateRange[] }
+): Promise<{ code: string | null; error?: string }> {
+  // Build format instruction
+  const DATE_FORMAT_DESC: Record<string, string> = {
+    date: 'yyyy-MM-dd',
+    datetime: 'yyyy-MM-dd HH:mm:ss',
+    date_slash: 'yyyy/MM/dd',
+    date_us: 'MM/dd/yyyy',
+    date_eu: 'dd-MM-yyyy',
+    iso: 'ISO 8601',
+    unix_s: 'Unix timestamp in seconds',
+    unix_ms: 'Unix timestamp in milliseconds',
+  }
+  const DATE_FORMAT_CODE: Record<string, string> = {
+    date: ".toISOString().split('T')[0]",
+    datetime: "(()=>{const d=new Date(...);const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`})()",
+    date_slash: ".toISOString().split('T')[0].replace(/-/g,'/')",
+    date_us: "(()=>{const d=new Date(...);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())}/${d.getFullYear()}`})()",
+    date_eu: "(()=>{const d=new Date(...);const p=n=>String(n).padStart(2,'0');return `${p(d.getDate())}-${p(d.getMonth()+1)}-${d.getFullYear()}`})()",
+    iso: ".toISOString()",
+    unix_s: "Math.floor(new Date(...).getTime()/1000)",
+    unix_ms: "new Date(...).getTime()",
+  }
+
+  let formatInstruction = ''
+  if (options?.dateFormat) {
+    const desc = DATE_FORMAT_DESC[options.dateFormat] || options.dateFormat
+    const code = DATE_FORMAT_CODE[options.dateFormat] || ''
+    formatInstruction = `\nDATE FORMAT: ${desc}. Example output code pattern: ${code}`
+  }
+
+  let distributionInstruction = ''
+  if (options?.dateDistribution && options.dateDistribution.some(r => r.ratio > 0)) {
+    const ranges = options.dateDistribution
+      .filter(r => r.ratio > 0)
+      .map(r => `  "${r.label}" (${r.minDays}-${r.maxDays > 0 ? r.maxDays : r.minDays + 365} days ago): weight=${r.ratio}`)
+      .join('\n')
+    distributionInstruction = `\nDATE DISTRIBUTION (weighted random — first pick a range by weight, then generate within it):\n${ranges}\nPattern: pick a weighted range with Math.random()*totalWeight, subtract each weight until <=0, then generate a random date inside that range's [minDays, maxDays] bounds.`
+  }
+
   const systemPrompt = `You are a JavaScript expression generator. Respond with EXACTLY ONE LINE of valid JavaScript and NOTHING ELSE — no words, no markdown, no explanation.
 
 Available functions: randomInt(min,max) randomFloat(min,max) pick(array)
@@ -257,13 +299,25 @@ Output: new Date(Date.now()-randomInt(0,30)*86400000).toISOString().split('T')[0
 Input: "end date after start_date by 1-30 days"
 Output: new Date(new Date(row.start_date).getTime()+randomInt(1,30)*86400000).toISOString().split('T')[0]
 
-NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime().
+NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime().${formatInstruction}${distributionInstruction}
 
 Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
 
+  // Build cache key that includes format/distribution for correct cache matching
+  const cacheKeyParts = [`${type}:${prompt.trim()}`]
+  if (options?.dateFormat) cacheKeyParts.push(`fmt=${options.dateFormat}`)
+  if (options?.dateDistribution) {
+    const distKey = options.dateDistribution
+      .filter(r => r.ratio > 0)
+      .map(r => `${r.ratio}-${r.minDays}-${r.maxDays}`)
+      .join(',')
+    if (distKey) cacheKeyParts.push(`dist=${distKey}`)
+  }
+  const cacheKey = cacheKeyParts.join('|')
+
   let rawCode: string
   try {
-    rawCode = await callLlm(systemPrompt, prompt, `${type}:${prompt.trim()}`)
+    rawCode = await callLlm(systemPrompt, prompt, cacheKey)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return { code: null, error: `API调用失败: ${msg}` }

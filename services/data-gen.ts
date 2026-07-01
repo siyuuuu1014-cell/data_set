@@ -1,6 +1,6 @@
 import type { ColumnDef, TableDef } from './types'
 import { callLlm, callLlmBatch } from './llm'
-import { executeCodeGen, generateDate, generateBoolean, generateId, resetAutoIncrement, formatDate, generateDateFromDistribution, generatePhone, generateCity, type CodeGenContext } from './code-gen'
+import { generateDate, generateBoolean, generateId, resetAutoIncrement, formatDate, generateDateFromDistribution, generatePhone, generateCity, type CodeGenContext } from './code-gen'
 
 export interface GenOptions {
   rowCount: number
@@ -235,29 +235,29 @@ async function generateDateColumn(
 // ──── LLM generates JavaScript code from a prompt ────
 
 async function llmGenerateCode(prompt: string, type: 'number' | 'date'): Promise<string | null> {
-  const systemPrompt = `You are a code generator. Write a SINGLE JavaScript expression that returns a ${type} value per row.
+  const systemPrompt = `You are a code generator. Write a SINGLE JavaScript expression that returns a ${type} value per row. Only respond with valid JavaScript — no Chinese, no natural language, no explanation.
 
-Available context:
-- index — current row index (0-based)
-- totalRows — total number of rows to generate
-- previousValues — array of already-generated values for this column
-- refData["tableName"] — array of row objects from a referenced table
-- randomInt(min, max) — inclusive random integer
-- randomFloat(min, max) — random float in [min, max)
-- pick(array) — random element from an array
+Context variables available in scope:
+  index          — current row index (0-based)
+  totalRows      — total number of rows
+  previousValues — array of already-generated values for this column
+  refData        — object: refData["tableName"] is an array of row objects
+  randomInt(min, max) — inclusive random integer
+  randomFloat(min, max) — random float in [min, max)
+  pick(arr)      — random element from an array
 
-Rules:
-- Output ONLY the raw expression. No explanation, no markdown, no "return", no backticks.
-- The expression will be evaluated once per row with the context above in scope.
-- Use previousValues for uniqueness: e.g., generate a value then check if included, regenerate.
-- If referencing refData, use pick(refData["tableName"]).columnName pattern.
+CRITICAL RULES:
+- Output ONLY the raw expression. Nothing else. No markdown, no quotes, no explanation.
+- NEVER write Chinese characters, never write natural language — only JavaScript.
+- If you cannot express it as pure JavaScript, output a simple fallback like: randomInt(1, 100)
 
 Examples:
 "random age 18-65" → randomInt(18, 65)
-"price 9.99-999.99, 2 decimals" → Math.round(randomFloat(9.99, 999.99) * 100) / 100
-"date within last 30 days" → new Date(Date.now() - randomInt(0, 30) * 86400000).toISOString().split('T')[0]
-"ID like USR-0001 to USR-1000" → 'USR-' + String(index + 1).padStart(4, '0')
-"pick a user name from refData" → pick(refData["users"]).name`
+"price 9.99-999.99" → Math.round(randomFloat(9.99, 999.99) * 100) / 100
+"date in last 30 days" → new Date(Date.now() - randomInt(0, 30) * 86400000).toISOString().split('T')[0]
+"sequential ID USR-0001" → 'USR-' + String(index + 1).padStart(4, '0')
+"user name from users table" → pick(refData["users"]).name
+"longitude in China" → randomFloat(73, 135).toFixed(6)`
 
   try {
     const code = await callLlm(systemPrompt, prompt)
@@ -270,7 +270,22 @@ Examples:
     // If still contains backticks, try extracting inside
     const backtickMatch = cleaned.match(/`([^`]+)`/)
     if (backtickMatch) cleaned = backtickMatch[1]
-    return cleaned || null
+
+    // Reject output that looks like natural language rather than JavaScript
+    if (!cleaned || cleaned.length > 200) return null
+    // Heuristic: if it contains CJK characters, it's probably not valid JS
+    if (/[\u4e00-\u9fff]/.test(cleaned)) {
+      return null
+    }
+    // Quick syntax check: try compiling
+    try {
+      new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick',
+        cleaned.includes('return ') ? cleaned : `return (${cleaned})`
+      )
+    } catch {
+      return null
+    }
+    return cleaned
   } catch (err) {
     console.error(`[llm code-gen] ${type} failed:`, err)
     return null
@@ -285,19 +300,33 @@ function executeColumnCode(
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>
 ): unknown[] {
+  // Compile the function once, outside the loop
+  const expression = code.includes('return ') ? code : `return (${code})`
+  let fn: ((...args: unknown[]) => unknown) | null = null
+  try {
+    fn = new Function(
+      'index', 'totalRows', 'previousValues', 'refData',
+      'randomInt', 'randomFloat', 'pick',
+      expression
+    ) as (...args: unknown[]) => unknown
+  } catch (err) {
+    console.error(`[code compile] ${col.name}:`, err)
+    return new Array(rowCount).fill(null)
+  }
+
+  const helpers = {
+    randomInt: (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min,
+    randomFloat: (min: number, max: number) => Math.random() * (max - min) + min,
+    pick: <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)],
+  }
+
   const results: unknown[] = []
   for (let i = 0; i < rowCount; i++) {
-    const ctx: CodeGenContext = {
-      index: i,
-      totalRows: rowCount,
-      previousValues: results,
-      refData,
-      randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
-      randomFloat: (min, max) => Math.random() * (max - min) + min,
-      pick: (arr) => arr[Math.floor(Math.random() * arr.length)],
-    }
     try {
-      const val = executeCodeGen(code, ctx)
+      const val = fn(
+        i, rowCount, results, refData,
+        helpers.randomInt, helpers.randomFloat, helpers.pick
+      )
       results.push(val)
     } catch (err) {
       console.error(`[code exec] ${col.name} row ${i}:`, err)

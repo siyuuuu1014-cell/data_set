@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "setup": "node scripts/setup.js",
     "dev": "node scripts/setup.js && next dev",
     "build": "next build",

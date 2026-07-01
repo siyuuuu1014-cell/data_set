@@ -74,42 +74,55 @@ export async function generateTableData(
   return rows
 }
 
+/**
+ * Apply null ratio to generated column values.
+ * Randomly replaces a percentage of non-null values with null.
+ */
+function applyNullRatio(col: ColumnDef, values: unknown[]): unknown[] {
+  if (!col.nullable || !col.nullRatio || col.nullRatio <= 0) return values
+  const ratio = Math.min(col.nullRatio, 100) / 100
+  return values.map(v => (Math.random() < ratio ? null : v))
+}
+
 export async function generateColumn(
   col: ColumnDef,
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>
 ): Promise<unknown[]> {
-  const results: unknown[] = []
+  let results: unknown[] = []
 
   // Non-fk columns that reference another table: resolve values from refData/Parquet
   if (col.type !== 'foreign_key' && col.foreignTable) {
     for (let i = 0; i < rowCount; i++) {
       results.push(resolveForeignKey(col, refData))
     }
-    return results
+    return applyNullRatio(col, results)
   }
 
   switch (col.type) {
     case 'text':
-      return generateTextColumn(col, rowCount)
+      results = await generateTextColumn(col, rowCount)
+      break
 
     case 'number':
-      return generateNumberColumn(col, rowCount, refData)
+      results = await generateNumberColumn(col, rowCount, refData)
+      break
 
     case 'date':
-      return generateDateColumn(col, rowCount, refData)
+      results = await generateDateColumn(col, rowCount, refData)
+      break
 
     case 'boolean':
       for (let i = 0; i < rowCount; i++) {
         results.push(generateBoolean(col.generationCode))
       }
-      return results
+      break
 
     case 'foreign_key':
       for (let i = 0; i < rowCount; i++) {
         results.push(resolveForeignKey(col, refData))
       }
-      return results
+      break
 
     case 'id': {
       const format = col.idFormat || 'uuid4'
@@ -118,24 +131,26 @@ export async function generateColumn(
       for (let i = 0; i < rowCount; i++) {
         results.push(generateId(format, i, key))
       }
-      return results
+      break
     }
 
     case 'phone':
       for (let i = 0; i < rowCount; i++) {
         results.push(generatePhone(col.phoneCountry || 'CN'))
       }
-      return results
+      break
 
     case 'city':
       for (let i = 0; i < rowCount; i++) {
         results.push(generateCity(col.cityCountry || 'CN'))
       }
-      return results
+      break
 
     default:
-      return new Array(rowCount).fill(null)
+      results = new Array(rowCount).fill(null)
   }
+
+  return applyNullRatio(col, results)
 }
 
 // ──── Text column: LLM direct generation ────

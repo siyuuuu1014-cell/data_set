@@ -80,6 +80,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const deleteProject = useCallback((id: string) => {
+    // Fire-and-forget: delete Parquet files from disk
+    fetch(`/api/data?projectId=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
     setState(prev => {
       const { [id]: _, ...rest } = prev.tables
       return {
@@ -130,13 +132,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const deleteTable = useCallback((projectId: string, tableId: string) => {
-    setState(prev => ({
-      ...prev,
-      tables: {
-        ...prev.tables,
-        [projectId]: (prev.tables[projectId] || []).filter(t => t.id !== tableId),
-      },
-    }))
+    setState(prev => {
+      // Look up the table name for Parquet file deletion
+      const tables = prev.tables[projectId] || []
+      const table = tables.find(t => t.id === tableId)
+      if (table) {
+        fetch(`/api/data?projectId=${encodeURIComponent(projectId)}&tableName=${encodeURIComponent(table.name)}`, { method: 'DELETE' }).catch(() => {})
+      }
+      return {
+        ...prev,
+        tables: {
+          ...prev.tables,
+          [projectId]: tables.filter(t => t.id !== tableId),
+        },
+      }
+    })
   }, [])
 
   const setTableRows = useCallback((projectId: string, tableId: string, rows: Record<string, unknown>[]) => {

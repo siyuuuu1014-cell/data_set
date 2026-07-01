@@ -1,4 +1,4 @@
-import { writeParquet, readParquet } from '@/services/parquet'
+import { writeParquet, readParquet, deleteParquetTable, deleteParquetProject } from '@/services/parquet'
 import type { ColumnDef } from '@/services/types'
 
 // GET ?projectId=X&tableName=Y — read Parquet data
@@ -40,6 +40,30 @@ export async function POST(request: Request) {
   } catch (err) {
     const msg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err)
     console.error('[data POST]', msg)
+    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
+  }
+}
+
+// DELETE ?projectId=X&tableName=Y — delete Parquet data
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const projectId = searchParams.get('projectId')
+  const tableName = searchParams.get('tableName')
+
+  if (!projectId) {
+    return Response.json({ error: 'Missing projectId' }, { status: 400 })
+  }
+
+  try {
+    if (tableName) {
+      deleteParquetTable(projectId, tableName)
+    } else {
+      deleteParquetProject(projectId)
+    }
+    return Response.json({ ok: true })
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err)
+    console.error('[data DELETE]', msg)
     return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }

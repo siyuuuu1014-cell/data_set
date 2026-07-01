@@ -3,7 +3,7 @@
  * Only used in API routes (server-side, not client).
  */
 
-import { mkdirSync, existsSync, unlinkSync } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, rmdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 import type { ColumnDef } from './types'
 
@@ -22,7 +22,8 @@ function typeToParquet(colType: string): string {
     case 'number': return 'DOUBLE'
     case 'boolean': return 'INT64'  // store 0/1 as int
     case 'date': return 'UTF8'
-    case 'foreign_key': return 'UTF8'
+    case 'foreign_key':
+    case 'foreign_key_array': return 'UTF8'
     default: return 'UTF8'
   }
 }
@@ -48,6 +49,11 @@ export async function writeParquet(
   const dir = join(DATA_DIR, projectId)
   ensureDir(dir)
   const filePath = join(dir, `${tableName}.parquet`)
+
+  // Delete existing file first — avoid truncation issues with parquetjs
+  if (existsSync(filePath)) {
+    unlinkSync(filePath)
+  }
 
   const schema = new parquet.ParquetSchema(buildParquetSchema(columns))
   const writer = await parquet.ParquetWriter.openFile(schema, filePath)
@@ -104,4 +110,45 @@ export async function readParquet(
  */
 export function parquetExists(projectId: string, tableName: string): boolean {
   return existsSync(join(DATA_DIR, projectId, `${tableName}.parquet`))
+}
+
+/**
+ * Delete a single table's Parquet file.
+ */
+export function deleteParquetTable(projectId: string, tableName: string): void {
+  const filePath = join(DATA_DIR, projectId, `${tableName}.parquet`)
+  if (existsSync(filePath)) {
+    unlinkSync(filePath)
+  }
+  // If the project directory is now empty, remove it too
+  const dir = join(DATA_DIR, projectId)
+  if (existsSync(dir)) {
+    try {
+      const remaining = readdirSync(dir)
+      if (remaining.length === 0) {
+        rmdirSync(dir)
+      }
+    } catch {
+      // directory not empty or permissions issue — leave it
+    }
+  }
+}
+
+/**
+ * Delete a project's entire data directory (all tables).
+ */
+export function deleteParquetProject(projectId: string): void {
+  const dir = join(DATA_DIR, projectId)
+  if (existsSync(dir)) {
+    // Remove all files in the directory first, then the directory itself
+    try {
+      const files = readdirSync(dir)
+      for (const f of files) {
+        unlinkSync(join(dir, f))
+      }
+      rmdirSync(dir)
+    } catch (err) {
+      console.error(`[parquet] failed to delete project ${projectId}:`, err)
+    }
+  }
 }

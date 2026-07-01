@@ -37,7 +37,7 @@ const ID_FORMATS: { value: IdFormat; label: string }[] = [
 
 const TYPE_SHORT_LABEL: Record<ColumnType, string> = {
   text: '文本', number: '数字', boolean: '布尔', date: '日期',
-  foreign_key: '外键', id: 'ID', phone: '电话', city: '城市',
+  foreign_key: '外键', foreign_key_array: '外键数组', id: 'ID', phone: '电话', city: '城市',
 }
 
 const PHONE_COUNTRIES: { value: PhoneCountry; label: string }[] = [
@@ -60,6 +60,7 @@ const DATE_FORMATS: { value: DateFormat; label: string }[] = [
   { value: 'date_slash', label: 'yyyy/MM/dd' },
   { value: 'date_us', label: 'MM/dd/yyyy' },
   { value: 'date_eu', label: 'dd-MM-yyyy' },
+  { value: 'time', label: 'HH:mm:ss' },
   { value: 'unix_s', label: 'Unix 时间戳 (秒)' },
   { value: 'unix_ms', label: 'Unix 时间戳 (毫秒)' },
 ]

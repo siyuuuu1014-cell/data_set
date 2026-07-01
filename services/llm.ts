@@ -4,12 +4,13 @@
 
 export async function callLlm(
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  cacheKey?: string
 ): Promise<string> {
   const res = await fetch('/api/llm', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ systemPrompt, userPrompt }),
+    body: JSON.stringify({ systemPrompt, userPrompt, cacheKey }),
   })
 
   const data = await res.json()

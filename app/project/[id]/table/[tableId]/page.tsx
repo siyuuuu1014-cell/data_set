@@ -7,7 +7,7 @@ import { useParams } from 'next/navigation'
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import type { ColumnDef, ColumnType, IdFormat, DateFormat, DateRange, PhoneCountry } from '@/services/types'
-import { generateTableData, generateColumn } from '@/services/data-gen'
+import { generateColumn } from '@/services/data-gen'
 import { exportSql, exportJson, exportCsv, exportXml, exportExcel, downloadFile } from '@/services/export'
 import { computeColumnStats, type ColumnStats, type NumStats, type TextStats, type DateStats, type BoolStats, type IdStats, type FkStats, type PhoneStats, type CityStats } from '@/services/stats'
 
@@ -154,6 +154,7 @@ export default function TableEditorPage() {
   const [displayedRows, setDisplayedRows] = useState<Record<string, unknown>[]>(table?.rows || [])
   const [pageSize, setPageSize] = useState(50)
   const [currentPage, setCurrentPage] = useState(1)
+  const [generatedColumns, setGeneratedColumns] = useState<Set<string>>(new Set())
 
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [imageUploading, setImageUploading] = useState(false)
@@ -200,13 +201,17 @@ export default function TableEditorPage() {
 
   const handleGenerate = async () => {
     setGenError('')
-    if (emptyPromptCols.length > 0) {
-      setGenError(`以下文本列的提示词为空: ${emptyPromptCols.map(c => c.name).join(', ')}。请编辑表结构补充提示词，或勾选"允许空值"。`)
-      return
-    }
     setGenerating(true)
     try {
-      const rows = await generateTableData(table, { rowCount, allTables, projectId: id })
+      // Create blank rows (all nulls) — user will fill column by column
+      const blankRows: Record<string, unknown>[] = []
+      for (let i = 0; i < rowCount; i++) {
+        const row: Record<string, unknown> = {}
+        for (const col of table.columns) {
+          row[col.name] = null
+        }
+        blankRows.push(row)
+      }
 
       await fetch('/api/data', {
         method: 'POST',
@@ -215,12 +220,13 @@ export default function TableEditorPage() {
           projectId: id,
           tableName: table.name,
           columns: table.columns,
-          rows,
+          rows: blankRows,
         }),
       })
 
-      setTableRows(id, table.id, rows)
-      setDisplayedRows(rows)
+      setTableRows(id, table.id, blankRows)
+      setDisplayedRows(blankRows)
+      setGeneratedColumns(new Set())
     } catch (err) {
       setGenError(err instanceof Error ? err.message : '生成失败')
     } finally {
@@ -278,6 +284,7 @@ export default function TableEditorPage() {
       setDisplayedRows(rows)
       setTableRows(id, table.id, rows)
       await saveToParquet(rows)
+      setGeneratedColumns(prev => new Set(prev).add(col.name))
     } catch (err) {
       setGenError(err instanceof Error ? err.message : '生成失败')
     } finally {
@@ -690,7 +697,14 @@ export default function TableEditorPage() {
 
       {/* Column Info */}
       <div className="card p-5 mb-6">
-        <h3 className="text-sm font-semibold text-gv-text mb-3">列结构</h3>
+        <h3 className="text-sm font-semibold text-gv-text mb-3">
+          列结构
+          {displayedRows.length > 0 && (
+            <span className="ml-2 text-xs font-normal text-gv-text-dim">
+              (已生成 {generatedColumns.size}/{table.columns.length} 列)
+            </span>
+          )}
+        </h3>
         <div className="space-y-1">
           {table.columns.map((col, i) => (
             <div key={col.id}
@@ -757,22 +771,31 @@ export default function TableEditorPage() {
                 </span>
               )}
               <div className="ml-auto flex-shrink-0">
-                <button
-                  onClick={() => handleGenerateColumn(col)}
-                  disabled={columnGenerating != null}
-                  className="rounded-lg border border-gv-border px-2.5 py-1 text-xs font-medium text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={`生成 ${col.name} 列数据`}
-                >
-                  {columnGenerating === col.id ? (
-                    <span className="flex items-center gap-1">
-                      <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      {t('table.generating')}
-                    </span>
-                  ) : t('table.generate')}
-                </button>
+                {generatedColumns.has(col.name) ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gv-green-dark">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                    已生成
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => handleGenerateColumn(col)}
+                    disabled={columnGenerating != null}
+                    className="rounded-lg border border-gv-border px-2.5 py-1 text-xs font-medium text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={`生成 ${col.name} 列数据`}
+                  >
+                    {columnGenerating === col.id ? (
+                      <span className="flex items-center gap-1">
+                        <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        {t('table.generating')}
+                      </span>
+                    ) : t('table.generate')}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -818,7 +841,7 @@ export default function TableEditorPage() {
           </div>
           <button onClick={handleGenerate} disabled={generating}
             className="btn-primary rounded-lg px-6 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-            {generating ? t('table.generating') : t('table.generate')}
+            {generating ? t('table.generating') : '创建空记录'}
           </button>
           <span className="text-sm text-gv-text-muted">{t('table.rows')}: {displayedRows.length}</span>
         </div>

@@ -156,9 +156,23 @@ export async function generateColumn(
 // ──── Text column: LLM direct generation ────
 
 async function generateTextColumn(col: ColumnDef, rowCount: number): Promise<string[]> {
-  const prompts = Array.from({ length: rowCount }, (_, i) => `Row ${i + 1}: ${col.llmPrompt}`)
+  // Nullable with no prompt: skip LLM, generate nulls
+  if (!col.llmPrompt?.trim()) {
+    return new Array(rowCount).fill(null)
+  }
+  const prompts = Array.from({ length: rowCount }, (_, i) => `Item ${i + 1}: ${col.llmPrompt}`)
   try {
-    const systemPrompt = `You are a data generation assistant. Generate realistic synthetic data. ${col.llmPrompt}`
+    const systemPrompt = `You are a synthetic data generator. Your task is to generate realistic, diverse data values.
+
+Rules:
+- Generate ONE value per item matching the description exactly
+- Output only the raw value — no numbering, no prefix, no quotes, no markdown, no explanation
+- Ensure diversity: avoid repeating the same value; vary names, numbers, phrases naturally
+- Use authentic real-world patterns: real-sounding names, valid formats, natural language
+- Match the locale and style implied by the description (Chinese names if specified, etc.)
+- If the description implies a specific format, follow it precisely
+
+Column description: ${col.llmPrompt}`
     return await callLlmBatch(systemPrompt, prompts)
   } catch (err) {
     console.error(`[text] ${col.name} failed:`, err)
@@ -221,36 +235,41 @@ async function generateDateColumn(
 // ──── LLM generates JavaScript code from a prompt ────
 
 async function llmGenerateCode(prompt: string, type: 'number' | 'date'): Promise<string | null> {
-  const systemPrompt = `You are a code generator. Write a single JavaScript expression that returns a ${type} value based on the user's description.
+  const systemPrompt = `You are a code generator. Write a SINGLE JavaScript expression that returns a ${type} value per row.
 
-Available context variables:
-- index: current row index (0-based)
-- totalRows: total number of rows
-- previousValues: array of previously generated values for this column
-- refData: object with referenced table data, e.g. refData["users"] = [{id: 1, name: "Alice"}, ...]
-- randomInt(min, max): returns a random integer between min and max (inclusive)
-- randomFloat(min, max): returns a random float between min and max
-- pick(arr): returns a random element from an array
+Available context:
+- index — current row index (0-based)
+- totalRows — total number of rows to generate
+- previousValues — array of already-generated values for this column
+- refData["tableName"] — array of row objects from a referenced table
+- randomInt(min, max) — inclusive random integer
+- randomFloat(min, max) — random float in [min, max)
+- pick(array) — random element from an array
 
-Return ONLY the expression, nothing else. No explanation, no markdown, no "return" keyword.
+Rules:
+- Output ONLY the raw expression. No explanation, no markdown, no "return", no backticks.
+- The expression will be evaluated once per row with the context above in scope.
+- Use previousValues for uniqueness: e.g., generate a value then check if included, regenerate.
+- If referencing refData, use pick(refData["tableName"]).columnName pattern.
 
-Example for "random age between 18 and 65":
-randomInt(18, 65)
-
-Example for "random price between 9.99 and 999.99 with 2 decimals":
-Math.round(randomFloat(9.99, 999.99) * 100) / 100
-
-Example for "date within last 30 days":
-new Date(Date.now() - randomInt(0, 30) * 86400000).toISOString().split('T')[0]`
+Examples:
+"random age 18-65" → randomInt(18, 65)
+"price 9.99-999.99, 2 decimals" → Math.round(randomFloat(9.99, 999.99) * 100) / 100
+"date within last 30 days" → new Date(Date.now() - randomInt(0, 30) * 86400000).toISOString().split('T')[0]
+"ID like USR-0001 to USR-1000" → 'USR-' + String(index + 1).padStart(4, '0')
+"pick a user name from refData" → pick(refData["users"]).name`
 
   try {
     const code = await callLlm(systemPrompt, prompt)
-    // Clean up response: remove markdown, extra whitespace
-    const cleaned = code
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/`/g, '')
-      .replace(/^return\s+/i, '')
+    // Clean up response: extract code from markdown blocks, strip prefix/suffix noise
+    let cleaned = code
+      .replace(/```(?:javascript|js)?\s*([\s\S]*?)```/g, '$1') // unwrap code blocks
+      .replace(/^return\s+/i, '')     // strip leading "return"
+      .replace(/;\s*$/, '')           // strip trailing semicolon
       .trim()
+    // If still contains backticks, try extracting inside
+    const backtickMatch = cleaned.match(/`([^`]+)`/)
+    if (backtickMatch) cleaned = backtickMatch[1]
     return cleaned || null
   } catch (err) {
     console.error(`[llm code-gen] ${type} failed:`, err)

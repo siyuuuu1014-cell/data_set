@@ -104,6 +104,8 @@ export default function TableEditorPage() {
   const [colDragIdx, setColDragIdx] = useState<number | null>(null)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [displayedRows, setDisplayedRows] = useState<Record<string, unknown>[]>(table?.rows || [])
+  const [pageSize, setPageSize] = useState(50)
+  const [currentPage, setCurrentPage] = useState(1)
 
   const [llmConfigured, setLlmConfigured] = useState(false)
   useEffect(() => {
@@ -144,12 +146,12 @@ export default function TableEditorPage() {
     )
   }
 
-  const emptyPromptCols = table.columns.filter(c => c.type === 'text' && !c.llmPrompt?.trim())
+  const emptyPromptCols = table.columns.filter(c => c.type === 'text' && !c.nullable && !c.llmPrompt?.trim())
 
   const handleGenerate = async () => {
     setGenError('')
     if (emptyPromptCols.length > 0) {
-      setGenError(`以下文本列的提示词为空: ${emptyPromptCols.map(c => c.name).join(', ')}。请编辑表结构补充提示词。`)
+      setGenError(`以下文本列的提示词为空: ${emptyPromptCols.map(c => c.name).join(', ')}。请编辑表结构补充提示词，或勾选"允许空值"。`)
       return
     }
     setGenerating(true)
@@ -191,8 +193,8 @@ export default function TableEditorPage() {
 
   const handleGenerateColumn = async (col: ColumnDef) => {
     setGenError('')
-    if (col.type === 'text' && !col.llmPrompt?.trim()) {
-      setGenError(`列"${col.name}"的提示词为空`)
+    if (col.type === 'text' && !col.nullable && !col.llmPrompt?.trim()) {
+      setGenError(`列"${col.name}"的提示词为空，请补充提示词或勾选"允许空值"`)
       return
     }
     setColumnGenerating(col.id)
@@ -476,6 +478,7 @@ export default function TableEditorPage() {
                         type="range"
                         min={0} max={100}
                         value={col.nullRatio ?? 5}
+                        onMouseDown={(e) => e.stopPropagation()}
                         onChange={(e) => updateEditCol(col.id, { nullRatio: Number(e.target.value) })}
                         className="flex-1 accent-gv-pink h-1"
                       />
@@ -533,7 +536,7 @@ export default function TableEditorPage() {
               {col.type === 'text' && (
                 col.llmPrompt?.trim()
                   ? <span className="text-xs text-gv-text-dim truncate max-w-xs">{col.llmPrompt}</span>
-                  : <span className="text-xs text-gv-pink-dark">提示词为空</span>
+                  : <span className="text-xs text-gv-pink-dark">{col.nullable ? '允许空值' : '提示词为空'}</span>
               )}
               {col.generationCode && (
                 <code className="text-xs text-gv-text-muted truncate max-w-xs font-mono">{col.generationCode}</code>
@@ -653,33 +656,59 @@ export default function TableEditorPage() {
             <p>{t('table.no_data')}</p>
           </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gv-border bg-gradient-to-r from-gv-pink/5 to-gv-green/5">
-                <th className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium w-12">#</th>
-                {table.columns.map(col => (
-                  <th key={col.id} className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium">{col.name}</th>
+          <>
+            <div className="flex items-center justify-between px-4 py-2 border-b border-gv-border/50 bg-gv-bg/50">
+              <div className="flex items-center gap-2 text-xs text-gv-text-dim">
+                <span>每页</span>
+                {[50, 100].map(n => (
+                  <button key={n} onClick={() => { setPageSize(n); setCurrentPage(1) }}
+                    className={`px-2 py-0.5 rounded border transition-colors ${pageSize === n ? 'border-gv-pink bg-gv-pink/10 text-gv-pink' : 'border-gv-border hover:border-gv-pink/50'}`}>{n}</button>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {displayedRows.slice(0, 100).map((row, i) => (
-                <tr key={i} className="border-b border-gv-border/50 hover:bg-gv-pink/[0.03] transition-colors">
-                  <td className="px-4 py-2 text-gv-text-muted text-xs">{i + 1}</td>
-                  {table.columns.map(col => (
-                    <td key={col.id} className="px-4 py-2 max-w-xs truncate text-gv-text">{renderCellValue(row[col.name])}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                <span>行 · 共 {displayedRows.length} 行</span>
+              </div>
+              {(() => {
+                const totalPages = Math.ceil(displayedRows.length / pageSize)
+                const start = (currentPage - 1) * pageSize
+                const end = Math.min(start + pageSize, displayedRows.length)
+                return (
+                  <div className="flex items-center gap-1 text-xs text-gv-text-dim">
+                    <span>{start + 1}-{end} / {displayedRows.length}</span>
+                    <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}
+                      className="px-1.5 py-0.5 rounded border border-gv-border hover:border-gv-pink/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">&lt;</button>
+                    <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}
+                      className="px-1.5 py-0.5 rounded border border-gv-border hover:border-gv-pink/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">&gt;</button>
+                  </div>
+                )
+              })()}
+            </div>
+            <div className="relative">
+              <div className="overflow-auto max-h-[32rem]">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-gv-border bg-gradient-to-r from-gv-pink/5 to-gv-green/5 backdrop-blur-sm">
+                      <th className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium w-12">#</th>
+                      {table.columns.map(col => (
+                        <th key={col.id} className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium">{col.name}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedRows.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((row, i) => (
+                      <tr key={i} className="border-b border-gv-border/50 hover:bg-gv-pink/[0.03] transition-colors">
+                        <td className="px-4 py-2 text-gv-text-muted text-xs">{(currentPage - 1) * pageSize + i + 1}</td>
+                        {table.columns.map(col => (
+                          <td key={col.id} className="px-4 py-2 max-w-xs truncate text-gv-text">{renderCellValue(row[col.name])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="pointer-events-none absolute right-0 top-[2.125rem] bottom-0 w-8 bg-gradient-to-r from-transparent to-gv-bg/60" />
+            </div>
+          </>
         )}
       </div>
-      {displayedRows.length > 100 && (
-        <p className="text-xs text-gv-text-muted mt-2 text-center">
-          {t('table.showing_rows', 100, displayedRows.length)}
-        </p>
-      )}
     </main>
   )
 }
@@ -709,6 +738,10 @@ function StatsPanel({ columns, rows }: { columns: ColumnDef[]; rows: Record<stri
           return <StatCard key={col.id} col={col} stats={stats} />
         })}
       </div>
+      <button onClick={() => setOpen(false)}
+        className="mt-4 w-full rounded-lg border border-gv-border py-2 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/40 transition-colors">
+        关闭数据概况
+      </button>
     </div>
   )
 }

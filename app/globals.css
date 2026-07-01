@@ -45,8 +45,14 @@ body {
   background: linear-gradient(to bottom, var(--color-gv-pink), var(--color-gv-green-dark));
   border-radius: 99px;
 }
+::-webkit-scrollbar-thumb:horizontal {
+  background: linear-gradient(to right, var(--color-gv-pink), var(--color-gv-green-dark));
+}
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(to bottom, var(--color-gv-pink-dark), var(--color-gv-green));
+}
+::-webkit-scrollbar-thumb:horizontal:hover {
+  background: linear-gradient(to right, var(--color-gv-pink-dark), var(--color-gv-green));
 }
 
 /* ---- Animations ---- */

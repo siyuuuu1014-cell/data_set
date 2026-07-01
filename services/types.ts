@@ -7,13 +7,13 @@ export interface LlmConfig {
   apiFormat: ApiFormat
 }
 
-export type ColumnType = 'text' | 'number' | 'boolean' | 'date' | 'foreign_key' | 'id' | 'phone' | 'city'
+export type ColumnType = 'text' | 'number' | 'boolean' | 'date' | 'foreign_key' | 'foreign_key_array' | 'id' | 'phone' | 'city'
 
 export type PhoneCountry = 'CN' | 'US' | 'JP' | 'KR' | 'GB' | 'DE' | 'FR' | 'IN' | 'BR' | 'AU'
 
 export type IdFormat = 'uuid4' | 'uuid7' | 'snowflake' | 'auto_increment' | 'cuid2' | 'objectid' | 'nanoid' | 'ulid'
 
-export type DateFormat = 'iso' | 'datetime' | 'date' | 'date_slash' | 'date_us' | 'date_eu' | 'unix_s' | 'unix_ms'
+export type DateFormat = 'iso' | 'datetime' | 'date' | 'date_slash' | 'date_us' | 'date_eu' | 'time' | 'unix_s' | 'unix_ms'
 
 export interface DateRange {
   label: string

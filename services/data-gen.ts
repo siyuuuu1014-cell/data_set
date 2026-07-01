@@ -93,7 +93,7 @@ export async function generateColumn(
   let results: unknown[] = []
 
   // Non-fk columns that reference another table: resolve values from refData/Parquet
-  if (col.type !== 'foreign_key' && col.foreignTable) {
+  if (col.type !== 'foreign_key' && col.type !== 'foreign_key_array' && col.foreignTable) {
     for (let i = 0; i < rowCount; i++) {
       results.push(resolveForeignKey(col, refData))
     }
@@ -122,6 +122,12 @@ export async function generateColumn(
     case 'foreign_key':
       for (let i = 0; i < rowCount; i++) {
         results.push(resolveForeignKey(col, refData))
+      }
+      break
+
+    case 'foreign_key_array':
+      for (let i = 0; i < rowCount; i++) {
+        results.push(generateForeignKeyArray(col, refData))
       }
       break
 
@@ -249,6 +255,7 @@ export async function llmGenerateCode(
     date_slash: 'yyyy/MM/dd',
     date_us: 'MM/dd/yyyy',
     date_eu: 'dd-MM-yyyy',
+    time: 'HH:mm:ss',
     iso: 'ISO 8601',
     unix_s: 'Unix timestamp in seconds',
     unix_ms: 'Unix timestamp in milliseconds',
@@ -259,6 +266,7 @@ export async function llmGenerateCode(
     date_slash: ".toISOString().split('T')[0].replace(/-/g,'/')",
     date_us: ".toISOString().split('T')[0].replace(/(\\d{4})-(\\d{2})-(\\d{2})/,'$2/$3/$1')",
     date_eu: ".toISOString().split('T')[0].replace(/(\\d{4})-(\\d{2})-(\\d{2})/,'$3-$2-$1')",
+    time: ".toISOString().split('T')[1].split('.')[0]",
     iso: ".toISOString()",
     unix_s: "Math.floor(new Date(...).getTime()/1000)",
     unix_ms: "new Date(...).getTime()",
@@ -457,4 +465,46 @@ function resolveForeignKey(
     return randomRow[col.foreignColumn]
   }
   return randomRow['id'] || randomRow[Object.keys(randomRow)[0]]
+}
+
+// ──── Foreign key array: pick multiple values with normal-distributed count ────
+
+/** Box-Muller normal random (mean 0, stddev 1) */
+function normalRandom(): number {
+  let u = 0, v = 0
+  while (u === 0) u = Math.random()
+  while (v === 0) v = Math.random()
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v)
+}
+
+function generateForeignKeyArray(
+  col: ColumnDef,
+  refData: Record<string, Record<string, unknown>[]>
+): string {
+  if (!col.foreignTable) return '[]'
+  const parentRows = refData[col.foreignTable]
+  if (!parentRows || parentRows.length === 0) return '[]'
+
+  const maxPick = Math.min(10, parentRows.length)
+  // Normal distribution: mean=3, stddev=2, clamped to [1, maxPick]
+  const raw = Math.round(3 + normalRandom() * 2)
+  const count = Math.max(1, Math.min(maxPick, raw))
+
+  // Pick `count` unique random indices
+  const indices = new Set<number>()
+  while (indices.size < count) {
+    indices.add(Math.floor(Math.random() * parentRows.length))
+  }
+
+  const getValue = (row: Record<string, unknown>) => {
+    if (col.foreignColumn) return row[col.foreignColumn]
+    return row['id'] || row[Object.keys(row)[0]]
+  }
+
+  const values = Array.from(indices).map(i => {
+    const val = getValue(parentRows[i])
+    return String(val)
+  })
+
+  return `[${values.join(',')}]`
 }

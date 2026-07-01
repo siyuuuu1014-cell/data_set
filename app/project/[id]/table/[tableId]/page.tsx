@@ -23,11 +23,13 @@ const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'phone', label: '电话' },
   { value: 'city', label: '城市' },
   { value: 'foreign_key', label: '外键' },
+  { value: 'foreign_key_array', label: '外键数组' },
 ]
 
 const TYPE_LABEL: Record<ColumnType, string> = {
   text: '文本', number: '数字', boolean: '布尔值', date: '日期',
   id: 'ID', phone: '电话', city: '城市', foreign_key: '外键',
+  foreign_key_array: '外键数组',
 }
 
 const PHONE_COUNTRIES: { value: PhoneCountry; label: string }[] = [
@@ -61,6 +63,7 @@ const DATE_FORMATS: { value: DateFormat; label: string }[] = [
   { value: 'date_slash', label: 'yyyy/MM/dd' },
   { value: 'date_us', label: 'MM/dd/yyyy' },
   { value: 'date_eu', label: 'dd-MM-yyyy' },
+  { value: 'time', label: 'HH:mm:ss' },
   { value: 'unix_s', label: 'Unix 时间戳 (秒)' },
   { value: 'unix_ms', label: 'Unix 时间戳 (毫秒)' },
 ]
@@ -158,7 +161,85 @@ export default function TableEditorPage() {
 
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [imageUploading, setImageUploading] = useState(false)
+  const [importingNuwa, setImportingNuwa] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const nuwaFileRef = useRef<HTMLInputElement>(null)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close export menu on outside click
+  useEffect(() => {
+    if (!showExportMenu) return
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showExportMenu])
+
+  const handleExportNuwa = async () => {
+    const all = getTables(id)
+    const tablesWithData = await Promise.all(
+      all.map(async (t) => {
+        try {
+          const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(t.name)}`)
+          if (res.ok) {
+            const { rows } = await res.json() as { rows: Record<string, unknown>[] }
+            return { ...t, rows }
+          }
+        } catch {}
+        return t
+      })
+    )
+    const nuwaData = { version: 1, project: { id, name: project?.name || '', createdAt: project?.createdAt || '' }, tables: tablesWithData }
+    const blob = new Blob([JSON.stringify(nuwaData, null, 2)], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${table.id}.nuwa`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(a.href)
+  }
+
+  const handleImportNuwa = async (file: File) => {
+    setGenError('')
+    setImportingNuwa(true)
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      if (!data.tables) throw new Error('无效的 .nuwa 文件格式')
+      for (const nuwaTable of data.tables) {
+        const localTable = allTables.find(t => t.name === nuwaTable.name)
+        if (!localTable) continue
+        if (nuwaTable.rows && nuwaTable.rows.length > 0) {
+          await fetch('/api/data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              projectId: id,
+              tableName: localTable.name,
+              columns: localTable.columns,
+              rows: nuwaTable.rows,
+            }),
+          })
+        }
+      }
+      // Reload displayed rows for current table
+      const currentNuwa = data.tables.find((t: { name: string }) => t.name === table?.name)
+      if (currentNuwa?.rows) {
+        setDisplayedRows(currentNuwa.rows)
+        setTableRows(id, table!.id, currentNuwa.rows)
+        setGeneratedColumns(new Set(table!.columns.map(c => c.id)))
+      }
+    } catch (err) {
+      setGenError(err instanceof Error ? err.message : '导入失败')
+    } finally {
+      setImportingNuwa(false)
+    }
+  }
+
   useEffect(() => {
     fetch('/api/llm/config')
       .then(r => r.json())
@@ -213,16 +294,7 @@ export default function TableEditorPage() {
         blankRows.push(row)
       }
 
-      await fetch('/api/data', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: id,
-          tableName: table.name,
-          columns: table.columns,
-          rows: blankRows,
-        }),
-      })
+      await saveToParquet(blankRows)
 
       setTableRows(id, table.id, blankRows)
       setDisplayedRows(blankRows)
@@ -235,7 +307,7 @@ export default function TableEditorPage() {
   }
 
   const saveToParquet = async (rows: Record<string, unknown>[]) => {
-    await fetch('/api/data', {
+    const res = await fetch('/api/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -245,6 +317,10 @@ export default function TableEditorPage() {
         rows,
       }),
     })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(`保存数据失败: ${data.error || res.status}`)
+    }
   }
 
   const handleGenerateColumn = async (col: ColumnDef) => {
@@ -256,12 +332,33 @@ export default function TableEditorPage() {
     setColumnGenerating(col.id)
     try {
       const refData: Record<string, Record<string, unknown>[]> = {}
-      if (col.type === 'foreign_key' && col.foreignTable) {
-        const parentTable = allTables.find(t => t.id === col.foreignTable)
-        if (parentTable && parentTable.rows.length > 0) {
+      // Build refData for columns that reference another table (foreign_key or non-fk with foreignTable)
+      if (col.foreignTable) {
+        const parentTable = allTables.find(t => t.id === col.foreignTable || t.name === col.foreignTable)
+        if (!parentTable) {
+          throw new Error(`引用的表"${col.foreignTable}"不存在`)
+        }
+        if (parentTable.rows.length > 0) {
+          refData[parentTable.id] = parentTable.rows
           refData[parentTable.name] = parentTable.rows
         } else {
-          throw new Error(`外键列引用的表"${parentTable?.name || col.foreignTable}"还没有数据`)
+          // Try loading from Parquet
+          try {
+            const url = `/api/data/fk-values?projectId=${encodeURIComponent(id)}&tableId=${encodeURIComponent(parentTable.name)}&column=*`
+            const res = await fetch(url)
+            if (res.ok) {
+              const { rows: parquetRows } = await res.json() as { rows: Record<string, unknown>[] }
+              if (parquetRows && parquetRows.length > 0) {
+                refData[parentTable.id] = parquetRows
+                refData[parentTable.name] = parquetRows
+              }
+            }
+          } catch {
+            // Parquet not available
+          }
+          if (!refData[parentTable.name] || refData[parentTable.name].length === 0) {
+            throw new Error(`引用的表"${parentTable.name}"还没有数据，请先生成该表的数据`)
+          }
         }
       }
 
@@ -284,7 +381,7 @@ export default function TableEditorPage() {
       setDisplayedRows(rows)
       setTableRows(id, table.id, rows)
       await saveToParquet(rows)
-      setGeneratedColumns(prev => new Set(prev).add(col.name))
+      setGeneratedColumns(prev => new Set(prev).add(col.id))
     } catch (err) {
       setGenError(err instanceof Error ? err.message : '生成失败')
     } finally {
@@ -353,6 +450,8 @@ export default function TableEditorPage() {
     if (invalid) return
     updateTable(id, table.id, { name: editName, columns: editColumns })
     setEditMode(false)
+    // Schema changed — reset generate button state
+    setGeneratedColumns(new Set())
   }
 
   const updateEditCol = (colId: string, updates: Partial<ColumnDef>) => {
@@ -388,11 +487,11 @@ export default function TableEditorPage() {
   const handleDragEnd = () => setDragIndex(null)
 
   const hasUnresolvedFK = table.columns.some(
-    c => c.type === 'foreign_key' && c.foreignTable && !allTables.find(t => t.id === c.foreignTable)
+    c => (c.type === 'foreign_key' || c.type === 'foreign_key_array') && c.foreignTable && !allTables.find(t => t.id === c.foreignTable)
   )
 
   return (
-    <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-8">
+    <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -404,26 +503,33 @@ export default function TableEditorPage() {
           <h2 className="text-lg font-semibold text-gv-text">{table.name}</h2>
         </div>
         <div className="flex items-center gap-2">
-          {!editMode && (
-            <button onClick={startEdit}
-              className="btn-outline rounded-lg px-3 py-1.5 text-sm">
-              {t('table.edit_schema')}
-            </button>
-          )}
+          {/* image recognition hidden */}
           <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
-          <button onClick={() => fileInputRef.current?.click()}
-            disabled={imageUploading || !llmConfigured}
-            title="上传图片自动识别表格列"
-            className="btn-outline rounded-lg px-3 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-            {imageUploading ? '识别中...' : '图片识列'}
+          <input ref={nuwaFileRef} type="file" accept=".nuwa" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportNuwa(f); if (nuwaFileRef.current) nuwaFileRef.current.value = '' }} />
+          <button onClick={() => nuwaFileRef.current?.click()} disabled={importingNuwa}
+            className="btn-outline rounded-lg px-3 py-1.5 text-sm inline-flex items-center gap-1 disabled:opacity-50">
+            {importingNuwa ? (
+              <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+            )}
+            导入 .nuwa
           </button>
           <div className="relative">
-            <button onClick={() => setShowExportMenu(!showExportMenu)} disabled={displayedRows.length === 0}
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setShowExportMenu(!showExportMenu)} disabled={displayedRows.length === 0}
               className="btn-outline rounded-lg px-3 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
               {t('table.export_menu')}
             </button>
             {showExportMenu && (
-              <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gv-border bg-white shadow-lg z-10 overflow-hidden">
+              <div ref={exportMenuRef} className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gv-border bg-white shadow-lg z-10 overflow-hidden">
                 <button onClick={() => { downloadFile(exportJson(table), `${table.name}.json`, 'application/json'); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">JSON</button>
                 <button onClick={() => { downloadFile(exportCsv(table), `${table.name}.csv`, 'text/csv'); setShowExportMenu(false) }}
@@ -436,16 +542,27 @@ export default function TableEditorPage() {
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">SQL INSERT</button>
                 <a href={`/api/data/download?projectId=${id}&tableName=${encodeURIComponent(table.name)}`} onClick={() => setShowExportMenu(false)}
                   className="block w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Parquet</a>
+                <button onClick={() => { handleExportNuwa(); setShowExportMenu(false) }}
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors border-t border-gv-border/50">导出 .nuwa</button>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Edit mode */}
-      {editMode && (
-        <div className="card p-6 mb-6">
-          <h3 className="font-semibold text-gv-text mb-4">{t('table.edit_schema')}</h3>
+      {/* Two-column layout */}
+      <div className="flex gap-6 items-start">
+        {/* LEFT 1/4 — Column schema + edit */}
+        <div className="w-1/4 flex-shrink-0 space-y-4">
+
+      {editMode ? (
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gv-text text-sm">{t('table.edit_schema')}</h3>
+            <button onClick={() => setEditMode(false)} className="text-gv-text-dim hover:text-gv-pink transition-colors">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
           <div className="space-y-4">
             <div>
               <label className="block text-sm text-gv-text-dim mb-1">{t('table.name')}</label>
@@ -470,13 +587,15 @@ export default function TableEditorPage() {
                     </svg>
                   </div>
                   <span className="text-xs text-gv-text-muted w-5">{i + 1}</span>
-                  <input type="text" value={col.name} onChange={(e) => updateEditCol(col.id, { name: e.target.value })}
-                    placeholder={t('table.col_name')}
-                    className="flex-1 input-field py-2 text-sm" />
-                  <select value={col.type} onChange={(e) => updateEditCol(col.id, { type: e.target.value as ColumnType })}
-                    className="w-32 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                    {COLUMN_TYPES.map(ct => (<option key={ct.value} value={ct.value}>{ct.label}</option>))}
-                  </select>
+                  <div className="flex-1 flex flex-col gap-2">
+                    <input type="text" value={col.name} onChange={(e) => updateEditCol(col.id, { name: e.target.value })}
+                      placeholder={t('table.col_name')}
+                      className="w-full input-field py-2 text-sm" />
+                    <select value={col.type} onChange={(e) => updateEditCol(col.id, { type: e.target.value as ColumnType })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      {COLUMN_TYPES.map(ct => (<option key={ct.value} value={ct.value}>{ct.label}</option>))}
+                    </select>
+                  </div>
                   {editColumns.length > 1 && (
                     <button onClick={() => removeEditColumn(col.id)} className="text-gv-pink/60 hover:text-gv-pink p-1 transition-colors"
                       title={t('app.delete')}>
@@ -539,15 +658,15 @@ export default function TableEditorPage() {
                     )}
                   </div>
                 )}
-                {col.type === 'foreign_key' && (
-                  <div className="flex gap-2">
+                {(col.type === 'foreign_key' || col.type === 'foreign_key_array') && (
+                  <div className="space-y-2">
                     <select value={col.foreignTable || ''} onChange={(e) => updateEditCol(col.id, { foreignTable: e.target.value })}
-                      className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
                       <option value="">选择引用表...</option>
                       {allTables.filter(t => t.id !== table.id).map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
                     </select>
                     <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value })}
-                      className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
                       <option value="">自动匹配列</option>
                       {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                     </select>
@@ -649,7 +768,7 @@ export default function TableEditorPage() {
                   </select>
                 )}
                 {/* Nullable setting for all column types */}
-                <div className="border-t border-gv-border/50 pt-2 mt-2">
+                <div className="border-t border-gv-border/50 pt-2 mt-2" draggable="false" onDragStart={(e) => e.stopPropagation()}>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -670,6 +789,7 @@ export default function TableEditorPage() {
                         min={0} max={100}
                         value={col.nullRatio ?? 5}
                         onMouseDown={(e) => e.stopPropagation()}
+                        onDragStart={(e) => e.stopPropagation()}
                         onChange={(e) => updateEditCol(col.id, { nullRatio: Number(e.target.value) })}
                         className="flex-1 accent-gv-pink h-1"
                       />
@@ -693,18 +813,23 @@ export default function TableEditorPage() {
               className="btn-outline rounded-lg px-4 py-2 text-sm">{t('table.discard_changes')}</button>
           </div>
         </div>
-      )}
-
-      {/* Column Info */}
-      <div className="card p-5 mb-6">
-        <h3 className="text-sm font-semibold text-gv-text mb-3">
-          列结构
-          {displayedRows.length > 0 && (
-            <span className="ml-2 text-xs font-normal text-gv-text-dim">
-              (已生成 {generatedColumns.size}/{table.columns.length} 列)
-            </span>
-          )}
-        </h3>
+      ) : (
+        /* Column Info (read-only) */
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gv-text">
+              列结构
+              {displayedRows.length > 0 && (
+                <span className="ml-2 text-xs font-normal text-gv-text-dim">
+                  (已生成 {generatedColumns.size}/{table.columns.length} 列)
+                </span>
+              )}
+            </h3>
+            <button onClick={startEdit}
+              className="btn-outline rounded-lg px-2.5 py-1 text-xs">
+              {t('table.edit_schema')}
+            </button>
+          </div>
         <div className="space-y-1">
           {table.columns.map((col, i) => (
             <div key={col.id}
@@ -716,83 +841,87 @@ export default function TableEditorPage() {
                 colDragIdx === i ? 'opacity-50 bg-gv-pink/5' : ''
               }`}
             >
+              {/* Col 1: drag handle */}
               <div className="cursor-grab active:cursor-grabbing text-gv-text-muted hover:text-gv-pink select-none flex-shrink-0 transition-colors" title={t('project.drag_hint')}>
                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                   <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
                 </svg>
               </div>
-              <span className="font-medium min-w-[80px] text-gv-text">{col.name}</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                col.type === 'foreign_key' ? 'bg-gv-pink/10 text-gv-pink' :
-                col.type === 'text' ? 'bg-gv-green/10 text-gv-green-dark' :
-                col.type === 'number' ? 'bg-gv-pink/10 text-gv-pink-dark' :
-                col.type === 'id' ? 'bg-gv-green/10 text-gv-green-dark' :
-                'bg-gv-bg text-gv-text-dim'
-              }`}>
-                {TYPE_LABEL[col.type]}
-              </span>
-              {col.type === 'text' && (
-                col.llmPrompt?.trim()
-                  ? <span className="text-xs text-gv-text-dim truncate max-w-xs">{col.llmPrompt}</span>
-                  : <span className="text-xs text-gv-pink-dark">{col.nullable ? '允许空值' : '提示词为空'}</span>
-              )}
-              {col.generationCode && (
-                <code className="text-xs text-gv-text-muted truncate max-w-xs font-mono">{col.generationCode}</code>
-              )}
-              {col.type === 'date' && col.dateFormat && col.dateFormat !== 'date' && (
-                <span className="text-xs text-gv-pink font-medium">
-                  {DATE_FORMATS.find(f => f.value === col.dateFormat)?.label || col.dateFormat}
+              {/* Col 2: name + type stacked */}
+              <div className="flex flex-col gap-0.5 flex-shrink-0 min-w-[60px]">
+                <span className="font-medium text-gv-text text-xs">{col.name}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium self-start ${
+                  col.type === 'foreign_key' || col.type === 'foreign_key_array' ? 'bg-gv-pink/10 text-gv-pink' :
+                  col.type === 'text' ? 'bg-gv-green/10 text-gv-green-dark' :
+                  col.type === 'number' ? 'bg-gv-pink/10 text-gv-pink-dark' :
+                  col.type === 'id' ? 'bg-gv-green/10 text-gv-green-dark' :
+                  'bg-gv-bg text-gv-text-dim'
+                }`}>
+                  {TYPE_LABEL[col.type]}
                 </span>
-              )}
-              {col.type === 'id' && (
-                <span className="text-xs text-gv-green-dark font-medium">
-                  {ID_FORMATS.find(f => f.value === (col.idFormat || 'uuid4'))?.label || 'UUID v4'}
-                </span>
-              )}
-              {col.type === 'phone' && (
-                <span className="text-xs text-gv-pink font-medium">
-                  {PHONE_COUNTRIES.find(c => c.value === (col.phoneCountry || 'CN'))?.label || '中国 (+86)'}
-                </span>
-              )}
-              {col.type === 'city' && (
-                <span className="text-xs text-gv-green-dark font-medium">
-                  {PHONE_COUNTRIES.find(c => c.value === (col.cityCountry || 'CN'))?.label || '中国'}
-                </span>
-              )}
-              {col.foreignTable && (
-                <span className="text-xs text-gv-pink">
-                  → {allTables.find(t => t.id === col.foreignTable)?.name || col.foreignTable}
-                  {col.foreignColumn ? `.${col.foreignColumn}` : ''}
-                </span>
-              )}
-              {col.nullable && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-gv-pink/10 text-gv-pink font-medium">
-                  {col.nullRatio && col.nullRatio > 0 ? `null ${col.nullRatio}%` : 'nullable'}
-                </span>
-              )}
-              <div className="ml-auto flex-shrink-0">
-                {generatedColumns.has(col.name) ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gv-green-dark">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              </div>
+              {/* Col 3: prompt / code / format info */}
+              <div className="flex-1 min-w-0">
+                {col.type === 'text' && (
+                  col.llmPrompt?.trim()
+                    ? <div className="text-xs text-gv-text-dim truncate" title={col.llmPrompt}>{col.llmPrompt}</div>
+                    : <div className="text-xs text-gv-pink-dark">{col.nullable ? '允许空值' : '提示词为空'}</div>
+                )}
+                {col.generationCode && (
+                  <div className="text-xs text-gv-text-muted truncate font-mono" title={col.generationCode}>{col.generationCode}</div>
+                )}
+                {col.type === 'date' && col.dateFormat && col.dateFormat !== 'date' && (
+                  <div className="text-xs text-gv-pink font-medium">
+                    {DATE_FORMATS.find(f => f.value === col.dateFormat)?.label || col.dateFormat}
+                  </div>
+                )}
+                {col.type === 'id' && (
+                  <div className="text-xs text-gv-green-dark font-medium">
+                    {ID_FORMATS.find(f => f.value === (col.idFormat || 'uuid4'))?.label || 'UUID v4'}
+                  </div>
+                )}
+                {col.type === 'phone' && (
+                  <div className="text-xs text-gv-pink font-medium">
+                    {PHONE_COUNTRIES.find(c => c.value === (col.phoneCountry || 'CN'))?.label || '中国 (+86)'}
+                  </div>
+                )}
+                {col.type === 'city' && (
+                  <div className="text-xs text-gv-green-dark font-medium">
+                    {PHONE_COUNTRIES.find(c => c.value === (col.cityCountry || 'CN'))?.label || '中国'}
+                  </div>
+                )}
+                {col.foreignTable && (
+                  <div className="text-xs text-gv-pink truncate">
+                    → {allTables.find(t => t.id === col.foreignTable)?.name || col.foreignTable}
+                    {col.foreignColumn ? `.${col.foreignColumn}` : ''}
+                  </div>
+                )}
+              </div>
+              {/* Col 4: nullable + generate */}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {col.nullable && (
+                  <span className="text-[10px] px-1 py-0.5 rounded bg-gv-pink/10 text-gv-pink font-medium">
+                    {col.nullRatio && col.nullRatio > 0 ? `null ${col.nullRatio}%` : 'N'}
+                  </span>
+                )}
+                {generatedColumns.has(col.id) ? (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium text-gv-green-dark">
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
-                    已生成
                   </span>
                 ) : (
                   <button
                     onClick={() => handleGenerateColumn(col)}
                     disabled={columnGenerating != null}
-                    className="rounded-lg border border-gv-border px-2.5 py-1 text-xs font-medium text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="rounded-lg border border-gv-border px-1.5 py-0.5 text-xs font-medium text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     title={`生成 ${col.name} 列数据`}
                   >
                     {columnGenerating === col.id ? (
-                      <span className="flex items-center gap-1">
-                        <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        {t('table.generating')}
-                      </span>
+                      <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
                     ) : t('table.generate')}
                   </button>
                 )}
@@ -809,9 +938,27 @@ export default function TableEditorPage() {
           </p>
         )}
       </div>
+      )}
 
-      {/* Generate Panel */}
-      <div className="card p-5 mb-6">
+      {/* LEFT panel tools */}
+      {!editMode && (
+        <>
+          {hasUnresolvedFK && (
+            <p className="text-xs text-gv-pink-dark">部分外键引用的表尚不存在。</p>
+          )}
+          {emptyPromptCols.length > 0 && (
+            <p className="text-xs text-gv-pink-dark">
+              {emptyPromptCols.map(c => c.name).join(', ')} 的提示词为空，无法生成。
+            </p>
+          )}
+        </>
+      )}
+      </div> {/* end left panel */}
+
+      {/* RIGHT 3/4 — Generate + Table */}
+      <div className="flex-1 space-y-4">
+        {/* Generate Panel */}
+        <div className="card p-5">
         <h3 className="text-sm font-semibold text-gv-text mb-4">{t('table.generate')}</h3>
 
         {table.columns.some(c => c.type === 'text') && (
@@ -889,13 +1036,13 @@ export default function TableEditorPage() {
               })()}
             </div>
             <div className="relative">
-              <div className="overflow-auto max-h-[32rem]">
+              <div className="overflow-x-auto max-h-[32rem]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10">
                     <tr className="border-b border-gv-border bg-gradient-to-r from-gv-pink/5 to-gv-green/5 backdrop-blur-sm">
-                      <th className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium w-12">#</th>
+                      <th className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium w-10">#</th>
                       {table.columns.map(col => (
-                        <th key={col.id} className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium">{col.name}</th>
+                        <th key={col.id} className="text-left px-3 py-2.5 text-xs text-gv-text-dim font-medium whitespace-nowrap">{col.name}</th>
                       ))}
                     </tr>
                   </thead>
@@ -904,7 +1051,7 @@ export default function TableEditorPage() {
                       <tr key={i} className="border-b border-gv-border/50 hover:bg-gv-pink/[0.03] transition-colors">
                         <td className="px-4 py-2 text-gv-text-muted text-xs">{(currentPage - 1) * pageSize + i + 1}</td>
                         {table.columns.map(col => (
-                          <td key={col.id} className="px-4 py-2 max-w-xs truncate text-gv-text">{renderCellValue(row[col.name])}</td>
+                          <td key={col.id} className="px-3 py-2 max-w-[200px] truncate text-gv-text text-xs">{renderCellValue(row[col.name])}</td>
                         ))}
                       </tr>
                     ))}
@@ -915,7 +1062,9 @@ export default function TableEditorPage() {
             </div>
           </>
         )}
-      </div>
+        </div>
+      </div> {/* end right panel */}
+    </div> {/* end flex */}
     </main>
   )
 }

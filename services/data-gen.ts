@@ -58,7 +58,7 @@ export async function generateTableData(
   const columnResults: Record<string, unknown[]> = {}
 
   for (const col of table.columns) {
-    columnResults[col.name] = await generateColumn(col, rowCount, refData)
+    columnResults[col.name] = await generateColumn(col, rowCount, refData, columnResults)
   }
 
   // Assemble rows from column results
@@ -87,7 +87,8 @@ function applyNullRatio(col: ColumnDef, values: unknown[]): unknown[] {
 export async function generateColumn(
   col: ColumnDef,
   rowCount: number,
-  refData: Record<string, Record<string, unknown>[]>
+  refData: Record<string, Record<string, unknown>[]>,
+  columnResults?: Record<string, unknown[]>
 ): Promise<unknown[]> {
   let results: unknown[] = []
 
@@ -105,11 +106,11 @@ export async function generateColumn(
       break
 
     case 'number':
-      results = await generateNumberColumn(col, rowCount, refData)
+      results = await generateNumberColumn(col, rowCount, refData, columnResults)
       break
 
     case 'date':
-      results = await generateDateColumn(col, rowCount, refData)
+      results = await generateDateColumn(col, rowCount, refData, columnResults)
       break
 
     case 'boolean':
@@ -185,18 +186,19 @@ Column description: ${col.llmPrompt}`
 async function generateNumberColumn(
   col: ColumnDef,
   rowCount: number,
-  refData: Record<string, Record<string, unknown>[]>
+  refData: Record<string, Record<string, unknown>[]>,
+  columnResults?: Record<string, unknown[]>
 ): Promise<unknown[]> {
   // If user provided code directly, use it
   if (col.generationCode?.trim()) {
-    return executeColumnCode(col, col.generationCode, rowCount, refData)
+    return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults)
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
     const result = await llmGenerateCode(col.llmPrompt, 'number')
     if (result.code) {
       col.generationCode = result.code
-      return executeColumnCode(col, result.code, rowCount, refData)
+      return executeColumnCode(col, result.code, rowCount, refData, columnResults)
     }
   }
   // Fallback: random integers
@@ -210,18 +212,19 @@ async function generateNumberColumn(
 async function generateDateColumn(
   col: ColumnDef,
   rowCount: number,
-  refData: Record<string, Record<string, unknown>[]>
+  refData: Record<string, Record<string, unknown>[]>,
+  columnResults?: Record<string, unknown[]>
 ): Promise<unknown[]> {
   // If user provided code directly, use it
   if (col.generationCode?.trim()) {
-    return executeColumnCode(col, col.generationCode, rowCount, refData)
+    return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults)
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
     const result = await llmGenerateCode(col.llmPrompt, 'date')
     if (result.code) {
       col.generationCode = result.code
-      return executeColumnCode(col, result.code, rowCount, refData)
+      return executeColumnCode(col, result.code, rowCount, refData, columnResults)
     }
   }
   // Fallback: use distribution if configured, else random dates
@@ -238,7 +241,8 @@ export async function llmGenerateCode(prompt: string, type: 'number' | 'date'): 
   const systemPrompt = `You are a JavaScript expression generator. Respond with EXACTLY ONE LINE of valid JavaScript and NOTHING ELSE — no words, no markdown, no explanation.
 
 Available functions: randomInt(min,max) randomFloat(min,max) pick(array)
-Available variables: index totalRows previousValues refData
+Available variables: index totalRows previousValues refData row
+row = values from earlier columns in the same row, e.g. row.start_date
 
 EXAMPLES:
 Input: "random age 18-65"
@@ -249,6 +253,11 @@ Output: Math.round(randomFloat(9.99,999.99)*100)/100
 
 Input: "random date in last 30 days"
 Output: new Date(Date.now()-randomInt(0,30)*86400000).toISOString().split('T')[0]
+
+Input: "end date after start_date by 1-30 days"
+Output: new Date(new Date(row.start_date).getTime()+randomInt(1,30)*86400000).toISOString().split('T')[0]
+
+NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime().
 
 Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
 
@@ -263,8 +272,6 @@ Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
   if (!rawCode || !rawCode.trim()) {
     return { code: null, error: 'LLM返回为空' }
   }
-
-  console.warn(`[llm code-gen] raw response for "${prompt}":`, rawCode)
 
   const result = extractExpression(rawCode)
   if (result.code) return result
@@ -299,7 +306,7 @@ function extractExpression(raw: string): { code: string | null; error?: string }
     const expr = candidate.includes('return ') ? candidate : `return (${candidate})`
     // Syntax check
     try {
-      new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick', expr)
+      new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', expr)
     } catch {
       continue
     }
@@ -311,8 +318,12 @@ function extractExpression(raw: string): { code: string | null; error?: string }
         products: [{ id: 1 }],
       }
       const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : undefined)
-      const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
-      fn(0, 1, [], testRefData, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
+      // Proxy row returns Date objects for any field name (so row.xxx.getTime() works)
+      const testRow = new Proxy({} as Record<string, unknown>, {
+        get: () => new Date(),
+      })
+      const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
+      fn(0, 1, [], testRefData, testRow, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       // This candidate failed, try the next one
@@ -333,7 +344,8 @@ function executeColumnCode(
   col: ColumnDef,
   code: string,
   rowCount: number,
-  refData: Record<string, Record<string, unknown>[]>
+  refData: Record<string, Record<string, unknown>[]>,
+  rowContext?: Record<string, unknown[]>
 ): unknown[] {
   // Basic validation before attempting compilation
   if (!code || code.length > 500 || /[\u4e00-\u9fff]/.test(code)) {
@@ -343,7 +355,7 @@ function executeColumnCode(
   let fn: ((...args: unknown[]) => unknown) | null = null
   try {
     fn = new Function(
-      'index', 'totalRows', 'previousValues', 'refData',
+      'index', 'totalRows', 'previousValues', 'refData', 'row',
       'randomInt', 'randomFloat', 'pick',
       expression
     ) as (...args: unknown[]) => unknown
@@ -359,9 +371,13 @@ function executeColumnCode(
 
   const results: unknown[] = []
   for (let i = 0; i < rowCount; i++) {
+    // Build row object from already-generated columns for this row index
+    const row: Record<string, unknown> = rowContext
+      ? Object.fromEntries(Object.entries(rowContext).map(([k, v]) => [k, v[i]]))
+      : {}
     try {
       const val = fn(
-        i, rowCount, results, refData,
+        i, rowCount, results, refData, row,
         helpers.randomInt, helpers.randomFloat, helpers.pick
       )
       results.push(val)

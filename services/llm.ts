@@ -37,6 +37,24 @@ export async function callLlmBatch(
   return data.results || []
 }
 
+export async function callLlmVision(
+  systemPrompt: string,
+  userPrompt: string,
+  images: string[]
+): Promise<string> {
+  const res = await fetch('/api/llm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ systemPrompt, userPrompt, images }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || `LLM API error ${res.status}`)
+  }
+  return data.content || ''
+}
+
 export async function testLlmConnection(): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch('/api/llm', {

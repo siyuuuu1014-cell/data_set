@@ -17,20 +17,25 @@ function getConfig(): LlmConfig {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { systemPrompt, userPrompt, userPrompts, cacheKey } = body as {
+    const { systemPrompt, userPrompt, userPrompts, cacheKey, images } = body as {
       systemPrompt: string
       userPrompt?: string
       userPrompts?: string[]
       cacheKey?: string
+      images?: string[]
     }
 
     const config = getConfig()
 
+    if (images && images.length > 0 && config.apiFormat === 'anthropic') {
+      return Response.json({ error: '图片识别仅支持 多模态模型 的 API 格式 (DeepSeek, GPT-4V 等)' }, { status: 400 })
+    }
+
     if (userPrompts && userPrompts.length > 0) {
       const results = await batchGenerate(config, systemPrompt, userPrompts)
       return Response.json({ results })
-    } else if (userPrompt) {
-      const content = await singleGenerate(config, systemPrompt, userPrompt, cacheKey)
+    } else if (userPrompt || (images && images.length > 0)) {
+      const content = await singleGenerate(config, systemPrompt, userPrompt || '', cacheKey, images)
       return Response.json({ content })
     } else {
       return Response.json({ error: '缺少提示词' }, { status: 400 })
@@ -43,17 +48,33 @@ export async function POST(request: Request) {
 
 // ──── OpenAI format ────
 
-async function openaiGenerate(config: LlmConfig, systemPrompt: string, userPrompt: string): Promise<string> {
+async function openaiGenerate(config: LlmConfig, systemPrompt: string, userPrompt: string, images?: string[]): Promise<string> {
   const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
+
+  let messages: { role: string; content: unknown }[]
+  if (images && images.length > 0) {
+    // OpenAI vision format: put system prompt + user prompt + images in user message as content array
+    const contentParts: { type: string; text?: string; image_url?: { url: string; detail?: string } }[] = [
+      { type: 'text', text: systemPrompt },
+      { type: 'text', text: userPrompt },
+    ]
+    for (const img of images) {
+      contentParts.push({ type: 'image_url', image_url: { url: img, detail: 'auto' } })
+    }
+    messages = [{ role: 'user', content: contentParts }]
+  } else {
+    messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ]
+  }
+
   const res = await doFetch(url, {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${config.apiKey}`,
   }, {
     model: config.model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
+    messages,
     temperature: 0.7,
   }, 'OpenAI')
 
@@ -131,7 +152,7 @@ async function doFetch(url: string, headers: Record<string, string>, body: unkno
 
 // ──── Dispatch ────
 
-async function singleGenerate(config: LlmConfig, systemPrompt: string, userPrompt: string, cacheKey?: string): Promise<string> {
+async function singleGenerate(config: LlmConfig, systemPrompt: string, userPrompt: string, cacheKey?: string, images?: string[]): Promise<string> {
   // Check code expression cache first
   if (cacheKey) {
     const cached = getCachedCode(cacheKey)
@@ -143,7 +164,7 @@ async function singleGenerate(config: LlmConfig, systemPrompt: string, userPromp
   if (config.apiFormat === 'anthropic') {
     result = await anthropicGenerate(config, systemPrompt, userPrompt)
   } else {
-    result = await openaiGenerate(config, systemPrompt, userPrompt)
+    result = await openaiGenerate(config, systemPrompt, userPrompt, images)
   }
 
   // Only cache if the result is a valid executable expression

@@ -247,7 +247,7 @@ export default function NewTablePage() {
       setError(t('table.col_name_required'))
       return
     }
-    const emptyTextCols = columns.filter(c => c.type === 'text' && !c.llmPrompt?.trim())
+    const emptyTextCols = columns.filter(c => c.type === 'text' && !c.nullable && !c.llmPrompt?.trim())
     if (emptyTextCols.length > 0) {
       setError(`${t('table.text_prompt_required')}: "${emptyTextCols[0].name}"`)
       return
@@ -589,6 +589,7 @@ export default function NewTablePage() {
                         type="range"
                         min={0} max={100}
                         value={col.nullRatio ?? 5}
+                        onMouseDown={(e) => e.stopPropagation()}
                         onChange={(e) => updateCol(col.id, { nullRatio: Number(e.target.value) })}
                         className="flex-1 accent-gv-pink h-1"
                       />

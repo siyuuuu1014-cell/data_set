@@ -69,7 +69,7 @@ async function anthropicGenerate(config: LlmConfig, systemPrompt: string, userPr
     'anthropic-version': '2023-06-01',
   }, {
     model: config.model,
-    max_tokens: 1024,
+    max_tokens: 4096,
     system: systemPrompt,
     messages: [
       { role: 'user', content: userPrompt },
@@ -156,11 +156,11 @@ async function batchGenerate(config: LlmConfig, systemPrompt: string, userPrompt
 }
 
 function buildBatchPrompt(prompts: string[]): string {
-  return `Generate ${prompts.length} items based on the following rules. Return ONLY a JSON array of strings, no other text.
+  return `Generate ${prompts.length} values, one per item below. Output ONLY a JSON string array, no other text.
 
 ${prompts.map((p, i) => `Item ${i + 1}: ${p}`).join('\n')}
 
-Output format: ["value1", "value2", ...]`
+Return exactly ${prompts.length} values in this format: ["value1", "value2", ...]`
 }
 
 function parseBatchResponse(res: string): string[] {

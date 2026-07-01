@@ -80,11 +80,11 @@ export default function SettingsPage() {
         setTestResult('success')
       } else {
         setTestResult('fail')
-        setTestError(data.error || `请求失败 (${res.status})`)
+        setTestError(data.error || `${t('settings.request_fail')} (${res.status})`)
       }
     } catch {
       setTestResult('fail')
-      setTestError('网络请求失败')
+      setTestError(t('settings.network_fail'))
     }
     setTesting(false)
   }
@@ -95,31 +95,31 @@ export default function SettingsPage() {
 
   return (
     <div className="flex-1 flex flex-col">
-      <header className="glass border-b border-gv-border/50">
-        <div className="max-w-2xl mx-auto px-6 py-5 flex items-center gap-4">
+      <header className="border-b border-gv-border/50">
+        <div className="px-8 py-5 flex items-center gap-3">
           <Link href="/" className="text-gv-text-dim hover:text-gv-pink transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </Link>
-          <h1 className="text-2xl font-bold text-gv-text">{t('settings.title')}</h1>
+          <h1 className="text-lg font-semibold text-gv-text">{t('settings.title')}</h1>
           {hasApiKey && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gv-green/20 text-gv-green-dark font-medium">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-gv-green-deep/20 text-gv-green-deep font-medium">
               {t('app.configured')}
             </span>
           )}
         </div>
       </header>
 
-      <main className="flex-1 max-w-2xl mx-auto w-full px-6 py-8">
-        <p className="text-sm text-gv-text-dim mb-6">
-          API Key 存储在服务端，不会暴露给浏览器。所有项目共用此配置。
+      <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-4">
+        <p className="text-sm text-gv-text-dim mb-4">
+          {t('settings.description')}
         </p>
 
         <div className="space-y-5">
           {/* Provider presets */}
           <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">选择服务商</label>
+            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.select_provider')}</label>
             <div className="flex flex-wrap gap-2">
               {PROVIDERS.map(p => (
                 <button
@@ -144,11 +144,11 @@ export default function SettingsPage() {
 
           {/* API Format */}
           <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">API 格式</label>
+            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.api_format')}</label>
             <div className="flex gap-2">
               {([
-                { value: 'openai' as ApiFormat, label: 'OpenAI 兼容' },
-                { value: 'anthropic' as ApiFormat, label: 'Anthropic 兼容' },
+                { value: 'openai' as ApiFormat, label: t('settings.format_openai') },
+                { value: 'anthropic' as ApiFormat, label: t('settings.format_anthropic') },
               ]).map(f => (
                 <button
                   key={f.value}
@@ -179,7 +179,7 @@ export default function SettingsPage() {
               className="input-field w-full py-3 text-sm font-mono"
             />
             <p className="text-xs text-gv-text-muted mt-1">
-              {hasApiKey ? '已存储 API Key，填写新值将覆盖' : 'API Key 仅存储在服务端'}
+              {hasApiKey ? t('settings.key_saved_hint') : t('settings.key_not_saved_hint')}
             </p>
           </div>
 
@@ -193,7 +193,7 @@ export default function SettingsPage() {
               className="input-field w-full py-3 text-sm font-mono"
             />
             <p className="text-xs text-gv-text-muted mt-1">
-              请求地址: <code className="text-gv-text-dim bg-gv-bg px-1.5 py-0.5 rounded">{baseUrl.replace(/\/$/, '')}{endpointPath}</code>
+              {t('settings.request_url')} <code className="text-gv-text-dim bg-gv-bg px-1.5 py-0.5 rounded">{baseUrl.replace(/\/$/, '')}{endpointPath}</code>
             </p>
           </div>
 
@@ -225,7 +225,7 @@ export default function SettingsPage() {
           </div>
 
           {testResult === 'success' && (
-            <div className="rounded-lg bg-gv-green/10 border border-gv-green/30 p-3 text-sm text-gv-green-dark">
+            <div className="rounded-lg bg-gv-green-deep/10 border border-gv-green-deep/30 p-3 text-sm text-gv-green-deep">
               {t('settings.test_success')}
             </div>
           )}

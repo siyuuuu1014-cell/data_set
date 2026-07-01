@@ -19,23 +19,23 @@ export default function Home() {
 
   return (
     <div className="flex-1 flex flex-col">
-      <header className="glass border-b border-gv-border/50">
-        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-gv-pink to-gv-green flex items-center justify-center shadow-lg shadow-gv-pink/20">
-              <span className="text-white font-bold text-base">N</span>
+      <header className="border-b border-gv-border/50">
+        <div className="px-8 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-md bg-gradient-to-br from-gv-pink to-gv-green flex items-center justify-center shadow shadow-gv-pink/20">
+              <span className="text-white font-bold text-xs">N</span>
             </div>
             <h1 className="text-xl font-bold tracking-tight">
               <span className="gradient-text">{t('app.brand')}</span>
-              <span className="text-gv-text-dim font-normal text-base ml-2 hidden sm:inline">{t('app.subtitle')}</span>
+              <span className="text-gv-text-dim font-normal text-lg ml-1.5 hidden sm:inline">{t('app.subtitle')}</span>
             </h1>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full animate-pulse ${llmConfigured ? 'bg-gv-green shadow-[0_0_6px_var(--color-gv-green-glow)]' : 'bg-gv-pink shadow-[0_0_6px_var(--color-gv-pink-glow)]'}`} />
+              <span className={`w-2 h-2 rounded-full animate-pulse ${llmConfigured ? 'bg-gv-green-deep shadow-[0_0_6px_var(--color-gv-green-glow)]' : 'bg-gv-pink shadow-[0_0_6px_var(--color-gv-pink-glow)]'}`} />
               <Link
                 href="/settings"
-                className={`text-xs transition-colors ${llmConfigured ? 'text-gv-green hover:text-gv-green-light' : 'text-gv-pink hover:text-gv-pink-light'}`}
+                className={`text-xs transition-colors ${llmConfigured ? 'text-gv-green-deep hover:text-gv-green-dark' : 'text-gv-pink hover:text-gv-pink-light'}`}
               >
                 {llmConfigured ? `✓ ${t('app.configured')}` : t('app.unconfigured')}
               </Link>
@@ -50,12 +50,12 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-10">
+      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-gv-text">{t('home.title')}</h2>
           <p className="text-gv-text-dim text-sm mt-1">
             {projects.length > 0
-              ? `${projects.length} 个项目`
+              ? t('app.projects_count', projects.length)
               : t('home.no_projects_desc')}
           </p>
         </div>
@@ -86,7 +86,7 @@ export default function Home() {
                   </div>
                   <button
                     onClick={() => {
-                      if (confirm(`${t('project.delete_confirm')}"${project.name}"？`)) {
+                      if (confirm(`${t('project.delete_confirm')} "${project.name}"?`)) {
                         deleteProject(project.id)
                       }
                     }}

@@ -22,6 +22,7 @@ const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'phone', label: '电话' },
   { value: 'city', label: '城市' },
   { value: 'foreign_key', label: '外键 (引用其他表)' },
+  { value: 'foreign_key_array', label: '外键数组' },
 ]
 
 const ID_FORMATS: { value: IdFormat; label: string }[] = [
@@ -149,7 +150,9 @@ export default function NewTablePage() {
   const [error, setError] = useState('')
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [imageUploading, setImageUploading] = useState(false)
+  const [importingNuwa, setImportingNuwa] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const nuwaFileRef = useRef<HTMLInputElement>(null)
   const [relatedTableIds, setRelatedTableIds] = useState<string[]>([])
   const [importedColMap, setImportedColMap] = useState<Record<string, Record<string, string>>>({})
   const [fkModeCols, setFkModeCols] = useState<Set<string>>(new Set())
@@ -286,6 +289,45 @@ export default function NewTablePage() {
     })
   }
 
+  const handleImportNuwa = async (file: File) => {
+    setError('')
+    setImportingNuwa(true)
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      if (!data.tables || !Array.isArray(data.tables)) throw new Error('无效的 .nuwa 文件格式')
+      const newCols: ColumnDef[] = []
+      for (const nuwaTable of data.tables) {
+        if (nuwaTable.columns && Array.isArray(nuwaTable.columns)) {
+          for (const col of nuwaTable.columns) {
+            newCols.push({
+              id: genColId(),
+              name: col.name || '',
+              type: col.type || 'text',
+              llmPrompt: col.llmPrompt || '',
+              generationCode: col.generationCode || '',
+              nullable: col.nullable,
+              nullRatio: col.nullRatio,
+              foreignTable: col.foreignTable,
+              foreignColumn: col.foreignColumn,
+              dateFormat: col.dateFormat,
+              dateDistribution: col.dateDistribution,
+              idFormat: col.idFormat,
+              phoneCountry: col.phoneCountry,
+              cityCountry: col.cityCountry,
+            })
+          }
+        }
+      }
+      if (newCols.length > 0) setColumns(newCols)
+      if (nuwaFileRef.current) nuwaFileRef.current.value = ''
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '导入失败')
+    } finally {
+      setImportingNuwa(false)
+    }
+  }
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -392,12 +434,13 @@ export default function NewTablePage() {
               className="input-field flex-1 py-3 text-base"
               autoFocus
             />
-            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
+            <input ref={nuwaFileRef} type="file" accept=".nuwa" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportNuwa(f) }} />
             <button type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={imageUploading || !llmConfigured}
+              onClick={() => nuwaFileRef.current?.click()}
+              disabled={importingNuwa}
               className="btn-outline rounded-lg px-3 py-1.5 text-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
-              {imageUploading ? '识别中...' : '图片识列'}
+              {importingNuwa ? '...' : '导入 .nuwa'}
             </button>
           </div>
         </div>
@@ -594,7 +637,7 @@ export default function NewTablePage() {
                   </div>
                 )}
 
-                {col.type === 'foreign_key' && (
+                {(col.type === 'foreign_key' || col.type === 'foreign_key_array') && (
                   <div className="flex gap-3">
                     <div className="flex-1">
                       <label className="block text-xs text-gv-text-dim mb-1">引用表</label>

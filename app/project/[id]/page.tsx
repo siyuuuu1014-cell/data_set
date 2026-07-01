@@ -79,7 +79,7 @@ export default function ProjectPage() {
   const handleDragEnd = () => setDragIdx(null)
 
   return (
-    <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-8">
+    <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-4">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold text-gv-text">
           {t('project.tables')} ({tables.length})
@@ -215,7 +215,7 @@ export default function ProjectPage() {
                 </Link>
                 <button
                   onClick={() => {
-                    if (confirm(`${t('project.delete_confirm')}"${table.name}"？`)) {
+                    if (confirm(`${t('project.delete_confirm')} "${table.name}"?`)) {
                       deleteTable(id, table.id)
                     }
                   }}

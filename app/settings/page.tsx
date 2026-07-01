@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react'
 import type { ApiFormat } from '@/services/types'
 
 const PROVIDERS = [
-  { name: 'DeepSeek (Anthr)', baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', apiFormat: 'anthropic' as ApiFormat },
+  { name: 'DeepSeek (Anthropic)', baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', apiFormat: 'anthropic' as ApiFormat },
   { name: 'DeepSeek (OpenAI)', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiFormat: 'openai' as ApiFormat },
   { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiFormat: 'openai' as ApiFormat },
   { name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-20250514', apiFormat: 'anthropic' as ApiFormat },

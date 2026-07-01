@@ -89,9 +89,12 @@ export function isValidExpression(code: string): boolean {
     products: [{ id: 1 }],
   }
   const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : undefined)
+  const testRow = new Proxy({} as Record<string, unknown>, {
+    get: () => new Date(),
+  })
   try {
-    const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
-    fn(0, 1, [], testRefData, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
+    const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
+    fn(0, 1, [], testRefData, testRow, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
     return true
   } catch {
     return false

@@ -4,7 +4,7 @@ import React from 'react'
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams } from 'next/navigation'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import type { ColumnDef, ColumnType, IdFormat, DateFormat, DateRange, PhoneCountry } from '@/services/types'
 import { generateTableData, generateColumn } from '@/services/data-gen'
@@ -79,6 +79,54 @@ function emptyColumn(): ColumnDef {
   return { id: genColId(), name: '', type: 'text', llmPrompt: '', generationCode: '' }
 }
 
+const VISION_SYSTEM_PROMPT = `You are a data table column analyzer. Analyze the screenshot to identify all table columns.
+
+For each column, determine:
+- name: column name in snake_case English (e.g. "user_id", "order_date", "product_name")
+- type: one of "text", "number", "date", "boolean", "id"
+- llmPrompt: a Chinese description of how to generate realistic synthetic data for this column (e.g. "随机生成中文姓名", "最近3年的随机日期")
+
+Respond with ONLY a JSON array, no markdown, no explanation:
+[{"name":"column_name","type":"text","llmPrompt":"生成规则描述"}]`
+
+function extractJsonArray(raw: string): Record<string, unknown>[] | null {
+  try { return JSON.parse(raw) as Record<string, unknown>[] } catch { /* not pure JSON */ }
+  const match = raw.match(/\[[\s\S]*?\]/)
+  if (match) {
+    try { return JSON.parse(match[0]) as Record<string, unknown>[] } catch { /* fail */ }
+  }
+  return null
+}
+
+/** Resize image to max 1920px on longest side, return as JPEG base64 data URL. */
+function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      let { width, height } = img
+      if (width <= maxPx && height <= maxPx) {
+        // Already small enough, just read as data URL
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(new Error('图片读取失败'))
+        reader.readAsDataURL(file)
+        return
+      }
+      const ratio = Math.min(maxPx / width, maxPx / height)
+      width = Math.round(width * ratio)
+      height = Math.round(height * ratio)
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(img, 0, 0, width, height)
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => reject(new Error('图片加载失败'))
+    img.src = URL.createObjectURL(file)
+  })
+}
+
 function ensureDateDistribution(col: ColumnDef): DateRange[] {
   if (!col.dateDistribution || col.dateDistribution.length === 0) {
     const dist = PRESET_DATE_RANGES.map(r => ({ ...r, ratio: 0 }))
@@ -108,6 +156,8 @@ export default function TableEditorPage() {
   const [currentPage, setCurrentPage] = useState(1)
 
   const [llmConfigured, setLlmConfigured] = useState(false)
+  const [imageUploading, setImageUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     fetch('/api/llm/config')
       .then(r => r.json())
@@ -210,7 +260,14 @@ export default function TableEditorPage() {
       }
 
       const rowCount = displayedRows.length > 0 ? displayedRows.length : 10
-      const values = await generateColumn(col, rowCount, refData)
+      // Build columnResults from already-generated columns (those before this one)
+      const columnResults: Record<string, unknown[]> = {}
+      const colIndex = table.columns.indexOf(col)
+      for (let j = 0; j < colIndex; j++) {
+        const prevCol = table.columns[j]
+        columnResults[prevCol.name] = displayedRows.map(r => r[prevCol.name])
+      }
+      const values = await generateColumn(col, rowCount, refData, columnResults)
 
       const rows: Record<string, unknown>[] = []
       for (let i = 0; i < rowCount; i++) {
@@ -225,6 +282,42 @@ export default function TableEditorPage() {
       setGenError(err instanceof Error ? err.message : '生成失败')
     } finally {
       setColumnGenerating(null)
+    }
+  }
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) {
+      setGenError('图片大小不能超过 10MB')
+      return
+    }
+    setImageUploading(true)
+    setGenError('')
+    try {
+      const base64 = await resizeImage(file)
+      const { callLlmVision } = await import('@/services/llm')
+      const raw = await callLlmVision(VISION_SYSTEM_PROMPT, '请识别图片中的表格列结构', [base64])
+      const parsed = extractJsonArray(raw)
+      if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
+        setGenError('未能从图片中识别出有效的列结构。请确保图片包含表格信息。')
+        return
+      }
+      const newCols: ColumnDef[] = parsed.map((item: Record<string, unknown>) => ({
+        id: genColId(),
+        name: (item.name as string) || 'unnamed',
+        type: (item.type as ColumnType) || 'text',
+        llmPrompt: (item.llmPrompt as string) || '',
+        generationCode: '',
+      }))
+      setEditColumns(newCols)
+      updateTable(id, table.id, { columns: newCols })
+      setEditMode(true)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    } catch (err) {
+      setGenError(err instanceof Error ? err.message : '图片识别失败')
+    } finally {
+      setImageUploading(false)
     }
   }
 
@@ -310,6 +403,13 @@ export default function TableEditorPage() {
               {t('table.edit_schema')}
             </button>
           )}
+          <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} />
+          <button onClick={() => fileInputRef.current?.click()}
+            disabled={imageUploading || !llmConfigured}
+            title="上传图片自动识别表格列"
+            className="btn-outline rounded-lg px-3 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+            {imageUploading ? '识别中...' : '图片识列'}
+          </button>
           <div className="relative">
             <button onClick={() => setShowExportMenu(!showExportMenu)} disabled={displayedRows.length === 0}
               className="btn-outline rounded-lg px-3 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
@@ -414,11 +514,12 @@ export default function TableEditorPage() {
                             const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
                             const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
                             const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick',
+                            const testRow = new Proxy({}, { get: () => new Date() })
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick',
                               col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
                             const results: unknown[] = []
                             for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRandomInt, testRandomFloat, testPick))
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
                             }
                             alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
@@ -499,11 +600,12 @@ export default function TableEditorPage() {
                             const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
                             const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
                             const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick',
+                            const testRow = new Proxy({}, { get: () => new Date() })
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick',
                               col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
                             const results: unknown[] = []
                             for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRandomInt, testRandomFloat, testPick))
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
                             }
                             alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {

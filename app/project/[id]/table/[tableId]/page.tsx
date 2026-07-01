@@ -384,10 +384,52 @@ export default function TableEditorPage() {
                     className="input-field w-full py-2 text-sm" />
                 )}
                 {col.type === 'number' && (
-                  <textarea value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
-                    placeholder="JavaScript 代码，返回值作为列值。"
-                    rows={3}
-                    className="input-field w-full py-2 text-sm font-mono" />
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
+                        placeholder="描述你要的数字规则，如：中国随机纬度"
+                        className="flex-1 input-field py-1.5 text-xs" />
+                      <button type="button"
+                        onClick={async () => {
+                          if (!col.llmPrompt?.trim()) return
+                          updateEditCol(col.id, { generationCode: '生成中...' })
+                          const { llmGenerateCode } = await import('@/services/data-gen')
+                          const result = await llmGenerateCode(col.llmPrompt!.trim(), 'number')
+                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
+                        }}
+                        disabled={!col.llmPrompt?.trim()}
+                        className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        AI 生成代码
+                      </button>
+                    </div>
+                    <textarea value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
+                      placeholder="JavaScript 代码，返回值作为列值。可手写或点上方 AI 生成。"
+                      rows={3}
+                      className="input-field w-full py-2 text-sm font-mono" />
+                    {col.generationCode && col.generationCode !== '生成中...' && (
+                      <button type="button"
+                        onClick={() => {
+                          try {
+                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
+                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
+                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
+                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick',
+                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
+                            const results: unknown[] = []
+                            for (let i = 0; i < 5; i++) {
+                              results.push(fn(i, 5, results, testRefData, testRandomInt, testRandomFloat, testPick))
+                            }
+                            alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
+                          } catch (err) {
+                            alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
+                          }
+                        }}
+                        className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
+                        测试代码（预览5条）
+                      </button>
+                    )}
+                  </div>
                 )}
                 {col.type === 'foreign_key' && (
                   <div className="flex gap-2">
@@ -429,9 +471,49 @@ export default function TableEditorPage() {
                         ))}
                       </div>
                     </div>
+                    <div className="flex gap-2">
+                      <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
+                        placeholder="描述日期规则，如：最近30天随机日期"
+                        className="flex-1 input-field py-1.5 text-xs" />
+                      <button type="button"
+                        onClick={async () => {
+                          if (!col.llmPrompt?.trim()) return
+                          updateEditCol(col.id, { generationCode: '生成中...' })
+                          const { llmGenerateCode } = await import('@/services/data-gen')
+                          const result = await llmGenerateCode(col.llmPrompt!.trim(), 'date')
+                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
+                        }}
+                        disabled={!col.llmPrompt?.trim()}
+                        className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        AI 生成代码
+                      </button>
+                    </div>
                     <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
-                      placeholder="高级：自定义 JavaScript 生成代码"
+                      placeholder="JavaScript 代码，可手写或点上方 AI 生成"
                       className="input-field w-full py-2 text-xs font-mono" />
+                    {col.generationCode && col.generationCode !== '生成中...' && (
+                      <button type="button"
+                        onClick={() => {
+                          try {
+                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
+                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
+                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
+                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick',
+                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
+                            const results: unknown[] = []
+                            for (let i = 0; i < 5; i++) {
+                              results.push(fn(i, 5, results, testRefData, testRandomInt, testRandomFloat, testPick))
+                            }
+                            alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
+                          } catch (err) {
+                            alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
+                          }
+                        }}
+                        className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
+                        测试代码（预览5条）
+                      </button>
+                    )}
                   </div>
                 )}
                 {col.type === 'boolean' && (

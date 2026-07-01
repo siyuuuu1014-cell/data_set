@@ -193,10 +193,10 @@ async function generateNumberColumn(
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
-    const code = await llmGenerateCode(col.llmPrompt, 'number')
-    if (code) {
-      col.generationCode = code // cache the generated code
-      return executeColumnCode(col, code, rowCount, refData)
+    const result = await llmGenerateCode(col.llmPrompt, 'number')
+    if (result.code) {
+      col.generationCode = result.code
+      return executeColumnCode(col, result.code, rowCount, refData)
     }
   }
   // Fallback: random integers
@@ -218,10 +218,10 @@ async function generateDateColumn(
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
-    const code = await llmGenerateCode(col.llmPrompt, 'date')
-    if (code) {
-      col.generationCode = code
-      return executeColumnCode(col, code, rowCount, refData)
+    const result = await llmGenerateCode(col.llmPrompt, 'date')
+    if (result.code) {
+      col.generationCode = result.code
+      return executeColumnCode(col, result.code, rowCount, refData)
     }
   }
   // Fallback: use distribution if configured, else random dates
@@ -234,62 +234,97 @@ async function generateDateColumn(
 
 // ──── LLM generates JavaScript code from a prompt ────
 
-async function llmGenerateCode(prompt: string, type: 'number' | 'date'): Promise<string | null> {
-  const systemPrompt = `You are a code generator. Write a SINGLE JavaScript expression that returns a ${type} value per row. Only respond with valid JavaScript — no Chinese, no natural language, no explanation.
+export async function llmGenerateCode(prompt: string, type: 'number' | 'date'): Promise<{ code: string | null; error?: string }> {
+  const systemPrompt = `You are a JavaScript expression generator. Respond with EXACTLY ONE LINE of valid JavaScript and NOTHING ELSE — no words, no markdown, no explanation.
 
-Context variables available in scope:
-  index          — current row index (0-based)
-  totalRows      — total number of rows
-  previousValues — array of already-generated values for this column
-  refData        — object: refData["tableName"] is an array of row objects
-  randomInt(min, max) — inclusive random integer
-  randomFloat(min, max) — random float in [min, max)
-  pick(arr)      — random element from an array
+Available functions: randomInt(min,max) randomFloat(min,max) pick(array)
+Available variables: index totalRows previousValues refData
 
-CRITICAL RULES:
-- Output ONLY the raw expression. Nothing else. No markdown, no quotes, no explanation.
-- NEVER write Chinese characters, never write natural language — only JavaScript.
-- If you cannot express it as pure JavaScript, output a simple fallback like: randomInt(1, 100)
+EXAMPLES:
+Input: "random age 18-65"
+Output: randomInt(18,65)
 
-Examples:
-"random age 18-65" → randomInt(18, 65)
-"price 9.99-999.99" → Math.round(randomFloat(9.99, 999.99) * 100) / 100
-"date in last 30 days" → new Date(Date.now() - randomInt(0, 30) * 86400000).toISOString().split('T')[0]
-"sequential ID USR-0001" → 'USR-' + String(index + 1).padStart(4, '0')
-"user name from users table" → pick(refData["users"]).name
-"longitude in China" → randomFloat(73, 135).toFixed(6)`
+Input: "price between 9.99 and 999.99"
+Output: Math.round(randomFloat(9.99,999.99)*100)/100
 
+Input: "random date in last 30 days"
+Output: new Date(Date.now()-randomInt(0,30)*86400000).toISOString().split('T')[0]
+
+Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
+
+  let rawCode: string
   try {
-    const code = await callLlm(systemPrompt, prompt)
-    // Clean up response: extract code from markdown blocks, strip prefix/suffix noise
-    let cleaned = code
-      .replace(/```(?:javascript|js)?\s*([\s\S]*?)```/g, '$1') // unwrap code blocks
-      .replace(/^return\s+/i, '')     // strip leading "return"
-      .replace(/;\s*$/, '')           // strip trailing semicolon
-      .trim()
-    // If still contains backticks, try extracting inside
-    const backtickMatch = cleaned.match(/`([^`]+)`/)
-    if (backtickMatch) cleaned = backtickMatch[1]
-
-    // Reject output that looks like natural language rather than JavaScript
-    if (!cleaned || cleaned.length > 200) return null
-    // Heuristic: if it contains CJK characters, it's probably not valid JS
-    if (/[\u4e00-\u9fff]/.test(cleaned)) {
-      return null
-    }
-    // Quick syntax check: try compiling
-    try {
-      new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick',
-        cleaned.includes('return ') ? cleaned : `return (${cleaned})`
-      )
-    } catch {
-      return null
-    }
-    return cleaned
+    rawCode = await callLlm(systemPrompt, prompt, `${type}:${prompt.trim()}`)
   } catch (err) {
-    console.error(`[llm code-gen] ${type} failed:`, err)
-    return null
+    const msg = err instanceof Error ? err.message : String(err)
+    return { code: null, error: `API调用失败: ${msg}` }
   }
+
+  if (!rawCode || !rawCode.trim()) {
+    return { code: null, error: 'LLM返回为空' }
+  }
+
+  console.warn(`[llm code-gen] raw response for "${prompt}":`, rawCode)
+
+  const result = extractExpression(rawCode)
+  if (result.code) return result
+  // Show the raw response in the error so the user can see what went wrong
+  return { code: null, error: `${result.error} | 原始响应: ${rawCode.slice(0, 80)}` }
+}
+
+/** Try to extract a valid JS expression from raw LLM output. */
+function extractExpression(raw: string): { code: string | null; error?: string } {
+  // Step 1: unwrap markdown code blocks
+  let text = raw.replace(/```(?:javascript|js)?\s*([\s\S]*?)```/g, '$1').trim()
+
+  // Step 2: split into lines, filter out common natural-language prefixes
+  const lines = text.split('\n').map(l =>
+    l.replace(/^return\s+/i, '')
+     .replace(/;\s*$/, '')
+     .replace(/^(Here'?s?( is)?|The code|Output|Expression|Answer|Result):?\s*/i, '')
+     .replace(/^\d+[\.\)]\s*/, '')  // numbered lists: "1. randomInt(...)"
+     .trim()
+  ).filter(Boolean)
+
+  // Step 3: try each line as a candidate (longest JS-looking lines first)
+  const candidates = lines
+    .filter(l => l.length <= 200 && !/[\u4e00-\u9fff]/.test(l))
+    .sort((a, b) => b.length - a.length)
+
+  // Also try extracting from inline backticks
+  const backtickMatch = raw.match(/`([^`]+)`/)
+  if (backtickMatch) candidates.unshift(backtickMatch[1].trim())
+
+  for (const candidate of candidates) {
+    const expr = candidate.includes('return ') ? candidate : `return (${candidate})`
+    // Syntax check
+    try {
+      new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick', expr)
+    } catch {
+      continue
+    }
+    // Runtime test
+    try {
+      const testRefData: Record<string, unknown[]> = {
+        users: [{ id: 1, name: 'test' }],
+        orders: [{ id: 1 }],
+        products: [{ id: 1 }],
+      }
+      const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : undefined)
+      const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
+      fn(0, 1, [], testRefData, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // This candidate failed, try the next one
+      if (candidates.length === 1) {
+        return { code: null, error: `运行时错误: ${msg}` }
+      }
+      continue
+    }
+    return { code: candidate }
+  }
+
+  return { code: null, error: `未能提取有效表达式(共${candidates.length}个候选)` }
 }
 
 // ──── Execute code for each row ────
@@ -300,7 +335,10 @@ function executeColumnCode(
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>
 ): unknown[] {
-  // Compile the function once, outside the loop
+  // Basic validation before attempting compilation
+  if (!code || code.length > 500 || /[\u4e00-\u9fff]/.test(code)) {
+    return new Array(rowCount).fill(null)
+  }
   const expression = code.includes('return ') ? code : `return (${code})`
   let fn: ((...args: unknown[]) => unknown) | null = null
   try {
@@ -309,8 +347,7 @@ function executeColumnCode(
       'randomInt', 'randomFloat', 'pick',
       expression
     ) as (...args: unknown[]) => unknown
-  } catch (err) {
-    console.error(`[code compile] ${col.name}:`, err)
+  } catch {
     return new Array(rowCount).fill(null)
   }
 

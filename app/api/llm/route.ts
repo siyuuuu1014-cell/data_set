@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import type { LlmConfig, ApiFormat } from '@/services/types'
+import { getCachedCode, setCachedCode, deleteCachedCode, isValidExpression } from '@/services/code-cache'
 
 const CONFIG_FILE = join(process.cwd(), 'configs', 'llm-config.json')
 
@@ -16,10 +17,11 @@ function getConfig(): LlmConfig {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { systemPrompt, userPrompt, userPrompts } = body as {
+    const { systemPrompt, userPrompt, userPrompts, cacheKey } = body as {
       systemPrompt: string
       userPrompt?: string
       userPrompts?: string[]
+      cacheKey?: string
     }
 
     const config = getConfig()
@@ -28,7 +30,7 @@ export async function POST(request: Request) {
       const results = await batchGenerate(config, systemPrompt, userPrompts)
       return Response.json({ results })
     } else if (userPrompt) {
-      const content = await singleGenerate(config, systemPrompt, userPrompt)
+      const content = await singleGenerate(config, systemPrompt, userPrompt, cacheKey)
       return Response.json({ content })
     } else {
       return Response.json({ error: '缺少提示词' }, { status: 400 })
@@ -77,21 +79,21 @@ async function anthropicGenerate(config: LlmConfig, systemPrompt: string, userPr
   }, 'Anthropic')
 
   const data = await res.json()
-  // Standard Anthropic format: { content: [{ type: "text", text: "..." }] }
-  if (data.content?.[0]?.text) {
-    return data.content[0].text
-  }
-  // Alternative: OpenAI-style format some proxies use
-  if (data.choices?.[0]?.message?.content) {
-    return data.choices[0].message.content
+  // Anthropic returns content as array of blocks: [{ type: "text", text: "..." }, { type: "thinking", text: "..." }]
+  // We must filter for text blocks only — thinking blocks are model internal reasoning.
+  if (Array.isArray(data.content)) {
+    const textBlocks = data.content.filter((c: { type?: string; text?: string }) => c.type === 'text')
+    if (textBlocks.length > 0) {
+      return textBlocks.map((c: { text?: string }) => c.text || '').join('')
+    }
   }
   // Content might be a string directly
   if (typeof data.content === 'string') {
     return data.content
   }
-  // Fallback: try to find text anywhere in response
-  if (data.content && Array.isArray(data.content)) {
-    return data.content.map((c: { text?: string; type?: string }) => c.text || c.type || '').join('')
+  // Alternative: OpenAI-style format some proxies use
+  if (data.choices?.[0]?.message?.content) {
+    return data.choices[0].message.content
   }
   console.error('[Anthropic] Unknown response format:', Object.keys(data))
   return ''
@@ -129,11 +131,27 @@ async function doFetch(url: string, headers: Record<string, string>, body: unkno
 
 // ──── Dispatch ────
 
-async function singleGenerate(config: LlmConfig, systemPrompt: string, userPrompt: string): Promise<string> {
-  if (config.apiFormat === 'anthropic') {
-    return anthropicGenerate(config, systemPrompt, userPrompt)
+async function singleGenerate(config: LlmConfig, systemPrompt: string, userPrompt: string, cacheKey?: string): Promise<string> {
+  // Check code expression cache first
+  if (cacheKey) {
+    const cached = getCachedCode(cacheKey)
+    if (cached && isValidExpression(cached)) return cached
+    if (cached) deleteCachedCode(cacheKey) // stale bad entry
   }
-  return openaiGenerate(config, systemPrompt, userPrompt)
+
+  let result: string
+  if (config.apiFormat === 'anthropic') {
+    result = await anthropicGenerate(config, systemPrompt, userPrompt)
+  } else {
+    result = await openaiGenerate(config, systemPrompt, userPrompt)
+  }
+
+  // Only cache if the result is a valid executable expression
+  if (cacheKey && isValidExpression(result)) {
+    setCachedCode(cacheKey, result)
+  }
+
+  return result
 }
 
 // ──── Batch ────

@@ -40,9 +40,21 @@ function loadFromStorage(): StoreState {
 function saveToStorage(state: StoreState) {
   if (typeof window === 'undefined') return
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    // Strip rows from tables before saving — rows are persisted via API/Parquet
+    const stripped: StoreState = {
+      projects: state.projects,
+      tables: {},
+    }
+    for (const [projectId, tableList] of Object.entries(state.tables)) {
+      stripped.tables[projectId] = tableList.map(t => ({ ...t, rows: [] }))
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped))
   } catch {
-    // ignore
+    // localStorage full or unavailable — alert user once per session
+    if (typeof window !== 'undefined' && !(window as any).__nuwa_storage_warned) {
+      (window as any).__nuwa_storage_warned = true
+      alert('存储空间不足，数据可能无法保存。请导出数据后清理旧项目。')
+    }
   }
 }
 

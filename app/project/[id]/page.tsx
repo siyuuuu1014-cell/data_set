@@ -37,7 +37,7 @@ export default function ProjectPage() {
   const [showExport, setShowExport] = useState(false)
   const [exportFormats, setExportFormats] = useState<Record<string, ExportFormat>>({})
 
-  const handleExportAll = () => {
+  const handleExportAll = async () => {
     for (const table of orderedTables) {
       const fmt = exportFormats[table.id] || 'json'
       const opt = FORMAT_OPTIONS.find(f => f.value === fmt)!
@@ -49,14 +49,25 @@ export default function ProjectPage() {
         a.click()
         document.body.removeChild(a)
       } else {
+        // Fetch fresh data from API in case in-memory rows are stale/empty
+        let tableWithRows = table
+        try {
+          const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
+          if (res.ok) {
+            const data = await res.json() as { rows: Record<string, unknown>[] }
+            if (data.rows && data.rows.length > 0) {
+              tableWithRows = { ...table, rows: data.rows }
+            }
+          }
+        } catch {}
         const exporters: Record<string, (t: typeof table) => string | Uint8Array> = {
           json: exportJson, csv: exportCsv, xml: exportXml, sql: exportSql,
         }
         const fn = exporters[fmt]
         if (fn) {
-          downloadFile(fn(table) as string, `${table.name}${opt.ext}`, opt.mime)
+          downloadFile(fn(tableWithRows) as string, `${table.name}${opt.ext}`, opt.mime)
         } else if (fmt === 'xlsx') {
-          downloadFile(exportExcel(table), `${table.name}${opt.ext}`, opt.mime)
+          downloadFile(exportExcel(tableWithRows), `${table.name}${opt.ext}`, opt.mime)
         }
       }
     }

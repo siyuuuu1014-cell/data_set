@@ -58,7 +58,7 @@ export async function generateTableData(
   const columnResults: Record<string, unknown[]> = {}
 
   for (const col of table.columns) {
-    columnResults[col.name] = await generateColumn(col, rowCount, refData, columnResults)
+    columnResults[col.name] = await generateColumn(col, rowCount, refData, columnResults, table.columns)
   }
 
   // Assemble rows from column results
@@ -88,12 +88,13 @@ export async function generateColumn(
   col: ColumnDef,
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>,
-  columnResults?: Record<string, unknown[]>
+  columnResults?: Record<string, unknown[]>,
+  allCols?: ColumnDef[]
 ): Promise<unknown[]> {
   let results: unknown[] = []
 
   // Non-fk columns that reference another table: resolve values from refData/Parquet
-  if (col.type !== 'foreign_key' && col.type !== 'foreign_key_array' && col.foreignTable) {
+  if (col.type !== 'foreign_key' && col.type !== 'foreign_key_array' && col.type !== 'date' && col.type !== 'number' && col.foreignTable) {
     for (let i = 0; i < rowCount; i++) {
       results.push(resolveForeignKey(col, refData))
     }
@@ -106,11 +107,11 @@ export async function generateColumn(
       break
 
     case 'number':
-      results = await generateNumberColumn(col, rowCount, refData, columnResults)
+      results = await generateNumberColumn(col, rowCount, refData, columnResults, allCols || [])
       break
 
     case 'date':
-      results = await generateDateColumn(col, rowCount, refData, columnResults)
+      results = await generateDateColumn(col, rowCount, refData, columnResults, allCols || [])
       break
 
     case 'boolean':
@@ -193,18 +194,19 @@ async function generateNumberColumn(
   col: ColumnDef,
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>,
-  columnResults?: Record<string, unknown[]>
+  columnResults?: Record<string, unknown[]>,
+  allCols: ColumnDef[] = []
 ): Promise<unknown[]> {
   // If user provided code directly, use it
   if (col.generationCode?.trim()) {
-    return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults)
+    return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols)
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
     const result = await llmGenerateCode(col.llmPrompt, 'number')
     if (result.code) {
       col.generationCode = result.code
-      return executeColumnCode(col, result.code, rowCount, refData, columnResults)
+      return executeColumnCode(col, result.code, rowCount, refData, columnResults, allCols)
     }
   }
   // Fallback: random integers
@@ -219,18 +221,23 @@ async function generateDateColumn(
   col: ColumnDef,
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>,
-  columnResults?: Record<string, unknown[]>
+  columnResults?: Record<string, unknown[]>,
+  allCols: ColumnDef[] = []
 ): Promise<unknown[]> {
+  // If user selected a specific parent date column, use it directly
+  if (col.parentDateColumn && col.foreignTable) {
+    return executeColumnCode(col, `parentRow.${col.parentDateColumn}`, rowCount, refData, columnResults, allCols)
+  }
   // If user provided code directly, use it
   if (col.generationCode?.trim()) {
-    return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults)
+    return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols)
   }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
     const result = await llmGenerateCode(col.llmPrompt, 'date', { dateFormat: col.dateFormat, dateDistribution: col.dateDistribution })
     if (result.code) {
       col.generationCode = result.code
-      return executeColumnCode(col, result.code, rowCount, refData, columnResults)
+      return executeColumnCode(col, result.code, rowCount, refData, columnResults, allCols)
     }
   }
   // Fallback: use distribution if configured, else random dates
@@ -291,8 +298,9 @@ export async function llmGenerateCode(
   const systemPrompt = `You are a JavaScript expression generator. Respond with EXACTLY ONE LINE of valid JavaScript and NOTHING ELSE — no words, no markdown, no explanation.
 
 Available functions: randomInt(min,max) randomFloat(min,max) pick(array)
-Available variables: index totalRows previousValues refData row
-row = values from earlier columns in the same row, e.g. row.start_date
+Available variables: index totalRows previousValues refData row parentRow
+row = values from earlier columns in the same row, e.g. row.quantity
+parentRow = the matching parent table row (auto-resolved via FK), e.g. parentRow.price — null if no FK match or no foreignTable set
 
 EXAMPLES:
 Input: "random age 18-65"
@@ -301,13 +309,19 @@ Output: randomInt(18,65)
 Input: "price between 9.99 and 999.99"
 Output: Math.round(randomFloat(9.99,999.99)*100)/100
 
+Input: "total price = product price * quantity, FK to products table"
+Output: parentRow.price * row.quantity
+
 Input: "random date in last 30 days"
 Output: new Date(Date.now()-randomInt(0,30)*86400000).toISOString().split('T')[0]
 
 Input: "end date after start_date by 1-30 days"
 Output: new Date(new Date(row.start_date).getTime()+randomInt(1,30)*86400000).toISOString().split('T')[0]
 
-NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime().${formatInstruction}${distributionInstruction}
+Input: "random date from another table's date range"
+Output: (()=>{const p=pick(refData.other_table);return new Date(p.date_col).toISOString().split('T')[0]})()
+
+NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime(). parentRow is null-safe — check before accessing fields. RefData contains rows from referenced tables keyed by table name.${formatInstruction}${distributionInstruction}
 
 Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
 
@@ -357,7 +371,7 @@ function extractExpression(raw: string): { code: string | null; error?: string }
 
   // Step 3: try each line as a candidate (longest JS-looking lines first)
   const candidates = lines
-    .filter(l => l.length <= 350 && !/[\u4e00-\u9fff]/.test(l))
+    .filter(l => l.length <= 350)
     .sort((a, b) => b.length - a.length)
 
   // Also try extracting from inline backticks
@@ -368,7 +382,7 @@ function extractExpression(raw: string): { code: string | null; error?: string }
     const expr = candidate.includes('return ') ? candidate : `return (${candidate})`
     // Syntax check
     try {
-      new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', expr)
+      new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow', expr)
     } catch {
       continue
     }
@@ -384,8 +398,9 @@ function extractExpression(raw: string): { code: string | null; error?: string }
       const testRow = new Proxy({} as Record<string, unknown>, {
         get: () => new Date(),
       })
-      const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
-      fn(0, 1, [], testRefData, testRow, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
+      const testParentRow = { id: 1, name: 'test', price: 100 }
+      const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow', expr) as (...args: unknown[]) => unknown
+      fn(0, 1, [], testRefData, testRow, (a: number, b: number) => a, (a: number, b: number) => a, testPick, testParentRow)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       // This candidate failed, try the next one
@@ -407,18 +422,35 @@ function executeColumnCode(
   code: string,
   rowCount: number,
   refData: Record<string, Record<string, unknown>[]>,
-  rowContext?: Record<string, unknown[]>
+  rowContext: Record<string, unknown[]> | undefined,
+  allCols: ColumnDef[]
 ): unknown[] {
   // Basic validation before attempting compilation
   if (!code || code.length > 500 || /[\u4e00-\u9fff]/.test(code)) {
     return new Array(rowCount).fill(null)
   }
+
+  // Resolve FK column for parentRow lookup
+  // Prefer explicit localMatchColumn, fallback to auto-detect FK column
+  let fkColName: string | null = col.localMatchColumn || null
+  let parentKeyCol = col.foreignColumn || 'id'
+  if (!fkColName && col.foreignTable && allCols) {
+    const fkCol = allCols.find(c =>
+      (c.type === 'foreign_key' || c.type === 'foreign_key_array') &&
+      c.foreignTable === col.foreignTable
+    )
+    if (fkCol) {
+      fkColName = fkCol.name
+      if (!col.foreignColumn) parentKeyCol = fkCol.foreignColumn || 'id'
+    }
+  }
+
   const expression = code.includes('return ') ? code : `return (${code})`
   let fn: ((...args: unknown[]) => unknown) | null = null
   try {
     fn = new Function(
       'index', 'totalRows', 'previousValues', 'refData', 'row',
-      'randomInt', 'randomFloat', 'pick',
+      'randomInt', 'randomFloat', 'pick', 'parentRow',
       expression
     ) as (...args: unknown[]) => unknown
   } catch {
@@ -437,10 +469,21 @@ function executeColumnCode(
     const row: Record<string, unknown> = rowContext
       ? Object.fromEntries(Object.entries(rowContext).map(([k, v]) => [k, v[i]]))
       : {}
+
+    // Resolve parentRow for this row
+    let parentRow: Record<string, unknown> | null = null
+    if (fkColName && col.foreignTable) {
+      const fkValue = row[fkColName]
+      const parentRows = refData[col.foreignTable]
+      if (parentRows && fkValue != null) {
+        parentRow = parentRows.find(r => r[parentKeyCol] === fkValue) || null
+      }
+    }
+
     try {
       const val = fn(
         i, rowCount, results, refData, row,
-        helpers.randomInt, helpers.randomFloat, helpers.pick
+        helpers.randomInt, helpers.randomFloat, helpers.pick, parentRow
       )
       results.push(val)
     } catch (err) {

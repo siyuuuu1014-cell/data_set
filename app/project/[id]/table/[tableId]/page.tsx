@@ -132,9 +132,7 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
 
 function ensureDateDistribution(col: ColumnDef): DateRange[] {
   if (!col.dateDistribution || col.dateDistribution.length === 0) {
-    const dist: DateRange[] = PRESET_DATE_RANGES.map(r => ({ label: r.key, minDays: r.minDays, maxDays: r.maxDays, ratio: 0 }))
-    col.dateDistribution = dist
-    return dist
+    return PRESET_DATE_RANGES.map(r => ({ label: r.key, minDays: r.minDays, maxDays: r.maxDays, ratio: 0 }))
   }
   return col.dateDistribution
 }
@@ -179,6 +177,7 @@ export default function TableEditorPage() {
   }, [showExportMenu])
 
   const handleExportNuwa = async () => {
+    if (!table) return
     let rows = table.rows
     try {
       const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
@@ -187,7 +186,7 @@ export default function TableEditorPage() {
         rows = data.rows
       }
     } catch {}
-    const nuwaData = { version: 1, table: { ...table, rows } }
+    const nuwaData = { version: 1, tables: [{ ...table, rows }] }
     const blob = new Blob([JSON.stringify(nuwaData, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -198,35 +197,67 @@ export default function TableEditorPage() {
     URL.revokeObjectURL(a.href)
   }
 
+  const handleExportCsv = async () => {
+    if (!table) return
+    let rows = table.rows
+    try {
+      const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
+      if (res.ok) {
+        const data = await res.json() as { rows: Record<string, unknown>[] }
+        rows = data.rows
+      }
+    } catch {}
+    const tableWithRows = { ...table, rows }
+    downloadFile(exportCsv(tableWithRows), `${table.name}.csv`, 'text/csv;charset=utf-8')
+  }
+
   const handleImportNuwa = async (file: File) => {
     setGenError('')
     setImportingNuwa(true)
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      if (!data.tables) throw new Error('Invalid .nuwa file format')
-      for (const nuwaTable of data.tables) {
-        const localTable = allTables.find(t => t.name === nuwaTable.name)
-        if (!localTable) continue
+      const tables = data.tables || (data.table ? [data.table] : null)
+      if (!tables) throw new Error('Invalid .nuwa file format')
+      let imported = 0
+      for (const nuwaTable of tables) {
         if (nuwaTable.rows && nuwaTable.rows.length > 0) {
-          await fetch('/api/data', {
+          const res = await fetch('/api/data', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               projectId: id,
-              tableName: localTable.name,
-              columns: localTable.columns,
+              tableName: table?.name || nuwaTable.name,
+              columns: table?.columns || [],
               rows: nuwaTable.rows,
             }),
           })
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}))
+            throw new Error(errData.error || `HTTP ${res.status}`)
+          }
+          imported += nuwaTable.rows.length
         }
       }
-      // Reload displayed rows for current table
-      const currentNuwa = data.tables.find((t: { name: string }) => t.name === table?.name)
-      if (currentNuwa?.rows) {
-        setDisplayedRows(currentNuwa.rows)
-        setTableRows(id, table!.id, currentNuwa.rows)
-        setGeneratedColumns(new Set(table!.columns.map(c => c.id)))
+      // Reload displayed rows for current table from API to get consistent data
+      if (table) {
+        try {
+          const reloadRes = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
+          if (reloadRes.ok) {
+            const { rows: freshRows } = await reloadRes.json() as { rows: Record<string, unknown>[] }
+            if (freshRows && freshRows.length > 0) {
+              setDisplayedRows(freshRows)
+              setTableRows(id, table.id, freshRows)
+              setGeneratedColumns(new Set(table.columns.map(c => c.id)))
+            }
+          }
+        } catch {}
+      }
+      if (imported > 0) {
+        const msg = t('table.import_success').replace('{0}', String(imported))
+        setGenError(msg)
+      } else {
+        setGenError(t('table.import_no_data'))
       }
     } catch (err) {
       setGenError(err instanceof Error ? err.message : t('table.import_fail'))
@@ -326,17 +357,22 @@ export default function TableEditorPage() {
     }
     setColumnGenerating(col.id)
     try {
+      // Build refData for all columns that reference another table
+      const foreignTables = new Set<string>()
+      for (const c of table.columns) {
+        if (c.foreignTable) foreignTables.add(c.foreignTable)
+      }
       const refData: Record<string, Record<string, unknown>[]> = {}
-      // Build refData for columns that reference another table (foreign_key or non-fk with foreignTable)
-      if (col.foreignTable) {
-        const parentTable = allTables.find(t => t.id === col.foreignTable || t.name === col.foreignTable)
-        if (!parentTable) {
-          throw new Error(t('table.fk_table_missing', col.foreignTable))
-        }
+      const loadedFrom = new Set<string>() // avoid duplicate Parquet fetches
+      for (const ft of foreignTables) {
+        const parentTable = allTables.find(t => t.id === ft || t.name === ft)
+        if (!parentTable) continue
         if (parentTable.rows.length > 0) {
           refData[parentTable.id] = parentTable.rows
           refData[parentTable.name] = parentTable.rows
-        } else {
+          loadedFrom.add(parentTable.name)
+        } else if (!loadedFrom.has(parentTable.name)) {
+          loadedFrom.add(parentTable.name)
           // Try loading from Parquet
           try {
             const url = `/api/data/fk-values?projectId=${encodeURIComponent(id)}&tableId=${encodeURIComponent(parentTable.name)}&column=*`
@@ -351,9 +387,6 @@ export default function TableEditorPage() {
           } catch {
             // Parquet not available
           }
-          if (!refData[parentTable.name] || refData[parentTable.name].length === 0) {
-            throw new Error(t('table.fk_no_data', parentTable.name))
-          }
         }
       }
 
@@ -365,7 +398,7 @@ export default function TableEditorPage() {
         const prevCol = table.columns[j]
         columnResults[prevCol.name] = displayedRows.map(r => r[prevCol.name])
       }
-      const values = await generateColumn(col, rowCount, refData, columnResults)
+      const values = await generateColumn(col, rowCount, refData, columnResults, table.columns)
 
       const rows: Record<string, unknown>[] = []
       for (let i = 0; i < rowCount; i++) {
@@ -442,9 +475,13 @@ export default function TableEditorPage() {
 
   const saveEdit = () => {
     const invalid = editColumns.find(c => !c.name.trim())
-    if (invalid) return
+    if (invalid) {
+      setGenError(t('table.col_name_required'))
+      return
+    }
     updateTable(id, table.id, { name: editName, columns: editColumns })
     setEditMode(false)
+    setGenError('')
     // Schema changed — reset generate button state
     setGeneratedColumns(new Set())
   }
@@ -515,7 +552,7 @@ export default function TableEditorPage() {
               <div ref={exportMenuRef} className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gv-border bg-white shadow-lg z-10 overflow-hidden">
                 <button onClick={() => { downloadFile(exportJson(table), `${table.name}.json`, 'application/json'); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">JSON</button>
-                <button onClick={() => { downloadFile(exportCsv(table), `${table.name}.csv`, 'text/csv'); setShowExportMenu(false) }}
+                <button onClick={() => { handleExportCsv(); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">CSV</button>
                 <button onClick={() => { downloadFile(exportExcel(table), `${table.name}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Excel (XLSX)</button>
@@ -594,6 +631,25 @@ export default function TableEditorPage() {
                 )}
                 {col.type === 'number' && (
                   <div className="space-y-2">
+                    <select value={col.foreignTable || ''} onChange={(e) => updateEditCol(col.id, { foreignTable: e.target.value || undefined })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      <option value="">{t('table.ref_table_number')}</option>
+                      {allTables.filter(t => t.id !== table.id).map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                    </select>
+                    {col.foreignTable && (
+                      <div className="flex gap-2">
+                        <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">本表关联列（自动）</option>
+                          {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                        <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">外表关联列（默认 id）</option>
+                          {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                      </div>
+                    )}
                     <div className="flex gap-2">
                       <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
                         placeholder={t('table.number_prompt_placeholder')}
@@ -624,11 +680,12 @@ export default function TableEditorPage() {
                             const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
                             const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
                             const testRow = new Proxy({}, { get: () => new Date() })
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick',
+                            const testParentRow = { id: 1, name: 'test', price: 100 }
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
                               col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
                             const results: unknown[] = []
                             for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
                             }
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
@@ -657,6 +714,32 @@ export default function TableEditorPage() {
                 )}
                 {col.type === 'date' && (
                   <div className="space-y-3">
+                    <select value={col.foreignTable || ''} onChange={(e) => updateEditCol(col.id, { foreignTable: e.target.value || undefined })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      <option value="">{t('table.ref_table_date')}</option>
+                      {allTables.filter(t => t.id !== table.id).map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                    </select>
+                    {col.foreignTable && (
+                      <div className="flex gap-2">
+                        <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">本表关联列（自动）</option>
+                          {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                        <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">外表关联列（默认 id）</option>
+                          {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                      </div>
+                    )}
+                    {col.foreignTable && (
+                      <select value={col.parentDateColumn || ''} onChange={(e) => updateEditCol(col.id, { parentDateColumn: e.target.value || undefined })}
+                        className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                        <option value="">选择外表日期字段（手动写公式则留空）</option>
+                        {allTables.find(t => t.id === col.foreignTable)?.columns.filter(c => c.type === 'date').map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                      </select>
+                    )}
                     <select value={col.dateFormat || 'date'} onChange={(e) => updateEditCol(col.id, { dateFormat: e.target.value as DateFormat })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
                       {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{t(f.key)}</option>))}
@@ -710,11 +793,12 @@ export default function TableEditorPage() {
                             const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
                             const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
                             const testRow = new Proxy({}, { get: () => new Date() })
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick',
+                            const testParentRow = { id: 1, name: 'test', price: 100 }
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
                               col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
                             const results: unknown[] = []
                             for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
                             }
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {

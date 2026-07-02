@@ -78,9 +78,7 @@ const PRESET_DATE_RANGES: Omit<DateRange, 'ratio'>[] = [
 
 function ensureDateDistribution(col: ColumnDef): DateRange[] {
   if (!col.dateDistribution || col.dateDistribution.length === 0) {
-    const dist = PRESET_DATE_RANGES.map(r => ({ ...r, ratio: 0 }))
-    col.dateDistribution = dist
-    return dist
+    return PRESET_DATE_RANGES.map(r => ({ ...r, ratio: 0 }))
   }
   return col.dateDistribution
 }
@@ -151,6 +149,7 @@ export default function NewTablePage() {
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [imageUploading, setImageUploading] = useState(false)
   const [importingNuwa, setImportingNuwa] = useState(false)
+  const [importedRows, setImportedRows] = useState<Record<string, unknown>[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const nuwaFileRef = useRef<HTMLInputElement>(null)
   const [relatedTableIds, setRelatedTableIds] = useState<string[]>([])
@@ -295,9 +294,13 @@ export default function NewTablePage() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      if (!data.tables || !Array.isArray(data.tables)) throw new Error('无效的 .nuwa 文件格式')
+      const tables = data.tables || (data.table ? [data.table] : null)
+      if (!tables || !Array.isArray(tables)) throw new Error('无效的 .nuwa 文件格式')
       const newCols: ColumnDef[] = []
-      for (const nuwaTable of data.tables) {
+      let firstName = ''
+      let fileRows: Record<string, unknown>[] = []
+      for (const nuwaTable of tables) {
+        if (!firstName && nuwaTable.name) firstName = nuwaTable.name
         if (nuwaTable.columns && Array.isArray(nuwaTable.columns)) {
           for (const col of nuwaTable.columns) {
             newCols.push({
@@ -310,6 +313,8 @@ export default function NewTablePage() {
               nullRatio: col.nullRatio,
               foreignTable: col.foreignTable,
               foreignColumn: col.foreignColumn,
+              localMatchColumn: col.localMatchColumn,
+              parentDateColumn: col.parentDateColumn,
               dateFormat: col.dateFormat,
               dateDistribution: col.dateDistribution,
               idFormat: col.idFormat,
@@ -318,8 +323,19 @@ export default function NewTablePage() {
             })
           }
         }
+        if (nuwaTable.rows && Array.isArray(nuwaTable.rows) && nuwaTable.rows.length > 0) {
+          fileRows = nuwaTable.rows
+        }
       }
-      if (newCols.length > 0) setColumns(newCols)
+      if (newCols.length > 0) {
+        if (firstName && !tableName.trim()) setName(firstName)
+        setColumns(newCols)
+        setImportedRows(fileRows)
+        const rowMsg = fileRows.length > 0 ? `，含 ${fileRows.length} 行数据` : ''
+        setError(`已导入 ${newCols.length} 个列定义${rowMsg}`)
+      } else {
+        setError('文件中没有找到列定义')
+      }
       if (nuwaFileRef.current) nuwaFileRef.current.value = ''
     } catch (err) {
       setError(err instanceof Error ? err.message : '导入失败')
@@ -387,12 +403,21 @@ export default function NewTablePage() {
     }
 
     const tableId = 'tbl_' + Date.now().toString(36)
+    const rows = importedRows.length > 0 ? importedRows : []
     addTable(id, {
       id: tableId,
       name: tableName.trim(),
       columns,
-      rows: [],
+      rows,
     })
+    // If imported rows exist, save them to Parquet
+    if (rows.length > 0) {
+      fetch('/api/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: id, tableName: tableName.trim(), columns, rows }),
+      }).catch(() => {})
+    }
     router.push(`/project/${id}/table/${tableId}`)
   }
 
@@ -584,6 +609,25 @@ export default function NewTablePage() {
 
                 {col.type === 'number' && (
                   <div className="space-y-2">
+                    <select value={col.foreignTable || ''} onChange={(e) => updateCol(col.id, { foreignTable: e.target.value || undefined })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      <option value="">引用外表（用于跨表公式，可选）</option>
+                      {existingTables.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                    </select>
+                    {col.foreignTable && (
+                      <div className="flex gap-2">
+                        <select value={col.localMatchColumn || ''} onChange={(e) => updateCol(col.id, { localMatchColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">本表关联列（自动）</option>
+                          {columns.filter(c => c.name.trim()).map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                        <select value={col.foreignColumn || ''} onChange={(e) => updateCol(col.id, { foreignColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">外表关联列（默认 id）</option>
+                          {existingTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                      </div>
+                    )}
                     <label className="block text-xs text-gv-text-dim">规则描述</label>
                     <div className="flex gap-2">
                       <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateCol(col.id, { llmPrompt: e.target.value })}
@@ -619,11 +663,12 @@ export default function NewTablePage() {
                             const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
                             const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
                             const testRow = new Proxy({}, { get: () => new Date() })
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick',
+                            const testParentRow = { id: 1, name: 'test', price: 100 }
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
                               col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
                             const results: unknown[] = []
                             for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
                             }
                             alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
@@ -674,6 +719,32 @@ export default function NewTablePage() {
 
                 {col.type === 'date' && (
                   <div className="space-y-3">
+                    <select value={col.foreignTable || ''} onChange={(e) => updateCol(col.id, { foreignTable: e.target.value || undefined })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      <option value="">引用外表（用于跨表公式，可选）</option>
+                      {existingTables.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                    </select>
+                    {col.foreignTable && (
+                      <div className="flex gap-2">
+                        <select value={col.localMatchColumn || ''} onChange={(e) => updateCol(col.id, { localMatchColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">本表关联列（自动）</option>
+                          {columns.filter(c => c.name.trim()).map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                        <select value={col.foreignColumn || ''} onChange={(e) => updateCol(col.id, { foreignColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">外表关联列（默认 id）</option>
+                          {existingTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                      </div>
+                    )}
+                    {col.foreignTable && (
+                      <select value={col.parentDateColumn || ''} onChange={(e) => updateCol(col.id, { parentDateColumn: e.target.value || undefined })}
+                        className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                        <option value="">选择外表日期字段（手动写公式则留空）</option>
+                        {existingTables.find(t => t.id === col.foreignTable)?.columns.filter(c => c.type === 'date').map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                      </select>
+                    )}
                     <select value={col.dateFormat || 'date'} onChange={(e) => updateCol(col.id, { dateFormat: e.target.value as DateFormat })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
                       {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{f.label}</option>))}
@@ -727,11 +798,12 @@ export default function NewTablePage() {
                             const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
                             const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
                             const testRow = new Proxy({}, { get: () => new Date() })
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick',
+                            const testParentRow = { id: 1, name: 'test', price: 100 }
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
                               col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
                             const results: unknown[] = []
                             for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick))
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
                             }
                             alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {

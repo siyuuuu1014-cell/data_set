@@ -30,6 +30,8 @@ export interface ColumnDef {
   generationCode?: string
   foreignTable?: string
   foreignColumn?: string
+  localMatchColumn?: string
+  parentDateColumn?: string
   idFormat?: IdFormat
   dateFormat?: DateFormat
   dateDistribution?: DateRange[]

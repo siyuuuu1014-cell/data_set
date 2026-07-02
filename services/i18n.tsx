@@ -176,6 +176,8 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
     'table.code_error': '代码错误:',
     'table.gen_fail': '生成失败',
     'table.select_ref_table': '选择引用表...',
+    'table.ref_table_date': '引用外表（用于跨表公式，可选）',
+    'table.ref_table_number': '引用外表（用于跨表公式，可选）',
     'table.auto_match_col': '自动匹配列',
     'table.date_distribution': '时间分布比例（%）',
     'table.bool_placeholder': '可选，留空随机 true/false',
@@ -189,6 +191,9 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
 
     // Import/Export errors
     'table.import_fail': '导入失败',
+    'table.import_success': '已导入 {0} 行数据',
+    'table.import_no_match': '文件中没有匹配当前项目的表',
+    'table.import_no_data': '文件中没有数据行',
     'table.gen_fail_short': '生成失败',
     'table.image_too_large': '图片大小不能超过 10MB',
     'table.image_fail': '图片识别失败',
@@ -466,6 +471,8 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
     'table.code_error': 'Code Error:',
     'table.gen_fail': 'Generation failed',
     'table.select_ref_table': 'Select reference table...',
+    'table.ref_table_date': 'Reference table (for cross-table formula, optional)',
+    'table.ref_table_number': 'Reference table (for cross-table formula, optional)',
     'table.auto_match_col': 'Auto-match column',
     'table.date_distribution': 'Time distribution ratio (%)',
     'table.bool_placeholder': 'Optional, random true/false if empty',
@@ -479,6 +486,9 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
 
     // Import/Export errors
     'table.import_fail': 'Import failed',
+    'table.import_success': 'Imported {0} rows',
+    'table.import_no_match': 'No tables in file match current project',
+    'table.import_no_data': 'No data rows in file',
     'table.gen_fail_short': 'Generation failed',
     'table.image_too_large': 'Image must be under 10MB',
     'table.image_fail': 'Image recognition failed',

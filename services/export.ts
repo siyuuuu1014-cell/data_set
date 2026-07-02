@@ -53,7 +53,7 @@ export function exportCsv(table: TableDef): string {
   for (const row of table.rows) {
     lines.push(cols.map(c => csvEscape(row[c])).join(','))
   }
-  return lines.join('\n')
+  return '\uFEFF' + lines.join('\n')
 }
 
 // ──── XML ────

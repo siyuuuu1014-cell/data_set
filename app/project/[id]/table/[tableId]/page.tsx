@@ -812,9 +812,24 @@ export default function TableEditorPage() {
                   </div>
                 )}
                 {col.type === 'boolean' && (
-                  <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
-                    placeholder={t('table.bool_placeholder')}
-                    className="input-field w-full py-2 text-sm font-mono" />
+                  <div>
+                    <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
+                      placeholder={t('table.bool_placeholder')}
+                      className="input-field w-full py-2 text-sm font-mono" />
+                    <div className="flex items-center gap-2 mt-2 pl-1">
+                      <span className="text-xs text-gv-text-muted w-16">{t('table.bool_true_ratio')}</span>
+                      <input
+                        type="range"
+                        min={0} max={100}
+                        value={col.boolTrueRatio ?? 50}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onDragStart={(e) => e.stopPropagation()}
+                        onChange={(e) => updateEditCol(col.id, { boolTrueRatio: Number(e.target.value) })}
+                        className="flex-1 accent-gv-pink h-1"
+                      />
+                      <span className="text-xs font-mono text-gv-text w-9 text-right">{col.boolTrueRatio ?? 50}%</span>
+                    </div>
+                  </div>
                 )}
                 {col.type === 'id' && (
                   <select value={col.idFormat || 'uuid4'} onChange={(e) => updateEditCol(col.id, { idFormat: e.target.value as IdFormat })}

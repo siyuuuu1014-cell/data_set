@@ -39,6 +39,7 @@ export interface ColumnDef {
   cityCountry?: PhoneCountry
   nullable?: boolean
   nullRatio?: number   // 0-100, percentage of null values
+  boolTrueRatio?: number // 0-100, percentage of true values for boolean columns (default 50)
 }
 
 export interface TableDef {

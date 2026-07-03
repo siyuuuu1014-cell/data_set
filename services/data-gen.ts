@@ -116,7 +116,7 @@ export async function generateColumn(
 
     case 'boolean':
       for (let i = 0; i < rowCount; i++) {
-        results.push(generateBoolean(col.generationCode))
+        results.push(generateBoolean(col.boolTrueRatio, col.generationCode))
       }
       break
 

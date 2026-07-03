@@ -356,7 +356,7 @@ export function generateId(format: string, index: number, key: string): string |
 /**
  * Generate a boolean value as 1 or 0.
  */
-export function generateBoolean(code?: string): number {
+export function generateBoolean(trueRatio?: number, code?: string): number {
   if (code) {
     try {
       const result = executeCodeGen(code, {
@@ -373,5 +373,6 @@ export function generateBoolean(code?: string): number {
       // fall through to random
     }
   }
-  return Math.random() > 0.5 ? 1 : 0
+  const ratio = trueRatio != null ? trueRatio / 100 : 0.5
+  return Math.random() < ratio ? 1 : 0
 }

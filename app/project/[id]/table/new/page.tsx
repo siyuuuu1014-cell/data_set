@@ -827,6 +827,18 @@ export default function NewTablePage() {
                       rows={2}
                       className="input-field w-full py-2 text-sm font-mono"
                     />
+                    <div className="flex items-center gap-2 mt-2 pl-1">
+                      <span className="text-xs text-gv-text-muted w-16">True 占比</span>
+                      <input
+                        type="range"
+                        min={0} max={100}
+                        value={col.boolTrueRatio ?? 50}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onChange={(e) => updateCol(col.id, { boolTrueRatio: Number(e.target.value) })}
+                        className="flex-1 accent-gv-pink h-1"
+                      />
+                      <span className="text-xs font-mono text-gv-text w-9 text-right">{col.boolTrueRatio ?? 50}%</span>
+                    </div>
                   </div>
                 )}
 

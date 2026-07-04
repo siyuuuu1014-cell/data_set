@@ -115,8 +115,12 @@ export async function generateColumn(
       break
 
     case 'boolean':
-      for (let i = 0; i < rowCount; i++) {
-        results.push(generateBoolean(col.boolTrueRatio, col.generationCode))
+      if (col.generationCode?.trim()) {
+        results = executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols || []).map(v => v ? 1 : 0)
+      } else {
+        for (let i = 0; i < rowCount; i++) {
+          results.push(generateBoolean(col.boolTrueRatio))
+        }
       }
       break
 
@@ -252,7 +256,7 @@ async function generateDateColumn(
 
 export async function llmGenerateCode(
   prompt: string,
-  type: 'number' | 'date',
+  type: 'number' | 'date' | 'boolean',
   options?: { dateFormat?: string; dateDistribution?: DateRange[] }
 ): Promise<{ code: string | null; error?: string }> {
   // Build format instruction
@@ -322,6 +326,13 @@ Input: "random date from another table's date range"
 Output: (()=>{const p=pick(refData.other_table);return new Date(p.date_col).toISOString().split('T')[0]})()
 
 NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime(). parentRow is null-safe — check before accessing fields. RefData contains rows from referenced tables keyed by table name.${formatInstruction}${distributionInstruction}
+
+BOOLEAN COLUMN RULES (when type=boolean):
+- Return 1 for true, 0 for false
+- Example: "invert is_active" → row.is_active ? 0 : 1
+- Example: "true if parent user is premium" → parentRow.is_premium ? 1 : 0
+- Example: "true 30% of the time" → Math.random() < 0.3 ? 1 : 0
+- Example: "deleted if status is expired" → row.status === 'expired' ? 1 : 0
 
 Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
 

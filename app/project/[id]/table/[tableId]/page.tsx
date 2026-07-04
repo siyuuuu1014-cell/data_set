@@ -153,6 +153,7 @@ export default function TableEditorPage() {
   const [colDragIdx, setColDragIdx] = useState<number | null>(null)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [displayedRows, setDisplayedRows] = useState<Record<string, unknown>[]>(table?.rows || [])
+  const [rowsLoading, setRowsLoading] = useState((table?.rowCount ?? 0) > 0 && (table?.rows.length ?? 0) === 0)
   const [pageSize, setPageSize] = useState(50)
   const [currentPage, setCurrentPage] = useState(1)
   const [generatedColumns, setGeneratedColumns] = useState<Set<string>>(new Set())
@@ -281,9 +282,11 @@ export default function TableEditorPage() {
       .then(data => {
         if (data.rows?.length > 0) {
           setDisplayedRows(data.rows)
+          setTableRows(id, table.id, data.rows)
         }
+        setRowsLoading(false)
       })
-      .catch(() => {})
+      .catch(() => setRowsLoading(false))
   }, [id, table?.name])
 
   const [editMode, setEditMode] = useState(false)
@@ -549,7 +552,7 @@ export default function TableEditorPage() {
               {t('table.export_menu')}
             </button>
             {showExportMenu && (
-              <div ref={exportMenuRef} className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gv-border bg-white shadow-lg z-10 overflow-hidden">
+              <div ref={exportMenuRef} className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gv-border bg-white shadow-lg z-50 overflow-hidden">
                 <button onClick={() => { downloadFile(exportJson(table), `${table.name}.json`, 'application/json'); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">JSON</button>
                 <button onClick={() => { handleExportCsv(); setShowExportMenu(false) }}
@@ -560,8 +563,8 @@ export default function TableEditorPage() {
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">XML</button>
                 <button onClick={() => { downloadFile(exportSql(table), `${table.name}.sql`, 'text/plain'); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">SQL INSERT</button>
-                <a href={`/api/data/download?projectId=${id}&tableName=${encodeURIComponent(table.name)}`} onClick={() => setShowExportMenu(false)}
-                  className="block w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Parquet</a>
+                <button onClick={() => { const a = document.createElement('a'); a.href = `/api/data/download?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`; a.download = `${table.name}.parquet`; document.body.appendChild(a); a.click(); document.body.removeChild(a); setShowExportMenu(false) }}
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Parquet</button>
                 <button onClick={() => { handleExportNuwa(); setShowExportMenu(false) }}
                   className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors border-t border-gv-border/50">{t('table.export_nuwa')}</button>
               </div>
@@ -572,8 +575,8 @@ export default function TableEditorPage() {
 
       {/* Two-column layout */}
       <div className="flex gap-4 items-start">
-        {/* LEFT 1/4 — Column schema + edit */}
-        <div className="w-1/4 flex-shrink-0 space-y-3">
+        {/* LEFT ~30% — Column schema + edit */}
+        <div className="w-[30%] flex-shrink-0 space-y-3">
 
       {editMode ? (
         <div className="card p-4">
@@ -651,9 +654,11 @@ export default function TableEditorPage() {
                       </div>
                     )}
                     <div className="flex gap-2">
-                      <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
+                      <textarea value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
                         placeholder={t('table.number_prompt_placeholder')}
-                        className="flex-1 input-field py-1.5 text-xs" />
+                        rows={1}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
+                        className="flex-1 input-field py-1.5 text-xs font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
@@ -765,9 +770,11 @@ export default function TableEditorPage() {
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
+                      <textarea value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
                         placeholder={t('table.date_prompt_placeholder')}
-                        className="flex-1 input-field py-1.5 text-xs" />
+                        rows={1}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
+                        className="flex-1 input-field py-1.5 text-xs font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
@@ -812,11 +819,74 @@ export default function TableEditorPage() {
                   </div>
                 )}
                 {col.type === 'boolean' && (
-                  <div>
+                  <div className="space-y-2">
+                    <select value={col.foreignTable || ''} onChange={(e) => updateEditCol(col.id, { foreignTable: e.target.value || undefined })}
+                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      <option value="">{t('table.ref_table_boolean')}</option>
+                      {allTables.filter(t => t.id !== table.id).map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                    </select>
+                    {col.foreignTable && (
+                      <div className="flex gap-2">
+                        <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">本表关联列（自动）</option>
+                          {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                        <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
+                          <option value="">外表关联列（默认 id）</option>
+                          {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
+                        </select>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <textarea value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
+                        placeholder={t('table.bool_prompt_placeholder')}
+                        rows={1}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
+                        className="flex-1 input-field py-1.5 text-xs font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
+                      <button type="button"
+                        onClick={async () => {
+                          if (!col.llmPrompt?.trim()) return
+                          updateEditCol(col.id, { generationCode: '...' })
+                          const { llmGenerateCode } = await import('@/services/data-gen')
+                          const result = await llmGenerateCode(col.llmPrompt!.trim(), 'boolean')
+                          updateEditCol(col.id, { generationCode: result.code || `// ${result.error || 'Error'}` })
+                        }}
+                        disabled={!col.llmPrompt?.trim()}
+                        className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        {t('table.ai_gen_code')}
+                      </button>
+                    </div>
                     <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
                       placeholder={t('table.bool_placeholder')}
                       className="input-field w-full py-2 text-sm font-mono" />
-                    <div className="flex items-center gap-2 mt-2 pl-1">
+                    {col.generationCode && col.generationCode !== '...' && (
+                      <button type="button"
+                        onClick={() => {
+                          try {
+                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
+                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
+                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
+                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
+                            const testRow = new Proxy({}, { get: () => Math.random() > 0.5 ? 1 : 0 })
+                            const testParentRow = { id: 1, name: 'test', is_premium: 1 }
+                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
+                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
+                            const results: unknown[] = []
+                            for (let i = 0; i < 5; i++) {
+                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
+                            }
+                            alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v ? '1 (true)' : '0 (false)'}`).join('\n')}`)
+                          } catch (err) {
+                            alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
+                          }
+                        }}
+                        className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
+                        {t('table.test_code')}
+                      </button>
+                    )}
+                    <div className="flex items-center gap-2 pt-1 pl-1">
                       <span className="text-xs text-gv-text-muted w-16">{t('table.bool_true_ratio')}</span>
                       <input
                         type="range"
@@ -901,7 +971,7 @@ export default function TableEditorPage() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gv-text">
               {t('table.columns')}
-              {displayedRows.length > 0 && (
+              {(displayedRows.length > 0 || rowsLoading) && (
                 <span className="ml-2 text-xs font-normal text-gv-text-dim">
                   {t('table.columns_generated', generatedColumns.size, table.columns.length)}
                 </span>
@@ -1051,8 +1121,8 @@ export default function TableEditorPage() {
             className="btn-primary rounded-lg px-4 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
             {generating ? t('table.generating') : t('table.create_empty')}
           </button>
-          {displayedRows.length > 0 && (
-            <span className="text-xs text-gv-text-muted">{displayedRows.length} {t('table.rows')}</span>
+          {(displayedRows.length > 0 || rowsLoading) && (
+            <span className="text-xs text-gv-text-muted">{displayedRows.length > 0 ? displayedRows.length : (table?.rowCount ?? 0)} {t('table.rows')}</span>
           )}
           {!llmConfigured && table.columns.some(c => c.type === 'text') && (
             <Link href="/settings" className="text-xs text-gv-pink hover:underline">{t('table.no_llm')}</Link>
@@ -1068,6 +1138,12 @@ export default function TableEditorPage() {
       {/* Data Table */}
       <div className="card overflow-hidden">
         {displayedRows.length === 0 ? (
+          rowsLoading ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gv-text-dim">
+              <div className="w-8 h-8 border-2 border-gv-pink/30 border-t-gv-pink rounded-full animate-spin mb-3" />
+              <p>{t('app.loading')}</p>
+            </div>
+          ) : (
           <div className="flex flex-col items-center justify-center py-16 text-gv-text-dim">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-gv-pink/10 to-gv-green/10 flex items-center justify-center mb-3 border border-gv-border">
               <svg className="w-6 h-6 text-gv-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1077,7 +1153,8 @@ export default function TableEditorPage() {
             </div>
             <p>{t('table.no_data')}</p>
           </div>
-        ) : (
+        )
+      ) : (
           <>
             <div className="flex items-center justify-between px-4 py-2 border-b border-gv-border/50 bg-gv-bg/50">
               <div className="flex items-center gap-2 text-xs text-gv-text-dim">

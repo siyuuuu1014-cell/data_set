@@ -41,12 +41,13 @@ function saveToStorage(state: StoreState) {
   if (typeof window === 'undefined') return
   try {
     // Strip rows from tables before saving — rows are persisted via API/Parquet
+    // Keep rowCount as a cached hint for the project list page
     const stripped: StoreState = {
       projects: state.projects,
       tables: {},
     }
     for (const [projectId, tableList] of Object.entries(state.tables)) {
-      stripped.tables[projectId] = tableList.map(t => ({ ...t, rows: [] }))
+      stripped.tables[projectId] = tableList.map(t => ({ ...t, rows: [], rowCount: t.rows.length || t.rowCount || 0 }))
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped))
   } catch {

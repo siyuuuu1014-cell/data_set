@@ -47,6 +47,7 @@ export interface TableDef {
   name: string
   columns: ColumnDef[]
   rows: Record<string, unknown>[]
+  rowCount?: number   // cached row count from last save (rows stripped to [] in localStorage)
 }
 
 export interface Project {

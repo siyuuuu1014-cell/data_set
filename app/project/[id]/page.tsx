@@ -3,7 +3,7 @@
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams } from 'next/navigation'
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
 import { exportSql, exportJson, exportCsv, exportXml, exportExcel, downloadFile } from '@/services/export'
 
@@ -20,7 +20,7 @@ const FORMAT_OPTIONS: { value: ExportFormat; label: string; ext: string; mime: s
 
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>()
-  const { getTables, deleteTable, setTables } = useStore()
+  const { getTables, deleteTable, setTables, updateTable } = useStore()
   const { t } = useLang()
   const tables = getTables(id)
   const [orderedTables, setOrderedTables] = useState(tables)
@@ -33,6 +33,30 @@ export default function ProjectPage() {
       setOrderedTables(tables)
     }
   }
+
+  // On mount or when tables change, fetch row counts from Parquet for tables
+  // that show 0 rows (either no cached rowCount or genuinely empty).
+  // Uses the lightweight ?count=true API to avoid loading all data.
+  useEffect(() => {
+    const toCheck: { id: string; name: string }[] = []
+    for (const table of tables) {
+      if ((table.rowCount ?? 0) > 0) continue
+      if (table.columns.length === 0) continue
+      toCheck.push({ id: table.id, name: table.name })
+    }
+    if (toCheck.length === 0) return
+    Promise.allSettled(
+      toCheck.map(async ({ id: tid, name: tableName }) => {
+        const url = `/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(tableName)}&count=true`
+        const res = await fetch(url)
+        if (!res.ok) return
+        const data = await res.json() as { count?: number }
+        if (typeof data.count === 'number' && data.count > 0) {
+          updateTable(id, tid, { rowCount: data.count })
+        }
+      })
+    )
+  }, [id, tables.length])
 
   const [showExport, setShowExport] = useState(false)
   const [exportFormats, setExportFormats] = useState<Record<string, ExportFormat>>({})
@@ -132,7 +156,7 @@ export default function ProjectPage() {
                 <div key={table.id} className="flex items-center justify-between gap-3 py-2 border-b border-gv-border last:border-0">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gv-text truncate">{table.name}</p>
-                    <p className="text-xs text-gv-text-muted">{table.columns.length} {t('project.columns_count')} &middot; {table.rows.length} {t('project.rows_count')}</p>
+                    <p className="text-xs text-gv-text-muted">{table.columns.length} {t('project.columns_count')} &middot; {(table.rowCount ?? table.rows.length)} {t('project.rows_count')}</p>
                   </div>
                   <select
                     value={exportFormats[table.id] || 'json'}
@@ -198,7 +222,7 @@ export default function ProjectPage() {
                     {table.name}
                   </h3>
                   <p className="text-sm text-gv-text-dim mt-1">
-                    {table.columns.length} {t('project.columns_count')} &middot; {table.rows.length} {t('project.rows_count')}
+                    {table.columns.length} {t('project.columns_count')} &middot; {(table.rowCount ?? table.rows.length)} {t('project.rows_count')}
                   </p>
                 </Link>
                 {table.columns.length > 0 && (

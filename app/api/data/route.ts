@@ -1,4 +1,4 @@
-import { writeParquet, readParquet, deleteParquetTable, deleteParquetProject } from '@/services/parquet'
+import { writeParquet, readParquet, countParquet, deleteParquetTable, deleteParquetProject } from '@/services/parquet'
 import type { ColumnDef } from '@/services/types'
 
 // GET ?projectId=X&tableName=Y — read Parquet data
@@ -6,12 +6,17 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const projectId = searchParams.get('projectId')
   const tableName = searchParams.get('tableName')
+  const countOnly = searchParams.get('count') === 'true'
 
   if (!projectId || !tableName) {
     return Response.json({ error: 'Missing params' }, { status: 400 })
   }
 
   try {
+    if (countOnly) {
+      const count = await countParquet(projectId, tableName)
+      return Response.json({ count })
+    }
     const rows = await readParquet(projectId, tableName)
     return Response.json({ rows })
   } catch (err) {

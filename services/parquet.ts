@@ -67,6 +67,16 @@ export async function writeParquet(
         if (col.type === 'boolean') {
           val = val ? 1 : 0
         }
+        // Convert string numbers (from CSV/external import) to proper numbers
+        if (col.type === 'number') {
+          if (typeof val === 'string') {
+            const num = Number(val)
+            val = isNaN(num) ? null : num
+          } else if (typeof val !== 'number' && val !== null && val !== undefined) {
+            const num = Number(val)
+            val = isNaN(num) ? null : num
+          }
+        }
         out[col.name] = val ?? null
       }
       await writer.appendRow(out)
@@ -103,6 +113,28 @@ export async function readParquet(
   }
   await reader.close()
   return rows
+}
+
+/**
+ * Count rows in a Parquet file without loading all data.
+ */
+export async function countParquet(
+  projectId: string,
+  tableName: string
+): Promise<number> {
+  const filePath = join(DATA_DIR, projectId, `${tableName}.parquet`)
+  if (!existsSync(filePath)) {
+    return 0
+  }
+
+  const reader = await parquet.ParquetReader.openFile(filePath)
+  const cursor = reader.getCursor()
+  let count = 0
+  while ((await cursor.next())) {
+    count++
+  }
+  await reader.close()
+  return count
 }
 
 /**

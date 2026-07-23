@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import path from "path";
 
 const nextConfig: NextConfig = {
   // parquetjs lazy-loads lzo for LZO compression, which we never use.

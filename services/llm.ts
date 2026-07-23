@@ -38,7 +38,7 @@ async function postChunk(systemPrompt: string, chunk: string[]): Promise<string[
 
   try {
     return await doFetch()
-  } catch (err) {
+  } catch {
     // Retry once
     try {
       return await doFetch()

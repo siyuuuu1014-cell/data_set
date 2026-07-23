@@ -3,61 +3,34 @@
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import Link from 'next/link'
-import { useState, useEffect } from 'react'
+import { WorkspaceHeader } from '@/components/WorkspaceHeader'
 
 export default function Home() {
   const { projects, deleteProject } = useStore()
   const { t, lang } = useLang()
-  const [llmConfigured, setLlmConfigured] = useState(false)
-
-  useEffect(() => {
-    fetch('/api/llm/config')
-      .then(r => r.json())
-      .then(data => setLlmConfigured(data.configured))
-      .catch(() => {})
-  }, [])
-
   return (
     <div className="flex-1 flex flex-col">
-      <header className="border-b border-gv-border/50">
-        <div className="px-8 py-5 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-md bg-gradient-to-br from-gv-pink to-gv-green flex items-center justify-center shadow shadow-gv-pink/20">
-              <span className="text-white font-bold text-xs">N</span>
-            </div>
-            <h1 className="text-xl font-bold tracking-tight">
-              <span className="gradient-text">{t('app.brand')}</span>
-              <span className="text-gv-text-dim font-normal text-lg ml-1.5 hidden sm:inline">{t('app.subtitle')}</span>
-            </h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full animate-pulse ${llmConfigured ? 'bg-gv-green-deep shadow-[0_0_6px_var(--color-gv-green-glow)]' : 'bg-gv-pink shadow-[0_0_6px_var(--color-gv-pink-glow)]'}`} />
-              <Link
-                href="/settings"
-                className={`text-xs transition-colors ${llmConfigured ? 'text-gv-green-deep hover:text-gv-green-dark' : 'text-gv-pink hover:text-gv-pink-light'}`}
-              >
-                {llmConfigured ? `✓ ${t('app.configured')}` : t('app.unconfigured')}
-              </Link>
-            </div>
-            <Link
-              href="/project/new"
-              className="btn-primary rounded-lg px-4 py-2 text-sm"
-            >
-              + {t('home.new_project')}
-            </Link>
-          </div>
-        </div>
-      </header>
+      <WorkspaceHeader />
 
       <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-gv-text">{t('home.title')}</h2>
-          <p className="text-gv-text-dim text-sm mt-1">
-            {projects.length > 0
-              ? t('app.projects_count', projects.length)
-              : t('home.no_projects_desc')}
-          </p>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs uppercase tracking-[0.18em] text-gv-pink font-semibold">{t('workspace.synthetic')}</span>
+            <span className="h-px flex-1 bg-gv-border/70" />
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold text-gv-text">{t('home.title')}</h2>
+              <p className="text-gv-text-dim text-sm mt-1">
+                {projects.length > 0
+                  ? t('app.projects_count', projects.length)
+                  : t('home.no_projects_desc')}
+              </p>
+            </div>
+            <Link href="/project/new" className="btn-primary rounded-lg px-4 py-2 text-sm inline-flex items-center justify-center flex-shrink-0">
+              + {t('home.new_project')}
+            </Link>
+          </div>
         </div>
 
         {projects.length === 0 ? (

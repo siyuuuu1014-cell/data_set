@@ -7,6 +7,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { useState, useEffect, useRef } from 'react'
 import type { ColumnDef, ColumnType, IdFormat, PhoneCountry, DateFormat, DateRange } from '@/services/types'
 import Link from 'next/link'
+import { previewGenerationExpression } from '@/services/expression-preview'
 
 let _colIdCounter = Date.now()
 function genColId(): string {
@@ -147,6 +148,7 @@ export default function NewTablePage() {
   const [columns, setColumns] = useState<ColumnDef[]>([emptyColumn()])
   const [error, setError] = useState('')
   const [llmConfigured, setLlmConfigured] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [imageUploading, setImageUploading] = useState(false)
   const [importingNuwa, setImportingNuwa] = useState(false)
   const [importedRows, setImportedRows] = useState<Record<string, unknown>[]>([])
@@ -344,6 +346,7 @@ export default function NewTablePage() {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -658,18 +661,7 @@ export default function NewTablePage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => new Date() })
-                            const testParentRow = { id: 1, name: 'test', price: 100 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!)
                             alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
                             alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
@@ -793,18 +785,7 @@ export default function NewTablePage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => new Date() })
-                            const testParentRow = { id: 1, name: 'test', price: 100 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!)
                             alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
                             alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)

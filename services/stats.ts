@@ -256,10 +256,10 @@ function computeDateStats(values: unknown[]): DateStats {
   }
 
   parsed.sort((a, b) => a.d.getTime() - b.d.getTime())
-  const min = String(values[0])
-  const max = String(values[values.length - 1])
   const minD = parsed[0].d
   const maxD = parsed[parsed.length - 1].d
+
+  // ── by month ──
   const spanDays = Math.round((maxD.getTime() - minD.getTime()) / 86400000)
 
   // Monthly distribution

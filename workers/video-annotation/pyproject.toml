@@ -1,0 +1,83 @@
+[project]
+name = "nuwa-video-annotation-worker"
+version = "0.1.0"
+description = "Python GPU worker for video annotation pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "pydantic>=2,<3",
+    "huggingface-hub>=0.27,<2",
+    "scenedetect>=0.6,<1",
+    "opencv-python>=4.10,<5",
+]
+
+[project.optional-dependencies]
+detect = [
+    "numpy>=2,<3",
+    "pillow>=10,<13",
+    "torch>=2.4,<3",
+    "torchvision>=0.19,<1",
+    "ultralytics>=8.3,<9",
+]
+semantic = [
+    "numpy>=2,<3",
+    "pillow>=10,<13",
+    "torch>=2.4,<3",
+    "transformers>=4.46,<6",
+    "accelerate>=1,<2",
+    "qwen-vl-utils[decord]>=0.0.8,<1",
+    "timm>=0.9,<2",
+    "json-repair>=0.30,<1",
+]
+grounding = [
+    "pillow>=10,<13",
+    "torch>=2.4,<3",
+    "transformers>=4.46,<6",
+    "accelerate>=1,<2",
+    "timm>=0.9,<2",
+]
+ocr = [
+    "pillow>=10,<13",
+    "torch>=2.4,<3",
+    "transformers>=4.46,<6",
+]
+audio = [
+    "numpy>=2,<3",
+    "torch>=2.4,<3",
+    "transformers>=4.46,<6",
+    "scipy>=1.12,<2",
+]
+depth = [
+    "numpy>=2,<3",
+    "pillow>=10,<13",
+    "torch>=2.4,<3",
+    "transformers>=4.46,<6",
+]
+full = [
+    "numpy>=2,<3",
+    "pillow>=10,<13",
+    "torch>=2.4,<3",
+    "torchvision>=0.19,<1",
+    "transformers>=4.46,<6",
+    "accelerate>=1,<2",
+    "qwen-vl-utils[decord]>=0.0.8,<1",
+    "timm>=0.9,<2",
+    "ultralytics>=8.3,<9",
+    "scipy>=1.12,<2",
+    "json-repair>=0.30,<1",
+]
+
+[project.scripts]
+nuwa-worker = "nuwa_worker.cli:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["app", "config", "logging_utils", "pipeline", "worker"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nuwa_worker*", "providers*", "services*"]

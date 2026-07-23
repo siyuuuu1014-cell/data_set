@@ -49,3 +49,20 @@ next-env.d.ts
 .claude/
 CLAUDE.md
 AGENTS.md
+
+# Video annotation
+data/video-annotations/
+workers/video-annotation/.venv/
+workers/video-annotation/worker.env
+workers/video-annotation/__pycache__/
+workers/video-annotation/models/
+workers/video-annotation/cache/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.safetensors
+*.pt
+*.pth
+*.onnx

@@ -1,6 +1,7 @@
 import type { ColumnDef, DateRange, TableDef } from './types'
 import { callLlm, callLlmBatch } from './llm'
-import { generateDate, generateBoolean, generateId, resetAutoIncrement, formatDate, generateDateFromDistribution, generatePhone, generateCity, type CodeGenContext } from './code-gen'
+import { generateDate, generateBoolean, generateId, resetAutoIncrement, generateDateFromDistribution, generatePhone, generateCity, formatDate } from './code-gen'
+import { compileSafeExpression } from './safe-expression'
 
 export interface GenOptions {
   rowCount: number
@@ -272,13 +273,13 @@ export async function llmGenerateCode(
     unix_ms: 'Unix timestamp in milliseconds',
   }
   const DATE_FORMAT_CODE: Record<string, string> = {
-    date: ".toISOString().split('T')[0]",
-    datetime: ".toISOString().replace('T',' ').slice(0,19)",
-    date_slash: ".toISOString().split('T')[0].replace(/-/g,'/')",
-    date_us: ".toISOString().split('T')[0].replace(/(\\d{4})-(\\d{2})-(\\d{2})/,'$2/$3/$1')",
-    date_eu: ".toISOString().split('T')[0].replace(/(\\d{4})-(\\d{2})-(\\d{2})/,'$3-$2-$1')",
-    time: ".toISOString().split('T')[1].split('.')[0]",
-    iso: ".toISOString()",
+    date: "formatDate(new Date(...),'date')",
+    datetime: "formatDate(new Date(...),'datetime')",
+    date_slash: "formatDate(new Date(...),'date_slash')",
+    date_us: "formatDate(new Date(...),'date_us')",
+    date_eu: "formatDate(new Date(...),'date_eu')",
+    time: "new Date(...).toISOString().split('T')[1].split('.')[0]",
+    iso: "new Date(...).toISOString()",
     unix_s: "Math.floor(new Date(...).getTime()/1000)",
     unix_ms: "new Date(...).getTime()",
   }
@@ -296,15 +297,17 @@ export async function llmGenerateCode(
       .filter(r => r.ratio > 0)
       .map(r => `  "${r.label}" (${r.minDays}-${r.maxDays > 0 ? r.maxDays : r.minDays + 365} days ago): weight=${r.ratio}`)
       .join('\n')
-    distributionInstruction = `\nDATE DISTRIBUTION (weighted random — first pick a range by weight, then generate within it):\n${ranges}\nPattern: pick a weighted range with Math.random()*totalWeight, subtract each weight until <=0, then generate a random date inside that range's [minDays, maxDays] bounds.`
+    distributionInstruction = `\nDATE DISTRIBUTION (weighted random):\n${ranges}\nUse dateFromDistribution() to apply these configured weights and the selected output format. Do not reimplement the weighting logic.`
   }
 
-  const systemPrompt = `You are a JavaScript expression generator. Respond with EXACTLY ONE LINE of valid JavaScript and NOTHING ELSE — no words, no markdown, no explanation.
+  const systemPrompt = `You are a Nuwa generator-expression author. Respond with EXACTLY ONE LINE containing ONE side-effect-free expression and NOTHING ELSE — no words, no markdown, no explanation.
 
-Available functions: randomInt(min,max) randomFloat(min,max) pick(array)
+Available functions: randomInt(min,max) randomFloat(min,max) pick(array) formatDate(date,format) dateFromDistribution()
 Available variables: index totalRows previousValues refData row parentRow
 row = values from earlier columns in the same row, e.g. row.quantity
 parentRow = the matching parent table row (auto-resolved via FK), e.g. parentRow.price — null if no FK match or no foreignTable set
+Allowed syntax: literals, arrays, arithmetic/comparison/logical/ternary operators, property/index access, approved Math/String/Array/Date methods, and new Date(...).
+Forbidden syntax: statements, const/let/var, assignments, function or arrow definitions, IIFEs, loops, object literals, regular expressions, and access to JavaScript globals.
 
 EXAMPLES:
 Input: "random age 18-65"
@@ -317,13 +320,13 @@ Input: "total price = product price * quantity, FK to products table"
 Output: parentRow.price * row.quantity
 
 Input: "random date in last 30 days"
-Output: new Date(Date.now()-randomInt(0,30)*86400000).toISOString().split('T')[0]
+Output: formatDate(new Date(Date.now()-randomInt(0,30)*86400000),'date')
 
 Input: "end date after start_date by 1-30 days"
-Output: new Date(new Date(row.start_date).getTime()+randomInt(1,30)*86400000).toISOString().split('T')[0]
+Output: formatDate(new Date(new Date(row.start_date).getTime()+randomInt(1,30)*86400000),'date')
 
 Input: "random date from another table's date range"
-Output: (()=>{const p=pick(refData.other_table);return new Date(p.date_col).toISOString().split('T')[0]})()
+Output: formatDate(new Date(pick(refData.other_table).date_col),'date')
 
 NOTE: row values are strings (from date columns) or numbers. Always wrap in new Date() before calling .getTime(). parentRow is null-safe — check before accessing fields. RefData contains rows from referenced tables keyed by table name.${formatInstruction}${distributionInstruction}
 
@@ -369,7 +372,7 @@ Remember: ONE LINE ONLY. No backticks. No English words. Just the expression.`
 /** Try to extract a valid JS expression from raw LLM output. */
 function extractExpression(raw: string): { code: string | null; error?: string } {
   // Step 1: unwrap markdown code blocks
-  let text = raw.replace(/```(?:javascript|js)?\s*([\s\S]*?)```/g, '$1').trim()
+  const text = raw.replace(/```(?:javascript|js)?\s*([\s\S]*?)```/g, '$1').trim()
 
   // Step 2: split into lines, filter out common natural-language prefixes
   const lines = text.split('\n').map(l =>
@@ -390,10 +393,9 @@ function extractExpression(raw: string): { code: string | null; error?: string }
   if (backtickMatch) candidates.unshift(backtickMatch[1].trim())
 
   for (const candidate of candidates) {
-    const expr = candidate.includes('return ') ? candidate : `return (${candidate})`
-    // Syntax check
+    let evaluateExpression: ((context: Record<string, unknown>) => unknown) | null = null
     try {
-      new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow', expr)
+      evaluateExpression = compileSafeExpression(candidate)
     } catch {
       continue
     }
@@ -408,10 +410,22 @@ function extractExpression(raw: string): { code: string | null; error?: string }
       // Proxy row returns Date objects for any field name (so row.xxx.getTime() works)
       const testRow = new Proxy({} as Record<string, unknown>, {
         get: () => new Date(),
+        getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true, value: new Date() }),
       })
       const testParentRow = { id: 1, name: 'test', price: 100 }
-      const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow', expr) as (...args: unknown[]) => unknown
-      fn(0, 1, [], testRefData, testRow, (a: number, b: number) => a, (a: number, b: number) => a, testPick, testParentRow)
+      evaluateExpression({
+        index: 0,
+        totalRows: 1,
+        previousValues: [],
+        refData: testRefData,
+        row: testRow,
+        randomInt: (a: number, _b: number) => a,
+        randomFloat: (a: number, _b: number) => a,
+        pick: testPick,
+        parentRow: testParentRow,
+        formatDate,
+        dateFromDistribution: () => formatDate(new Date(), 'date'),
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       // This candidate failed, try the next one
@@ -456,14 +470,9 @@ function executeColumnCode(
     }
   }
 
-  const expression = code.includes('return ') ? code : `return (${code})`
-  let fn: ((...args: unknown[]) => unknown) | null = null
+  let evaluateExpression: ((context: Record<string, unknown>) => unknown) | null = null
   try {
-    fn = new Function(
-      'index', 'totalRows', 'previousValues', 'refData', 'row',
-      'randomInt', 'randomFloat', 'pick', 'parentRow',
-      expression
-    ) as (...args: unknown[]) => unknown
+    evaluateExpression = compileSafeExpression(code)
   } catch {
     return new Array(rowCount).fill(null)
   }
@@ -472,6 +481,11 @@ function executeColumnCode(
     randomInt: (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min,
     randomFloat: (min: number, max: number) => Math.random() * (max - min) + min,
     pick: <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)],
+    formatDate,
+    dateFromDistribution: () => generateDateFromDistribution(
+      col.dateDistribution || [],
+      col.dateFormat || 'date'
+    ),
   }
 
   const results: unknown[] = []
@@ -492,10 +506,19 @@ function executeColumnCode(
     }
 
     try {
-      const val = fn(
-        i, rowCount, results, refData, row,
-        helpers.randomInt, helpers.randomFloat, helpers.pick, parentRow
-      )
+      const val = evaluateExpression({
+        index: i,
+        totalRows: rowCount,
+        previousValues: results,
+        refData,
+        row,
+        randomInt: helpers.randomInt,
+        randomFloat: helpers.randomFloat,
+        pick: helpers.pick,
+        parentRow,
+        formatDate: helpers.formatDate,
+        dateFromDistribution: helpers.dateFromDistribution,
+      })
       results.push(val)
     } catch (err) {
       console.error(`[code exec] ${col.name} row ${i}:`, err)

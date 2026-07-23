@@ -1,15 +1,29 @@
 /**
  * Server-side Parquet read/write using parquetjs.
+ * Falls back to Python (pandas) for files written by pyarrow/pandas.
  * Only used in API routes (server-side, not client).
  */
 
 import { mkdirSync, existsSync, unlinkSync, rmdirSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { execFileSync } from 'child_process'
 import type { ColumnDef } from './types'
+import { assertSafeFileStem, assertSafeIdentifier, resolveWithin } from './server-paths'
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const parquet = require('parquetjs')
 
 const DATA_DIR = join(process.cwd(), 'generated_data')
+
+function getProjectDir(projectId: string): string {
+  assertSafeIdentifier(projectId, 'project ID')
+  return resolveWithin(DATA_DIR, projectId)
+}
+
+function getParquetPath(projectId: string, tableName: string): string {
+  assertSafeFileStem(tableName, 'table name')
+  return resolveWithin(getProjectDir(projectId), `${tableName}.parquet`)
+}
 
 function ensureDir(dir: string) {
   if (!existsSync(dir)) {
@@ -20,7 +34,7 @@ function ensureDir(dir: string) {
 function typeToParquet(colType: string): string {
   switch (colType) {
     case 'number': return 'DOUBLE'
-    case 'boolean': return 'INT64'  // store 0/1 as int
+    case 'boolean': return 'INT64'
     case 'date': return 'UTF8'
     case 'foreign_key':
     case 'foreign_key_array': return 'UTF8'
@@ -36,21 +50,33 @@ function buildParquetSchema(columns: ColumnDef[]): Record<string, { type: string
   return schema
 }
 
-/**
- * Write rows to a Parquet file.
- * Path: generated_data/{projectId}/{tableName}.parquet
- */
+export async function readParquetViaPython(filePath: string): Promise<Record<string, unknown>[]> {
+  try {
+    const python = process.platform === 'win32' ? 'python' : 'python3'
+    const script = "import pandas as pd,json,sys; df=pd.read_parquet(sys.argv[1]); print(json.dumps(df.where(pd.notna(df),None).to_dict(orient='records'), default=str))"
+    const output = execFileSync(python, ['-c', script, filePath], {
+      encoding: 'utf-8',
+      timeout: 30000,
+      maxBuffer: 50 * 1024 * 1024,
+      windowsHide: true,
+    })
+    return JSON.parse(output) as Record<string, unknown>[]
+  } catch (e) {
+    console.error('[parquet] Python fallback failed:', e)
+    return []
+  }
+}
+
 export async function writeParquet(
   projectId: string,
   tableName: string,
   columns: ColumnDef[],
   rows: Record<string, unknown>[]
 ): Promise<string> {
-  const dir = join(DATA_DIR, projectId)
+  const dir = getProjectDir(projectId)
   ensureDir(dir)
-  const filePath = join(dir, `${tableName}.parquet`)
+  const filePath = getParquetPath(projectId, tableName)
 
-  // Delete existing file first — avoid truncation issues with parquetjs
   if (existsSync(filePath)) {
     unlinkSync(filePath)
   }
@@ -63,28 +89,17 @@ export async function writeParquet(
       const out: Record<string, unknown> = {}
       for (const col of columns) {
         let val = row[col.name]
-        // Convert booleans to 0/1
-        if (col.type === 'boolean') {
-          val = val ? 1 : 0
-        }
-        // Convert string numbers (from CSV/external import) to proper numbers
+        if (col.type === 'boolean') val = val ? 1 : 0
         if (col.type === 'number') {
-          if (typeof val === 'string') {
-            const num = Number(val)
-            val = isNaN(num) ? null : num
-          } else if (typeof val !== 'number' && val !== null && val !== undefined) {
-            const num = Number(val)
-            val = isNaN(num) ? null : num
-          }
+          if (typeof val === 'string') { const num = Number(val); val = isNaN(num) ? null : num }
+          else if (typeof val !== 'number' && val !== null && val !== undefined) { const num = Number(val); val = isNaN(num) ? null : num }
         }
         out[col.name] = val ?? null
       }
       await writer.appendRow(out)
     }
-
     await writer.close()
   } catch (err) {
-    // Clean up partial file on failure
     try { await writer.close() } catch {}
     try { unlinkSync(filePath) } catch {}
     throw err
@@ -92,95 +107,53 @@ export async function writeParquet(
   return filePath
 }
 
-/**
- * Read rows from a Parquet file.
- */
 export async function readParquet(
   projectId: string,
   tableName: string
 ): Promise<Record<string, unknown>[]> {
-  const filePath = join(DATA_DIR, projectId, `${tableName}.parquet`)
-  if (!existsSync(filePath)) {
-    return []
-  }
+  const filePath = getParquetPath(projectId, tableName)
+  if (!existsSync(filePath)) return []
 
-  const reader = await parquet.ParquetReader.openFile(filePath)
-  const cursor = reader.getCursor()
-  const rows: Record<string, unknown>[] = []
-  let row = null
-  while ((row = await cursor.next())) {
-    rows.push(row)
+  // Try parquetjs first, fall back to Python for externally-written files
+  try {
+    const reader = await parquet.ParquetReader.openFile(filePath)
+    const cursor = reader.getCursor()
+    const rows: Record<string, unknown>[] = []
+    let row = null
+    while ((row = await cursor.next())) rows.push(row)
+    await reader.close()
+    if (rows.length > 0 && Object.keys(rows[0]).length > 0) return rows
+    // Empty objects — file was written by pandas/pyarrow, fall through to Python
+  } catch {
+    // parquetjs failed completely — fall through to Python
   }
-  await reader.close()
-  return rows
+  return readParquetViaPython(filePath)
 }
 
-/**
- * Count rows in a Parquet file without loading all data.
- */
-export async function countParquet(
-  projectId: string,
-  tableName: string
-): Promise<number> {
-  const filePath = join(DATA_DIR, projectId, `${tableName}.parquet`)
-  if (!existsSync(filePath)) {
-    return 0
-  }
-
-  const reader = await parquet.ParquetReader.openFile(filePath)
-  const cursor = reader.getCursor()
-  let count = 0
-  while ((await cursor.next())) {
-    count++
-  }
-  await reader.close()
-  return count
+export async function countParquet(projectId: string, tableName: string): Promise<number> {
+  const rows = await readParquet(projectId, tableName)
+  return rows.length
 }
 
-/**
- * Check if Parquet data exists for a table.
- */
 export function parquetExists(projectId: string, tableName: string): boolean {
-  return existsSync(join(DATA_DIR, projectId, `${tableName}.parquet`))
+  return existsSync(getParquetPath(projectId, tableName))
 }
 
-/**
- * Delete a single table's Parquet file.
- */
 export function deleteParquetTable(projectId: string, tableName: string): void {
-  const filePath = join(DATA_DIR, projectId, `${tableName}.parquet`)
-  if (existsSync(filePath)) {
-    unlinkSync(filePath)
-  }
-  // If the project directory is now empty, remove it too
-  const dir = join(DATA_DIR, projectId)
+  const filePath = getParquetPath(projectId, tableName)
+  if (existsSync(filePath)) unlinkSync(filePath)
+  const dir = getProjectDir(projectId)
   if (existsSync(dir)) {
-    try {
-      const remaining = readdirSync(dir)
-      if (remaining.length === 0) {
-        rmdirSync(dir)
-      }
-    } catch {
-      // directory not empty or permissions issue — leave it
-    }
+    try { if (readdirSync(dir).length === 0) rmdirSync(dir) } catch {}
   }
 }
 
-/**
- * Delete a project's entire data directory (all tables).
- */
 export function deleteParquetProject(projectId: string): void {
-  const dir = join(DATA_DIR, projectId)
+  const dir = getProjectDir(projectId)
   if (existsSync(dir)) {
-    // Remove all files in the directory first, then the directory itself
     try {
-      const files = readdirSync(dir)
-      for (const f of files) {
-        unlinkSync(join(dir, f))
-      }
+      for (const f of readdirSync(dir)) unlinkSync(join(dir, f))
       rmdirSync(dir)
-    } catch (err) {
-      console.error(`[parquet] failed to delete project ${projectId}:`, err)
-    }
+    } catch (err) { console.error(`[parquet] failed to delete project ${projectId}:`, err) }
   }
 }

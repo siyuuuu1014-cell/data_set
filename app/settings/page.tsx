@@ -4,6 +4,7 @@ import { useLang } from '@/services/i18n'
 import Link from 'next/link'
 import { useState, useEffect } from 'react'
 import type { ApiFormat } from '@/services/types'
+import { VideoDeploymentSettings } from '@/components/video-annotation/VideoDeploymentSettings'
 
 const PROVIDERS = [
   { name: 'DeepSeek (Anthropic)', baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', apiFormat: 'anthropic' as ApiFormat },
@@ -103,20 +104,22 @@ export default function SettingsPage() {
             </svg>
           </Link>
           <h1 className="text-lg font-semibold text-gv-text">{t('settings.title')}</h1>
-          {hasApiKey && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gv-green-deep/20 text-gv-green-deep font-medium">
-              {t('app.configured')}
-            </span>
-          )}
         </div>
       </header>
 
-      <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-4">
-        <p className="text-sm text-gv-text-dim mb-4">
+      <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-6">
+        <p className="text-sm text-gv-text-dim mb-6">
           {t('settings.description')}
         </p>
 
-        <div className="space-y-5">
+        <div className="space-y-6">
+          <section className="card p-5 sm:p-6">
+            <div className="mb-5">
+              <h2 className="text-base font-semibold text-gv-text">{t('settings.llm_section')}</h2>
+              <p className="text-sm text-gv-text-dim mt-1">{t('settings.llm_description')}</p>
+            </div>
+
+            <div className="space-y-5">
           {/* Provider presets */}
           <div>
             <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.select_provider')}</label>
@@ -237,6 +240,10 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+            </div>
+          </section>
+
+          <VideoDeploymentSettings />
         </div>
       </main>
     </div>

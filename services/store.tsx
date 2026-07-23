@@ -2,10 +2,12 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import type { Project, TableDef } from './types'
+import type { AnnotateSet } from './video-annotation/types'
 
 interface StoreState {
   projects: Project[]
   tables: Record<string, TableDef[]>
+  annotateSets: Record<string, AnnotateSet[]>  // projectId → sets
 }
 
 interface StoreContextValue extends StoreState {
@@ -18,42 +20,61 @@ interface StoreContextValue extends StoreState {
   deleteTable: (projectId: string, tableId: string) => void
   setTableRows: (projectId: string, tableId: string, rows: Record<string, unknown>[]) => void
   setTables: (projectId: string, tables: TableDef[]) => void
+
+  // ── Annotate sets ──────────────────────────────────────
+  getAnnotateSets: (projectId: string) => AnnotateSet[]
+  addAnnotateSet: (projectId: string, set: AnnotateSet) => void
+  updateAnnotateSet: (projectId: string, setId: string, updates: Partial<AnnotateSet>) => void
+  deleteAnnotateSet: (projectId: string, setId: string) => void
+  setAnnotateSets: (projectId: string, sets: AnnotateSet[]) => void
 }
 
 const STORAGE_KEY = 'nuwa-store'
 
+const INITIAL_STATE: StoreState = { projects: [], tables: {}, annotateSets: {} }
+
 function loadFromStorage(): StoreState {
   if (typeof window === 'undefined') {
-    return { projects: [], tables: {} }
+    return INITIAL_STATE
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
-      return JSON.parse(raw)
+      const parsed = JSON.parse(raw)
+      return {
+        projects: parsed.projects || [],
+        tables: parsed.tables || {},
+        annotateSets: parsed.annotateSets || {},
+      }
     }
   } catch {
     // ignore parse errors
   }
-  return { projects: [], tables: {} }
+  return INITIAL_STATE
 }
 
 function saveToStorage(state: StoreState) {
   if (typeof window === 'undefined') return
   try {
-    // Strip rows from tables before saving — rows are persisted via API/Parquet
-    // Keep rowCount as a cached hint for the project list page
+    // Strip large payloads before saving to localStorage
     const stripped: StoreState = {
       projects: state.projects,
       tables: {},
+      annotateSets: {},
     }
     for (const [projectId, tableList] of Object.entries(state.tables)) {
       stripped.tables[projectId] = tableList.map(t => ({ ...t, rows: [], rowCount: t.rows.length || t.rowCount || 0 }))
     }
+    for (const [projectId, sets] of Object.entries(state.annotateSets)) {
+      stripped.annotateSets[projectId] = sets.map(s => ({
+        ...s,
+        videos: s.videos.map(v => ({ ...v, segments: [], uploadProgress: 0 })),
+      }))
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped))
   } catch {
-    // localStorage full or unavailable — alert user once per session
-    if (typeof window !== 'undefined' && !(window as any).__nuwa_storage_warned) {
-      (window as any).__nuwa_storage_warned = true
+    if (typeof window !== 'undefined' && !(window as Window & { __nuwa_storage_warned?: boolean }).__nuwa_storage_warned) {
+      (window as Window & { __nuwa_storage_warned?: boolean }).__nuwa_storage_warned = true
       alert('存储空间不足，数据可能无法保存。请导出数据后清理旧项目。')
     }
   }
@@ -67,16 +88,22 @@ function genId(): string {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<StoreState>({ projects: [], tables: {} })
+  const [state, setState] = useState<StoreState>(INITIAL_STATE)
+  const hydratedRef = React.useRef(false)
 
-  // Hydrate from localStorage on mount
+  // Hydrate from localStorage on mount — one-time, intentional
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setState(loadFromStorage())
+    hydratedRef.current = true
   }, [])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Persist on change
+  // Persist on change — skip when store is empty (prevents accidental wipe)
   useEffect(() => {
-    saveToStorage(state)
+    if (hydratedRef.current && (state.projects.length > 0 || Object.keys(state.tables).length > 0 || Object.keys(state.annotateSets).length > 0)) {
+      saveToStorage(state)
+    }
   }, [state])
 
   const addProject = useCallback((name: string): Project => {
@@ -88,18 +115,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({
       projects: [...prev.projects, project],
       tables: { ...prev.tables, [project.id]: [] },
+      annotateSets: { ...prev.annotateSets, [project.id]: [] },
     }))
     return project
   }, [])
 
   const deleteProject = useCallback((id: string) => {
-    // Fire-and-forget: delete Parquet files from disk
     fetch(`/api/data?projectId=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
     setState(prev => {
-      const { [id]: _, ...rest } = prev.tables
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { [id]: _t, ...restTables } = prev.tables
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { [id]: _a, ...restAnnotate } = prev.annotateSets
       return {
         projects: prev.projects.filter(p => p.id !== id),
-        tables: rest,
+        tables: restTables,
+        annotateSets: restAnnotate,
       }
     })
   }, [])
@@ -110,6 +141,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       projects: prev.projects.map(p => (p.id === id ? { ...p, ...updates } : p)),
     }))
   }, [])
+
+  // ── Tables ─────────────────────────────────────────────
 
   const getTables = useCallback((projectId: string): TableDef[] => {
     return state.tables[projectId] || []
@@ -146,7 +179,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const deleteTable = useCallback((projectId: string, tableId: string) => {
     setState(prev => {
-      // Look up the table name for Parquet file deletion
       const tables = prev.tables[projectId] || []
       const table = tables.find(t => t.id === tableId)
       if (table) {
@@ -174,6 +206,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }))
   }, [])
 
+  // ── Annotate sets ──────────────────────────────────────
+
+  const getAnnotateSets = useCallback((projectId: string): AnnotateSet[] => {
+    return state.annotateSets[projectId] || []
+  }, [state.annotateSets])
+
+  const addAnnotateSet = useCallback((projectId: string, set: AnnotateSet) => {
+    setState(prev => ({
+      ...prev,
+      annotateSets: {
+        ...prev.annotateSets,
+        [projectId]: [...(prev.annotateSets[projectId] || []), set],
+      },
+    }))
+  }, [])
+
+  const updateAnnotateSet = useCallback((projectId: string, setId: string, updates: Partial<AnnotateSet>) => {
+    setState(prev => ({
+      ...prev,
+      annotateSets: {
+        ...prev.annotateSets,
+        [projectId]: (prev.annotateSets[projectId] || []).map(s =>
+          s.id === setId ? { ...s, ...updates } : s
+        ),
+      },
+    }))
+  }, [])
+
+  const deleteAnnotateSet = useCallback((projectId: string, setId: string) => {
+    setState(prev => ({
+      ...prev,
+      annotateSets: {
+        ...prev.annotateSets,
+        [projectId]: (prev.annotateSets[projectId] || []).filter(s => s.id !== setId),
+      },
+    }))
+  }, [])
+
+  const setAnnotateSets = useCallback((projectId: string, sets: AnnotateSet[]) => {
+    setState(prev => ({
+      ...prev,
+      annotateSets: { ...prev.annotateSets, [projectId]: sets },
+    }))
+  }, [])
+
   return (
     <StoreContext.Provider
       value={{
@@ -187,6 +264,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         deleteTable,
         setTableRows,
         setTables,
+        getAnnotateSets,
+        addAnnotateSet,
+        updateAnnotateSet,
+        deleteAnnotateSet,
+        setAnnotateSets,
       }}
     >
       {children}

@@ -10,6 +10,7 @@ import type { ColumnDef, ColumnType, IdFormat, DateFormat, DateRange, PhoneCount
 import { generateColumn } from '@/services/data-gen'
 import { exportSql, exportJson, exportCsv, exportXml, exportExcel, downloadFile } from '@/services/export'
 import { computeColumnStats, type ColumnStats, type NumStats, type TextStats, type DateStats, type BoolStats, type IdStats, type FkStats, type PhoneStats, type CityStats } from '@/services/stats'
+import { previewGenerationExpression } from '@/services/expression-preview'
 
 let _colIdCounter = Date.now()
 function genColId(): string { return 'col_' + (_colIdCounter++).toString(36) }
@@ -153,12 +154,13 @@ export default function TableEditorPage() {
   const [colDragIdx, setColDragIdx] = useState<number | null>(null)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [displayedRows, setDisplayedRows] = useState<Record<string, unknown>[]>(table?.rows || [])
-  const [rowsLoading, setRowsLoading] = useState((table?.rowCount ?? 0) > 0 && (table?.rows.length ?? 0) === 0)
+  const [rowsLoading, setRowsLoading] = useState((table?.rowCount ?? 0) !== 0 && (table?.rows.length ?? 0) === 0)
   const [pageSize, setPageSize] = useState(50)
   const [currentPage, setCurrentPage] = useState(1)
   const [generatedColumns, setGeneratedColumns] = useState<Set<string>>(new Set())
 
   const [llmConfigured, setLlmConfigured] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [imageUploading, setImageUploading] = useState(false)
   const [importingNuwa, setImportingNuwa] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -283,11 +285,24 @@ export default function TableEditorPage() {
         if (data.rows?.length > 0) {
           setDisplayedRows(data.rows)
           setTableRows(id, table.id, data.rows)
+          // Auto-extract column names from first row if none configured
+          if ((table.columns || []).length === 0) {
+            const cols = Object.keys(data.rows[0]).map(name => ({
+              id: name + '_col',
+              name,
+              type: 'text' as const,
+              llmPrompt: '',
+              generationCode: '',
+            }))
+            updateTable(id, table.id, { columns: cols, rowCount: data.rows.length })
+          } else if (table.rowCount === -1) {
+            updateTable(id, table.id, { rowCount: data.rows.length })
+          }
         }
         setRowsLoading(false)
       })
       .catch(() => setRowsLoading(false))
-  }, [id, table?.name])
+  }, [id, table?.name])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const [editMode, setEditMode] = useState(false)
   const [editName, setEditName] = useState(table?.name || '')
@@ -420,6 +435,7 @@ export default function TableEditorPage() {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -680,18 +696,7 @@ export default function TableEditorPage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => new Date() })
-                            const testParentRow = { id: 1, name: 'test', price: 100 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!)
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
                             alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
@@ -795,18 +800,7 @@ export default function TableEditorPage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => new Date() })
-                            const testParentRow = { id: 1, name: 'test', price: 100 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!)
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
                             alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
@@ -865,18 +859,7 @@ export default function TableEditorPage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => Math.random() > 0.5 ? 1 : 0 })
-                            const testParentRow = { id: 1, name: 'test', is_premium: 1 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!, 'boolean')
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v ? '1 (true)' : '0 (false)'}`).join('\n')}`)
                           } catch (err) {
                             alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)

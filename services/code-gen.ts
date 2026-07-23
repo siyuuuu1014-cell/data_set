@@ -1,11 +1,11 @@
 /**
- * Safe code execution for numeric data generation.
- * Executes user-provided code in a sandboxed new Function context,
- * providing row index and existing data access.
+ * Safe expression execution for numeric data generation.
+ * Expressions are parsed and interpreted without access to JavaScript globals.
  */
 
 import type { DateRange } from './types'
 import { CITY_DATA } from './city-data'
+import { evaluateSafeExpression } from './safe-expression'
 
 export interface CodeGenContext {
   /** Current row index (0-based) */
@@ -25,37 +25,27 @@ export interface CodeGenContext {
 }
 
 export function executeCodeGen(code: string, context: CodeGenContext): unknown {
-  // Helper functions available in sandbox
   const helpers = {
     randomInt: (min: number, max: number) =>
       Math.floor(Math.random() * (max - min + 1)) + min,
     randomFloat: (min: number, max: number) =>
       Math.random() * (max - min) + min,
     pick: <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)],
+    formatDate,
+    dateFromDistribution: () => formatDate(new Date(), 'date'),
   }
 
-  // Important: pass context properties explicitly, not the context object itself
-  // to avoid exposing internal references
-  const fn = new Function(
-    'index',
-    'totalRows',
-    'previousValues',
-    'refData',
-    'randomInt',
-    'randomFloat',
-    'pick',
-    code.includes('return ') ? code : `return (${code})`
-  )
-
-  return fn(
-    context.index,
-    context.totalRows,
-    context.previousValues,
-    context.refData,
-    helpers.randomInt,
-    helpers.randomFloat,
-    helpers.pick
-  )
+  return evaluateSafeExpression(code, {
+    index: context.index,
+    totalRows: context.totalRows,
+    previousValues: context.previousValues,
+    refData: context.refData,
+    randomInt: helpers.randomInt,
+    randomFloat: helpers.randomFloat,
+    pick: helpers.pick,
+    formatDate: helpers.formatDate,
+    dateFromDistribution: helpers.dateFromDistribution,
+  })
 }
 
 /**
@@ -100,6 +90,8 @@ export function formatDate(d: Date, format: string): string {
       return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()}`
     case 'date_eu':
       return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`
+    case 'time':
+      return d.toISOString().split('T')[1].split('.')[0]
     case 'unix_s':
       return String(Math.floor(d.getTime() / 1000))
     case 'unix_ms':

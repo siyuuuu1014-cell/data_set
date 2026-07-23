@@ -1,0 +1,266 @@
+// ── BBox & Spatial ──────────────────────────────────────────
+
+export interface BBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// ── Semantic attributes ────────────────────────────────────
+
+export interface HairInfo {
+  color: string
+  style: string
+}
+
+export interface ClothingItem {
+  type: string
+  color: string
+  attributes: string[]
+  brand: string | null
+}
+
+export interface PlaceInfo {
+  type: string
+  indoor: boolean
+  weather: string | null
+  lighting: string
+  timeOfDay: string
+}
+
+// ── Annotations ────────────────────────────────────────────
+
+export interface PersonAnnotation {
+  trackId: number
+  personId: string | null
+
+  gender: string
+  ageGroup: string
+  hair: HairInfo
+  expression: string
+  pose: string
+  action: string[]
+  facing: string
+  occlusion: number
+
+  clothing: ClothingItem[]
+
+  bbox: BBox
+  depth: number | null
+
+  keypoints: unknown[]  // reserved, always [] in Phase 1
+}
+
+export interface ObjectAnnotation {
+  trackId: number
+  name: string
+  category: string
+  color: string
+  brand: string | null
+
+  bbox: BBox | null  // null when described by Qwen without localization
+  depth: number | null
+}
+
+export interface EventAnnotation {
+  type: string
+  confidence: number
+}
+
+export interface SceneAnnotation {
+  tags: string[]
+  place: PlaceInfo
+}
+
+export interface CameraAnnotation {
+  shot: string
+  angle: string
+  movement: string[]
+  lens: string
+  stabilization: string
+}
+
+export interface SegmentAnnotation {
+  segmentId: number
+  start: number
+  end: number
+
+  scene: SceneAnnotation
+  camera: CameraAnnotation
+  persons: PersonAnnotation[]
+  objects: ObjectAnnotation[]
+  events: EventAnnotation[]
+}
+
+// ── Video & Task ───────────────────────────────────────────
+
+export interface VideoInfo {
+  videoId: string
+  filePath: string
+  duration: number
+  fps: number
+  width: number
+  height: number
+  description: string
+}
+
+export interface VideoAnnotation {
+  video: VideoInfo
+  annotations: SegmentAnnotation[]
+}
+
+// ── Video task item ────────────────────────────────────────
+
+export type VideoTaskStatus =
+  | 'pending'
+  | 'uploading'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+
+export interface VideoTaskItem {
+  videoId: string
+  fileName: string
+  filePath: string
+  duration: number
+  fps: number
+  width: number
+  height: number
+  status: VideoTaskStatus
+  segments: SegmentState[]
+  uploadProgress: number  // 0-100
+}
+
+// ── Segment state ──────────────────────────────────────────
+
+export type SegmentStatus =
+  | 'draft'
+  | 'confirmed'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+
+export interface SegmentState {
+  segmentId: number
+  start: number
+  end: number
+  status: SegmentStatus
+  modelAnnotation: SegmentAnnotation | null
+  humanAnnotation: SegmentAnnotation | null
+}
+
+// ── Annotate set ───────────────────────────────────────────
+
+export type AnnotateSetStatus =
+  | 'draft'
+  | 'uploading'
+  | 'splitting'
+  | 'awaiting_segment_review'
+  | 'annotating'
+  | 'validating'
+  | 'awaiting_review'
+  | 'approved'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface AnnotateSet {
+  id: string
+  projectId: string
+  name: string
+  status: AnnotateSetStatus
+  videos: VideoTaskItem[]
+  createdAt: string
+  updatedAt: string
+}
+
+// ── Worker ─────────────────────────────────────────────────
+
+export interface WorkerJobStatus {
+  jobId: string
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  progress: number  // 0-100
+  progressDetail?: string  // e.g. "YOLO11 detection", "Qwen3-VL semantic"
+  result: SegmentAnnotation | null
+  error: string | null
+}
+
+export interface WorkerHealth {
+  status: 'ok' | 'unavailable'
+  modelsLoaded: string[]
+  device?: 'cpu' | 'cuda' | 'mps'
+  queue_size?: number
+}
+
+export type DeploymentMode = 'standard' | 'enhanced'
+
+export interface EnhancedSetupStatus {
+  status: 'idle' | 'auth_required' | 'checking_access' | 'access_required' | 'downloading' | 'ready' | 'failed'
+  phase: 'authorization' | 'access' | 'download' | 'ready' | null
+  error: string | null
+  updatedAt: number | null
+  model: string | null
+  modelUrl: string
+  providerStatus: string
+  providerReason: string | null
+  cacheRoot: string
+  localModelPath: string | null
+  downloadRequired: boolean
+  approximateDownloadGb: number
+}
+
+export interface DeploymentStatus {
+  mode: DeploymentMode
+  managedByEnvironment: boolean
+  huggingFace: {
+    authenticated: boolean
+    source: 'environment' | 'cache' | null
+    username: string | null
+    error: string | null
+  }
+  enhancedSetup: EnhancedSetupStatus
+}
+
+// ── Export ─────────────────────────────────────────────────
+
+export type ExportFormat = 'json' | 'yolo' | 'coco'
+
+// ── API ────────────────────────────────────────────────────
+
+export interface ApiErrorResponse {
+  error: {
+    code: string
+    message: string
+    details?: unknown
+    retryable: boolean
+  }
+}
+
+// ── Merge / Review ─────────────────────────────────────────
+
+export interface AnnotationChange {
+  path: string
+  before: unknown
+  after: unknown
+  changedAt: string
+}
+
+export type ReviewStatus =
+  | 'unreviewed'
+  | 'needs_review'
+  | 'modified'
+  | 'approved'
+  | 'rejected'
+
+export interface AnnotationReview {
+  taskId: string
+  videoId: string
+  modelAnnotation: VideoAnnotation
+  humanAnnotation: VideoAnnotation
+  changes: AnnotationChange[]
+  reviewStatus: ReviewStatus
+  reviewerName: string | null
+  reviewedAt: string | null
+}

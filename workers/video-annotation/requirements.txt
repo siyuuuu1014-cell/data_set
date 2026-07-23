@@ -1,0 +1,29 @@
+# Legacy full-profile requirements. Prefer:
+#   pip install -e .[full]
+fastapi>=0.115,<1
+uvicorn[standard]>=0.32,<1
+pydantic>=2,<3
+huggingface-hub>=0.27,<2
+scenedetect>=0.6,<1
+opencv-python>=4.10,<5
+pillow>=10,<13
+
+# GPU / deep learning
+torch>=2.4,<3
+torchvision>=0.19,<1
+numpy>=2,<3
+
+# HuggingFace — all providers (Qwen3-VL, TrOCR, Whisper, Depth Anything, LocateAnything)
+transformers>=4.46,<6
+accelerate>=1,<2
+qwen-vl-utils[decord]>=0.0.8,<1
+timm>=0.9,<2
+
+# Detection & tracking
+ultralytics>=8.3,<9
+
+# Audio (Whisper STT)
+scipy>=1.12,<2
+
+# JSON repair (Qwen3-VL truncated output)
+json-repair>=0.30,<1

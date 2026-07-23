@@ -1,0 +1,129 @@
+"""Single source of truth for the video annotation worker configuration."""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+from pathlib import Path
+
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _detect_device() -> str:
+    requested = os.environ.get("NUWA_DEVICE", "auto").strip().lower()
+    if requested in {"cpu", "cuda", "mps"}:
+        return requested
+    if importlib.util.find_spec("torch") is None:
+        return "cpu"
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+# ── Paths ─────────────────────────────────────────────
+
+WORKER_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = WORKER_ROOT.parent.parent
+DATA_ROOT = Path(
+    os.environ.get(
+        "VIDEO_ANNOTATION_DATA_ROOT",
+        PROJECT_ROOT / "data" / "video-annotations",
+    )
+).expanduser().resolve()
+UPLOADS_DIR = DATA_ROOT / "uploads"
+CACHE_DIR = DATA_ROOT / "cache"
+EXPORTS_DIR = DATA_ROOT / "exports"
+TEMP_DIR = DATA_ROOT / "temp"
+TASKS_DIR = DATA_ROOT / "tasks"
+MODEL_MANIFEST_FILE = Path(
+    os.environ.get("NUWA_MODEL_MANIFEST", DATA_ROOT / "models-manifest.json")
+).expanduser().resolve()
+
+for directory in [UPLOADS_DIR, CACHE_DIR, EXPORTS_DIR, TEMP_DIR, TASKS_DIR]:
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+# ── Server and runtime ────────────────────────────────
+
+WORKER_HOST = os.environ.get("WORKER_HOST", "127.0.0.1")
+WORKER_PORT = _env_int("WORKER_PORT", 8765)
+# The current queue remains deliberately sequential; this value is reported by
+# doctor/models so a future provider manager can enable safe concurrency.
+GPU_CONCURRENCY = _env_int("GPU_CONCURRENCY", 1)
+DEVICE = _detect_device()
+
+FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "ffmpeg")
+FFPROBE_PATH = os.environ.get("FFPROBE_PATH", "ffprobe")
+
+SCENE_THRESHOLD = _env_float("SCENE_THRESHOLD", 0.4)
+if SCENE_THRESHOLD > 1:
+    SCENE_THRESHOLD = SCENE_THRESHOLD / 255.0
+SCENE_THRESHOLD = min(1.0, max(0.0, SCENE_THRESHOLD))
+
+
+# ── Providers and model references ───────────────────
+
+YOLO_MODEL = os.environ.get("YOLO_MODEL", "yolo11n")
+QWEN_MODEL = os.environ.get("QWEN_LOCAL_MODEL_PATH") or os.environ.get(
+    "QWEN_LOCAL_MODEL", "Qwen/Qwen3-VL-2B-Instruct"
+)
+LOCATE_ANYTHING_MODEL = os.environ.get(
+    "LOCATE_ANYTHING_MODEL", "nvidia/LocateAnything-3B"
+)
+TROCR_MODEL = os.environ.get("TROCR_MODEL", "microsoft/trocr-small-printed")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "openai/whisper-tiny")
+DEPTH_ANYTHING_MODEL = os.environ.get(
+    "DEPTH_MODEL", "depth-anything/Depth-Anything-V2-Small-hf"
+)
+
+QWEN_MODEL_REVISION = os.environ.get("QWEN_MODEL_REVISION", "main")
+LOCATE_ANYTHING_REVISION = os.environ.get("LOCATE_ANYTHING_REVISION", "main")
+TROCR_MODEL_REVISION = os.environ.get("TROCR_MODEL_REVISION", "main")
+WHISPER_MODEL_REVISION = os.environ.get("WHISPER_MODEL_REVISION", "main")
+DEPTH_MODEL_REVISION = os.environ.get("DEPTH_MODEL_REVISION", "main")
+
+PROVIDER_ENABLED = {
+    "yolo": _env_bool("NUWA_PROVIDER_YOLO", True),
+    "tracker": _env_bool("NUWA_PROVIDER_TRACKER", True),
+    "locate_anything": _env_bool("NUWA_PROVIDER_LOCATE_ANYTHING", True),
+    "qwen_vl": _env_bool("NUWA_PROVIDER_QWEN_VL", True),
+    "trocr": _env_bool("NUWA_PROVIDER_TROCR", True),
+    "whisper": _env_bool("NUWA_PROVIDER_WHISPER", True),
+    "depth_anything": _env_bool("NUWA_PROVIDER_DEPTH_ANYTHING", True),
+}
+
+
+# ── Inference defaults ────────────────────────────────
+
+DEFAULT_SAMPLE_FPS = _env_float("SAMPLE_FPS", 0.5)
+DEFAULT_MAX_FRAMES = _env_int("MAX_FRAMES", 8)
+DEFAULT_MAX_NEW_TOKENS = _env_int("MAX_NEW_TOKENS", 900)
+DEFAULT_MAX_PIXELS = _env_int("MAX_PIXELS", 256 * 256)
+DEFAULT_CONFIDENCE_THRESHOLD = _env_float("CONFIDENCE_THRESHOLD", 0.65)
+DEFAULT_IOU_THRESHOLD = _env_float("IOU_THRESHOLD", 0.6)

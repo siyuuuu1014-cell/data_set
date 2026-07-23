@@ -1,7 +1,8 @@
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
-import type { LlmConfig, ApiFormat } from '@/services/types'
+import type { LlmConfig } from '@/services/types'
 import { getCachedCode, setCachedCode, deleteCachedCode, isValidExpression } from '@/services/code-cache'
+import { assertSafeLlmRequestUrl, UnsafeLlmUrlError } from '@/services/llm-url-policy'
 
 const CONFIG_FILE = join(process.cwd(), 'configs', 'llm-config.json')
 
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : '未知错误'
-    return Response.json({ error: message }, { status: 500 })
+    return Response.json({ error: message }, { status: err instanceof UnsafeLlmUrlError ? 400 : 500 })
   }
 }
 
@@ -125,6 +126,7 @@ async function anthropicGenerate(config: LlmConfig, systemPrompt: string, userPr
 async function doFetch(url: string, headers: Record<string, string>, body: unknown, label: string): Promise<Response> {
   let res: Response
   try {
+    await assertSafeLlmRequestUrl(url)
     res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

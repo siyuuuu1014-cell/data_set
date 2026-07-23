@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Restore nuwa</title></head><body>
+<h2>Restoring nuwa data...</h2><pre id="log"></pre>
+<script>
+const log=m=>document.getElementById('log').textContent+=m+'\n';
+
+(async()=>{
+const d=JSON.parse(localStorage.getItem('nuwa-store')||'{"projects":[],"tables":{},"annotateSets":{}}');
+
+// clickhouse project
+const pid='mr1h21v5';
+if(!d.projects.find(p=>p.id===pid))d.projects.push({id:pid,name:'clickhouse',createdAt:'2025-07-01T00:00:00.000Z'});
+
+// Tables — fetch row counts from API
+const tns=['content_feature','content_feature2','published_asset','published_commerce','published_prompt','test','u2a_behavior','u2c_behavior','u2p_behavior','u2u_behavior','user_profile_features'];
+const tableDefs=[];
+for(const n of tns){
+  try{
+    const r=await fetch('/api/data?projectId='+pid+'&tableName='+n+'&count=true');
+    const d2=await r.json();
+    tableDefs.push({id:n+'_0',name:n,columns:[],rowCount:d2.count||0,rows:[]});
+    log('  '+n+': '+d2.count+' rows');
+  }catch(e){
+    tableDefs.push({id:n+'_0',name:n,columns:[],rowCount:-1,rows:[]});
+    log('  '+n+': ERROR');
+  }
+}
+d.tables[pid]=tableDefs;
+log('Tables: '+tableDefs.length);
+
+// Annotate sets
+try{
+ const tasks=await(await fetch('/api/video-annotation/annotate-sets/restore')).json();
+ const ids=new Set(d.projects.map(p=>p.id));
+ for(const t of tasks){if(!ids.has(t.projectId)){d.projects.push({id:t.projectId,name:t.projectName,createdAt:new Date().toISOString()});ids.add(t.projectId)}}
+ for(const t of tasks){d.annotateSets[t.projectId]=d.annotateSets[t.projectId]||[];if(!d.annotateSets[t.projectId].find(s=>s.id===t.set.id))d.annotateSets[t.projectId].push(t.set)}
+ log('Sets: '+tasks.length);
+}catch(e){log('Sets error: '+e)}
+
+localStorage.setItem('nuwa-store',JSON.stringify(d));
+log('\nRestored '+d.projects.length+' projects. Redirecting...');
+setTimeout(()=>location.href='/',800);
+})();
+</script>
+</body></html>

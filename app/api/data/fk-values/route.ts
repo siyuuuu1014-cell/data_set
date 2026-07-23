@@ -1,4 +1,5 @@
 import { readParquet } from '@/services/parquet'
+import { assertSafeFileStem, assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 
 // GET ?projectId=X&tableId=Y&column=Z — read column values from Parquet
 // column=* returns full rows; column=name returns just that column's values
@@ -13,6 +14,8 @@ export async function GET(request: Request) {
   }
 
   try {
+    assertSafeIdentifier(projectId, 'project ID')
+    assertSafeFileStem(tableId, 'table name')
     const rows = await readParquet(projectId, tableId)
     if (column === '*') {
       return Response.json({ rows })
@@ -20,6 +23,7 @@ export async function GET(request: Request) {
     const values = rows.map(row => row[column]).filter(v => v !== null && v !== undefined)
     return Response.json({ values })
   } catch (err) {
+    if (isUnsafePathError(err)) return Response.json({ error: err.message }, { status: 400 })
     return Response.json({ error: String(err) }, { status: 500 })
   }
 }

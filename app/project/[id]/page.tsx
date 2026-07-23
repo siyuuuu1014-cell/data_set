@@ -27,12 +27,15 @@ export default function ProjectPage() {
   const [dragIdx, setDragIdx] = useState<number | null>(null)
 
   const tablesRef = useRef(tables)
-  if (tables !== tablesRef.current) {
+
+  // Sync orderedTables when tables change
+  /* eslint-disable-next-line react-hooks/set-state-in-effect */
+  useEffect(() => {
     tablesRef.current = tables
     if (orderedTables.length !== tables.length || !tables.every((t, i) => orderedTables[i]?.id === t.id)) {
       setOrderedTables(tables)
     }
-  }
+  }, [tables, orderedTables])
 
   // On mount or when tables change, fetch row counts from Parquet for tables
   // that show 0 rows (either no cached rowCount or genuinely empty).

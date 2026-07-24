@@ -24,8 +24,6 @@ from config import (
     PROVIDER_ENABLED,
     QWEN_MODEL,
     QWEN_MODEL_REVISION,
-    TROCR_MODEL,
-    TROCR_MODEL_REVISION,
     WHISPER_MODEL,
     WHISPER_MODEL_REVISION,
     YOLO_MODEL,
@@ -89,9 +87,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         QWEN_MODEL, QWEN_MODEL_REVISION, False, 4.0,
     ),
     "trocr": ProviderSpec(
-        "trocr", "TrOCR", "providers.ocr.trocr:TrOCRProvider",
-        ("torch", "transformers", "PIL"), "ocr",
-        TROCR_MODEL, TROCR_MODEL_REVISION, False, 1.0,
+        "trocr", "RapidOCR", "providers.ocr.trocr:TrOCRProvider",
+        ("rapidocr", "onnxruntime", "numpy"), "ocr",
     ),
     "whisper": ProviderSpec(
         "whisper", "Whisper", "providers.audio.whisper_stt:WhisperSTTProvider",

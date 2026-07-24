@@ -23,7 +23,7 @@ The project is intended primarily for trusted local or internal use. Synthetic p
 
 - **Batch video upload** with persistent, file-backed annotation jobs
 - **Scene-aware processing** before model inference
-- **Optional local providers** — YOLO11, LocateAnything, Qwen3-VL, TrOCR, Whisper, and Depth Anything
+- **Optional local providers** — YOLO11, LocateAnything, Qwen3-VL, RapidOCR, Whisper, and Depth Anything
 - **IoU-based tracking** across processed frames
 - **Human review** with a canvas editor, scene navigation, and timeline
 - **Custom JSON, COCO, and YOLO ZIP export** with labels and keyframe images
@@ -328,6 +328,22 @@ cd workers/video-annotation
 python -m unittest discover -s tests -v
 ```
 
+## Provider Output Contracts
+
+- Qwen categorical values use exact or complete word/phrase matching. In particular, `female` cannot be classified as `male` through substring matching; the short age outputs `young` and `middle` are handled through explicit aliases.
+- The Qwen prompt contains no concrete object/event example that can be copied as a false detection and explicitly requires visual evidence. Qwen may enrich detector-confirmed object attributes, but an unlocalized Qwen-only object is not exported as a confirmed object and cannot rename a detector class.
+- YOLO detection uses `None` as the sentinel for configured confidence/IoU defaults. Explicit values such as `iou=0.45`, `iou=0.0`, or `conf=0.0` are preserved.
+- RapidOCR performs full-frame text detection plus Chinese/English recognition on the CPU. OCR checks the start, middle, and end keyframes of each segment, deduplicates repeated lines, and retains the highest-confidence pixel bounding box; the historical `trocr` provider id remains accepted for configuration compatibility.
+- Whisper returns `{"text": "..."}` when speech is recognized. It does not fabricate a confidence score or return timestamped `segments`; failures are reported separately from a valid no-speech result.
+- New segment results include an internal `_recognition` status for OCR and speech (`completed`, `no_content`, `no_audio`, `disabled`, `skipped`, or `failed`). The review page displays these states even when no text was produced.
+- Existing saved segment results are not rewritten automatically. Re-run the affected segment once to generate RapidOCR output and the new recognition status; opening a segment now seeks the video player to that segment's start time.
+
+## Video Annotation Exports
+
+- The `video.description` field in Custom JSON is generated from every available annotation segment, not only the first segment. It is emitted as one concise sentence (up to 300 characters) containing only the dominant settings, people, activities/events, representative objects, and whether speech or on-screen text is present.
+- **Export Current Segment JSON** downloads only the currently selected segment while preserving the same Custom JSON envelope and the video-level summary. **Export All Annotations** keeps the existing JSON, YOLO ZIP, and COCO export flow.
+- Nuwa's persistent annotation unit is a scene segment (`S1`, `S2`, ...), which may combine observations from multiple sampled frames. The single-item export therefore exports one selected segment annotation, not an annotation for every encoded video frame.
+
 ## Security and Deployment Notes
 
 - Nuwa remains password-free for trusted local use. When serving it on a shared network, set both `NUWA_AUTH_USER` and `NUWA_AUTH_PASSWORD` to enable HTTP Basic authentication. Nuwa does not provide per-user authorization.
@@ -347,7 +363,7 @@ python -m unittest discover -s tests -v
 - Gated Hugging Face models require one-time authorization from the shared Settings page or an externally managed `HF_TOKEN`. Model preparation is an explicit action and reports the cache/local model path before downloading.
 - Video uploads are buffered by the server and may use substantial memory for large files.
 - The tracker named `ByteTrackTracker` still implements conservative IoU matching rather than the full ByteTrack algorithm; the video identity registry fixes ID scope and unsafe duplicate assignment but does not replace a production ReID model.
-- Focused Worker regression tests cover tracking identity and frame-extraction failures, but there is not yet a complete browser/API end-to-end or data-migration test suite.
+- Focused Worker regression tests cover tracking identity, frame-extraction failures, provider thresholds, RapidOCR result conversion, and recognition-result merging, but there is not yet a complete browser/API end-to-end or data-migration test suite.
 - There is no conventional database, multi-user collaboration, per-user authorization, or general migration system.
 
 ## License

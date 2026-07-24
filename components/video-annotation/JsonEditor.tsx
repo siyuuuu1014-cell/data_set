@@ -13,12 +13,12 @@ export function JsonEditor({ annotation, onSave }: Props) {
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState(false)
 
-  /* eslint-disable-next-line react-hooks/set-state-in-effect -- reset editable text from source */
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset editable text from source
     if (!annotation) { setText(''); return }
     // Clean internal fields before showing
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { _pipeline_errors, ...topClean } = annotation as unknown as Record<string, unknown>
+    const { _pipeline_errors, _recognition, ...topClean } = annotation as unknown as Record<string, unknown>
     const cleaned = {
       ...topClean,
       persons: (annotation.persons || []).map(({ ...p }) => {
@@ -26,11 +26,12 @@ export function JsonEditor({ annotation, onSave }: Props) {
         const { _className, _detectionConfidence, ...rest } = p as unknown as Record<string, unknown>
         return rest as unknown as typeof p
       }),
-      objects: (annotation.objects || []).map(({ ...o }) => {
+      objects: (annotation.objects || []).filter(o => !o._textContent).map(({ ...o }) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { _detectionConfidence, _textContent, ...rest } = o as unknown as Record<string, unknown>
         return rest as unknown as typeof o
       }),
+      events: (annotation.events || []).filter(event => !event.type.startsWith('[Speech]')),
     }
     setText(JSON.stringify(cleaned, null, 2))
     setError('')

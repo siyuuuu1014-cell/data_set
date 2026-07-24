@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
 import os
-from pathlib import Path
+import tempfile
 from typing import Any
 
 import torch
@@ -64,15 +63,19 @@ class WhisperSTTProvider:
     def transcribe(self, video_path: str, start: float = 0, end: float = 0) -> dict:
         """Extract audio from video segment and transcribe.
 
-        Returns {"text": "...", "segments": [...]} or empty dict on failure.
+        Returns {"text": "..."} when speech is recognized, otherwise an empty
+        dict. Failures are raised so the pipeline can report them separately
+        from a successful run with no speech.
+        Timestamped segments are not produced by the current generation path.
         """
         if not self._loaded:
             self.load()
 
-        temp_wav = None
+        temp_wav: str | None = None
         try:
             # Extract audio from video segment via ffmpeg
-            temp_wav = tempfile.mktemp(suffix=".wav")
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_wav = temp_file.name
             cmd = [
                 FFMPEG_PATH,
                 "-ss", str(start),
@@ -85,7 +88,10 @@ class WhisperSTTProvider:
                 temp_wav,
                 "-y",
             ]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=120)
+            completed = subprocess.run(cmd, capture_output=True, check=False, timeout=120)
+            if completed.returncode != 0:
+                stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(stderr or f"ffmpeg exited with code {completed.returncode}")
 
             if not os.path.exists(temp_wav) or os.path.getsize(temp_wav) < 1000:
                 logger.warning("Whisper: audio extraction produced no usable data")
@@ -104,7 +110,7 @@ class WhisperSTTProvider:
                 return {}
 
             input_features = self._processor(
-                audio_array, sampling_rate=sampling_rate, return_tensors="pt"
+                audio_array, sampling_rate=sample_rate, return_tensors="pt"
             ).input_features
 
             if DEVICE == "cuda":
@@ -125,11 +131,13 @@ class WhisperSTTProvider:
                 return {}
 
             logger.info("Whisper detected: %.300s", text)
-            return {"text": text, "confidence": 0.9}
+            return {"text": text}
 
         except Exception as e:
             logger.warning("Whisper STT failed: %s (%s)", type(e).__name__, e)
-            return {}
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"Whisper STT inference failed: {e}") from e
         finally:
             if temp_wav and os.path.exists(temp_wav):
                 try:

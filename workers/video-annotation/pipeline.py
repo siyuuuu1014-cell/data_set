@@ -6,7 +6,9 @@ Each provider is loaded → used → unloaded to stay within GPU memory budget.
 from __future__ import annotations
 
 import logging
+import re
 import time
+import unicodedata
 from contextlib import contextmanager
 from typing import Any
 
@@ -26,6 +28,32 @@ from services.video_identity import assign_fallback_identities, assign_video_ide
 from services.video_metadata import get_video_metadata
 
 logger = logging.getLogger(__name__)
+
+
+def _deduplicate_ocr_texts(items: list[dict]) -> list[dict]:
+    """Keep one highest-confidence result for text repeated across keyframes."""
+    best_by_text: dict[str, dict] = {}
+    order: list[str] = []
+    for item in items:
+        text = str(item.get("text") or "").strip()
+        normalized = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).casefold()
+        if not normalized:
+            continue
+        previous = best_by_text.get(normalized)
+        if previous is None:
+            order.append(normalized)
+        previous_score = previous.get("confidence") if previous else None
+        current_score = item.get("confidence")
+        if previous is None or (
+            isinstance(current_score, (int, float))
+            and not isinstance(previous_score, (int, float))
+        ) or (
+            isinstance(current_score, (int, float))
+            and isinstance(previous_score, (int, float))
+            and current_score > previous_score
+        ):
+            best_by_text[normalized] = {**item, "text": text}
+    return [best_by_text[key] for key in order]
 
 
 @contextmanager
@@ -99,6 +127,10 @@ def run_annotation_pipeline(
     categories = opts.get("categories", ["person","man","woman","child","adult","teenager","elderly","car","truck","bus","bicycle","motorcycle","chair","table","desk","sofa","bed","cabinet","shelf","bench","piano","guitar","violin","drum","instrument","laptop","phone","television","monitor","keyboard","mouse","camera","book","newspaper","magazine","cup","bottle","bowl","plate","knife","fork","spoon","backpack","handbag","suitcase","bag","hat","glasses","watch","shoe","clothing","door","window","curtain","lamp","clock","plant","vase","picture","painting","mirror","dog","cat","bird","ball","toy","food","fruit","cake","pizza","sandwich"])
 
     errors: list[str] = []
+    recognition_status: dict[str, dict[str, Any]] = {
+        "ocr": {"status": "pending", "count": 0},
+        "speech": {"status": "pending", "count": 0},
+    }
 
     t0 = time.perf_counter()
 
@@ -208,30 +240,93 @@ def run_annotation_pipeline(
         errors.append(f"Qwen3-VL semantic failed: {e}")
         logger.warning("Qwen3-VL failed (will skip): %s", e)
 
-    # ── Phase 5: TrOCR text extraction ────────────────
+    # ── Phase 5: scene-text detection and recognition ──
     _report(progress_cb, "OCR text recognition", 70)
     ocr_texts: list[dict] = []
-    try:
-        if keyframe_paths and is_provider_enabled("trocr", opts):
+    ocr_enabled = is_provider_enabled("trocr", opts)
+    if not ocr_enabled:
+        recognition_status["ocr"] = {"status": "disabled", "count": 0}
+    elif not keyframe_paths:
+        recognition_status["ocr"] = {
+            "status": "skipped",
+            "count": 0,
+            "reason": "no_keyframe",
+        }
+    else:
+        frame_results: list[dict] = []
+        frame_errors: list[str] = []
+        successful_frames = 0
+        try:
             with _loaded_provider("trocr") as ocr:
-                ocr_texts = ocr.extract_text(keyframe_paths[0])
-                logger.info("TrOCR: %d text regions", len(ocr_texts))
-    except Exception as e:
-        errors.append(f"TrOCR text recognition failed: {e}")
-        logger.warning("TrOCR failed (will skip): %s", e)
+                for frame_index, keyframe_path in enumerate(keyframe_paths):
+                    try:
+                        frame_results.extend(ocr.extract_text(keyframe_path))
+                        successful_frames += 1
+                    except Exception as frame_error:
+                        frame_errors.append(f"keyframe {frame_index + 1}: {frame_error}")
+
+            if successful_frames == 0 and frame_errors:
+                raise RuntimeError("; ".join(frame_errors))
+
+            ocr_texts = _deduplicate_ocr_texts(frame_results)
+            logger.info(
+                "RapidOCR: %d unique text regions across %d/%d keyframes",
+                len(ocr_texts),
+                successful_frames,
+                len(keyframe_paths),
+            )
+            recognition_status["ocr"] = {
+                "status": "completed" if ocr_texts else "no_content",
+                "count": len(ocr_texts),
+            }
+            if frame_errors:
+                errors.append(f"OCR text recognition partially failed: {'; '.join(frame_errors)}")
+        except Exception as e:
+            errors.append(f"OCR text recognition failed: {e}")
+            recognition_status["ocr"] = {
+                "status": "failed",
+                "count": 0,
+                "error": str(e),
+            }
+            logger.warning("RapidOCR failed (will skip): %s", e)
 
     # ── Phase 6: Whisper STT ──────────────────────────
     _report(progress_cb, "Speech-to-text", 75)
     transcript: dict = {}
-    try:
-        if is_provider_enabled("whisper", opts):
-            with _loaded_provider("whisper") as whisper:
-                transcript = whisper.transcribe(video_path, segment_start, segment_end)
-                if transcript:
-                    logger.info("Whisper: transcript acquired")
-    except Exception as e:
-        errors.append(f"Whisper STT failed: {e}")
-        logger.warning("Whisper STT failed (will skip): %s", e)
+    whisper_enabled = is_provider_enabled("whisper", opts)
+    if not whisper_enabled:
+        recognition_status["speech"] = {"status": "disabled", "count": 0}
+    else:
+        has_audio: bool | None = None
+        try:
+            has_audio = get_video_metadata(video_path).has_audio
+        except Exception as metadata_error:
+            logger.warning(
+                "Unable to inspect audio stream; Whisper will try directly: %s",
+                metadata_error,
+            )
+
+        if has_audio is False:
+            recognition_status["speech"] = {"status": "no_audio", "count": 0}
+            logger.info("Whisper skipped: video has no audio stream")
+        else:
+            try:
+                with _loaded_provider("whisper") as whisper:
+                    transcript = whisper.transcribe(video_path, segment_start, segment_end)
+                    if transcript:
+                        logger.info("Whisper: transcript acquired")
+                recognition_status["speech"] = {
+                    "status": "completed" if transcript.get("text") else "no_content",
+                    "count": 1 if transcript.get("text") else 0,
+                }
+            except Exception as e:
+                errors.append(f"Whisper STT failed: {e}")
+                recognition_status["speech"] = {
+                    "status": "failed",
+                    "count": 0,
+                    "error": str(e),
+                }
+                logger.warning("Whisper STT failed (will skip): %s", e)
 
     # ── Phase 7: Depth Anything v2 ─────────────────────
     _report(progress_cb, "Depth estimation", 85)
@@ -275,6 +370,7 @@ def run_annotation_pipeline(
         depth_result=depth_result,
         ocr_texts=ocr_texts,
         transcript=transcript,
+        recognition_status=recognition_status,
         video_width=video_w,
         video_height=video_h,
         person_ids=person_ids,

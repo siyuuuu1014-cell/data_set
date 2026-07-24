@@ -37,7 +37,7 @@ NUWA_PROVIDER_WHISPER=false
 NUWA_PROVIDER_DEPTH_ANYTHING=false
 ```
 
-Model identifiers and revisions can be set independently. Immutable Hugging Face commit revisions are recommended for reproducible deployments. `QWEN_LOCAL_MODEL_PATH` and `LOCATE_ANYTHING_MODEL` can point to already downloaded local model directories. The Settings page reports the resolved model path before any explicit preparation action.
+Model identifiers and revisions can be set independently. Immutable Hugging Face commit revisions are recommended for reproducible deployments. `QWEN_LOCAL_MODEL_PATH` and `LOCATE_ANYTHING_MODEL` can point to already downloaded local model directories. The Settings page reports the resolved model path before any explicit preparation action. OCR is the exception: the compatibility provider id remains `trocr`, but its implementation uses RapidOCR's package-bundled ONNX text detector and Chinese/English recognizer, so it does not require a Hugging Face model download.
 
 Hugging Face authorization and model preparation are separate operations. Saving a token validates and persists it in the configured Hugging Face cache but does not start a download. If no usable local model is found, the Settings page shows the cache location and asks for confirmation before downloading.
 
@@ -72,3 +72,7 @@ The diagnostic output reports dependencies, cache readiness, device selection, F
 - `POST /jobs/{id}/cancel` cancels a job.
 
 Models are still loaded and unloaded sequentially per segment to preserve the current memory behavior and annotation result schema.
+
+OCR runs with ONNX Runtime on the CPU so it does not compete with Qwen, YOLO, or Whisper for GPU memory. New results include structured OCR/speech execution status; videos without an audio stream skip Whisper before the model is loaded.
+
+Qwen semantic output is treated as enrichment rather than object-existence evidence. Objects must be localized by YOLO or the grounding provider before entering the confirmed object list; semantic-only object claims and dependent events are discarded. Detector class names are never replaced by broader or unrelated Qwen guesses.

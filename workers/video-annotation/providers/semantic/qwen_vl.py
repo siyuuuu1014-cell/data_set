@@ -20,26 +20,24 @@ from providers.registry import model_load_kwargs
 logger = logging.getLogger(__name__)
 
 # Short prompt for 2B — natural language description, parse afterwards
-PROMPT = """Describe this video frame. Answer in simple JSON with these keys only:
-scene: what kind of place is this? (e.g. living room, street, office, classroom, outdoor garden)
-lighting: bright or dim or dark?
+PROMPT = """Describe only what is clearly visible in this video frame.
+Return one simple JSON object with exactly these keys:
+scene: the visible place type, or "unknown"
+lighting: "bright", "dim", "dark", or "unknown"
 indoor: true or false
-camera_angle: eye-level or low or high or overhead?
-persons: list of people seen. For each: gender, age (child/teen/young/middle/elderly), what they're doing, what they're wearing (color+type), hair color
-objects: list of ANYTHING visible that is not a person — animals (dog, cat, butterfly, bird, insect), vehicles, furniture, instruments, electronics, plants, etc. For each: name, category, color, brand if visible
-event: what is happening overall? (e.g. conversation, playing music, walking, eating, a butterfly resting, bird flying)
+camera_angle: "eye-level", "low", "high", "overhead", or "unknown"
+persons: a list of clearly visible people; for each include gender, age, action, clothing, and hair
+objects: a list of clearly visible non-person objects; for each include name, category, color, and brand
+event: one short description of the visible activity, or an empty string
 
-Example output:
-{
-  "scene": "garden",
-  "lighting": "bright",
-  "indoor": false,
-  "camera_angle": "eye-level",
-  "persons": [],
-  "objects": [{"name":"butterfly","category":"animal","color":"orange"}],
-  "event": "a butterfly is resting on a flower"
-}
-Return ONLY the JSON. No markdown, no explanation."""
+Rules:
+- Never guess an object, person, action, or event that is not visually supported.
+- If an object is uncertain or too small to identify, omit it from objects.
+- Use an empty list when no person or object is clearly visible.
+- Use "unknown" for an uncertain attribute instead of inventing a value.
+- Do not copy entities or activities from these instructions.
+
+Return ONLY JSON. No markdown and no explanation."""
 
 
 def _parse_response(raw: str) -> dict:
@@ -79,7 +77,12 @@ def _parse_response(raw: str) -> dict:
             # attributes are not unique enough to identify a real person.
             "personId": None,
             "gender": _pick(p.get("gender"), ["male", "female"], "unknown"),
-            "ageGroup": _pick(p.get("age"), ["child", "teen", "young adult", "middle aged", "elderly"], "unknown"),
+            "ageGroup": _pick(
+                p.get("age"),
+                ["child", "teen", "young adult", "middle aged", "elderly"],
+                "unknown",
+                aliases={"young": "young adult", "middle": "middle aged"},
+            ),
             "expression": "unknown",
             "pose": "unknown",
             "action": [],
@@ -176,12 +179,23 @@ def _parse_response(raw: str) -> dict:
     }
 
 
-def _pick(value: str | None, options: list[str], default: str) -> str:
+def _pick(
+    value: str | None,
+    options: list[str],
+    default: str,
+    aliases: dict[str, str] | None = None,
+) -> str:
     if not value:
         return default
     v = str(value).lower().strip()
-    for opt in options:
-        if v == opt or v in opt or opt in v:
+    if aliases and v in aliases and aliases[v] in options:
+        return aliases[v]
+    if v in options:
+        return v
+    # Accept an option embedded as a complete word/phrase (for example,
+    # "female adult"), but never as a substring ("male" in "female").
+    for opt in sorted(options, key=len, reverse=True):
+        if re.search(rf"(?<![a-z0-9]){re.escape(opt)}(?![a-z0-9])", v):
             return opt
     return default
 

@@ -61,11 +61,35 @@ export interface ObjectAnnotation {
 
   bbox: BBox | null  // null when described by Qwen without localization
   depth: number | null
+  _textContent?: string
+  _detectionConfidence?: number
 }
 
 export interface EventAnnotation {
   type: string
   confidence: number
+  _confidenceAvailable?: boolean
+}
+
+export type RecognitionStageStatus =
+  | 'pending'
+  | 'completed'
+  | 'no_content'
+  | 'no_audio'
+  | 'disabled'
+  | 'skipped'
+  | 'failed'
+
+export interface RecognitionStageResult {
+  status: RecognitionStageStatus
+  count: number
+  reason?: string
+  error?: string
+}
+
+export interface SegmentRecognitionStatus {
+  ocr?: RecognitionStageResult
+  speech?: RecognitionStageResult
 }
 
 export interface SceneAnnotation {
@@ -91,6 +115,8 @@ export interface SegmentAnnotation {
   persons: PersonAnnotation[]
   objects: ObjectAnnotation[]
   events: EventAnnotation[]
+  _recognition?: SegmentRecognitionStatus
+  _pipeline_errors?: string[]
 }
 
 // ── Video & Task ───────────────────────────────────────────
@@ -149,6 +175,9 @@ export interface SegmentState {
   status: SegmentStatus
   modelAnnotation: SegmentAnnotation | null
   humanAnnotation: SegmentAnnotation | null
+  error?: string
+  progressPhase?: string
+  workerJobId?: string
 }
 
 // ── Annotate set ───────────────────────────────────────────

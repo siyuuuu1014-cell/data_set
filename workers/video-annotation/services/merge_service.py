@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,9 @@ def merge_results(
     fine_objects: list[dict],  # LocateAnything-3B results
     semantic,                  # SegmentSemantic from Qwen3-VL
     depth_result,              # DepthResult from Depth Anything
-    ocr_texts: list[dict] | None = None,   # TrOCR text regions
+    ocr_texts: list[dict] | None = None,   # detected OCR text regions
     transcript: dict | None = None,         # Whisper STT transcript
+    recognition_status: dict | None = None,
     video_width: int = 1920,
     video_height: int = 1080,
     person_ids: dict[int, str] | None = None,
@@ -29,6 +31,7 @@ def merge_results(
     """
     ocr_texts = ocr_texts or []
     transcript = transcript or {}
+    recognition_status = recognition_status or {}
     person_ids = person_ids or {}
     # Collect unique tracks across all frames (trackId → { className, bbox, confidence })
     track_map: dict[int, dict] = {}
@@ -133,8 +136,10 @@ def merge_results(
             qwen_match = _match_qwen_object(qwen_objects, className)
             objects.append({
                 "trackId": tid,
-                "name": qwen_match.get("name") or className,
-                "category": _infer_category(qwen_match.get("name", className)),
+                # A semantic model may enrich attributes, but it must never
+                # rename a detector-confirmed class into an unrelated object.
+                "name": className,
+                "category": _infer_category(className),
                 "color": qwen_match.get("color") or "unknown",
                 "brand": qwen_match.get("brand"),
                 "bbox": {
@@ -179,38 +184,53 @@ def merge_results(
         }
         persons.append(person)
 
-    # Add leftover Qwen objects that don't semantically overlap with any YOLO track
-    yolo_classes_seen = {t.get("className", "").lower() for t in track_map.values()}
-    for qo in qwen_objects:
-        q_name = qo.get("name", "").lower()
-        # Skip if this Qwen object semantically matches any YOLO-detected class
-        if any(_qwen_matches_yolo(q_name, yc) for yc in yolo_classes_seen):
-            continue
-        objects.append({
-            "trackId": qo.get("trackId", len(objects) + 100),
-            "name": qo.get("name", "unknown"),
-            "category": qo.get("category", "other"),
-            "color": qo.get("color", "unknown"),
-            "brand": qo.get("brand"),
-            "bbox": None,
-            "depth": None,
-        })
+    # Qwen is used for semantic enrichment, not object existence. Unmatched
+    # Qwen objects have no localization evidence and are intentionally omitted.
+    confirmed_names = {
+        str(obj.get("name", "")).lower()
+        for obj in objects
+        if obj.get("name") and obj.get("bbox") is not None
+    }
+    unconfirmed_qwen_names = {
+        str(qo.get("name", "")).lower().strip()
+        for qo in qwen_objects
+        if qo.get("name") and str(qo.get("name", "")).lower().strip() not in confirmed_names
+    }
+    if unconfirmed_qwen_names:
+        logger.info(
+            "Discarded %d unlocalized Qwen object claims: %s",
+            len(unconfirmed_qwen_names),
+            ", ".join(sorted(unconfirmed_qwen_names)),
+        )
 
     # ── Build scene / camera from semantic ─────────────
     scene = semantic.scene if semantic else {"tags": [], "place": {}}
     camera = semantic.camera if semantic else {"shot": "unknown", "angle": "unknown", "movement": [], "lens": "unknown", "stabilization": "unknown"}
-    events = semantic.events if semantic else []
+    events = _filter_semantic_events(
+        list(semantic.events) if semantic else [],
+        unconfirmed_qwen_names,
+    )
 
     # ── Append OCR-detected text objects ───────────────
-    ocr_start_id = max([o.get("trackId", 0) for o in objects], default=200) + 1
+    existing_track_ids = [o.get("trackId", 0) for o in objects]
+    existing_track_ids.extend(p.get("trackId", 0) for p in persons)
+    ocr_start_id = max(existing_track_ids, default=200) + 1
     for otr in ocr_texts:
         text = otr.get("text", "")
         if not text:
             continue
         bbox_data = otr.get("bbox")
-        # Full-image bbox from TrOCR is not useful for display — keep as null
         bbox = None
-        objects.append({
+        if isinstance(bbox_data, dict) and all(
+            key in bbox_data for key in ("x", "y", "width", "height")
+        ):
+            bbox = {
+                "x": int(bbox_data["x"]),
+                "y": int(bbox_data["y"]),
+                "width": int(bbox_data["width"]),
+                "height": int(bbox_data["height"]),
+            }
+        text_entry = {
             "trackId": ocr_start_id,
             "name": text[:80],
             "category": "text",
@@ -219,15 +239,22 @@ def merge_results(
             "bbox": bbox,
             "depth": None,
             "_textContent": text,
-            "_detectionConfidence": otr.get("confidence", 0.85),
-        })
+        }
+        confidence = otr.get("confidence")
+        if isinstance(confidence, (int, float)):
+            text_entry["_detectionConfidence"] = float(confidence)
+        objects.append(text_entry)
         ocr_start_id += 1
 
     # ── Append audio transcript ────────────────────────
     if transcript.get("text"):
         events.append({
             "type": f"[Speech] {transcript['text'][:200]}",
-            "confidence": transcript.get("confidence", 0.9),
+            # EventAnnotation historically requires a numeric value. Keep a
+            # neutral placeholder for compatibility and mark it unavailable so
+            # the UI never presents it as a measured confidence score.
+            "confidence": 0.0,
+            "_confidenceAvailable": False,
         })
 
     return {
@@ -236,6 +263,7 @@ def merge_results(
         "persons": persons,
         "objects": objects,
         "events": events,
+        "_recognition": recognition_status,
     }
 
 
@@ -300,23 +328,23 @@ def _infer_category(name: str) -> str:
 
 # Mapping from YOLO class names to broader categories Qwen might describe
 _YOLO_TO_QWEN_HINTS: dict[str, list[str]] = {
-    "bird": ["butterfly", "insect", "bird", "animal"],
-    "dog": ["dog", "animal", "pet"],
-    "cat": ["cat", "animal", "pet"],
-    "car": ["car", "vehicle", "automobile"],
-    "truck": ["truck", "vehicle"],
-    "bus": ["bus", "vehicle"],
-    "motorcycle": ["motorcycle", "motorbike", "vehicle"],
-    "bicycle": ["bicycle", "bike", "vehicle"],
-    "boat": ["boat", "ship", "vehicle"],
-    "airplane": ["airplane", "plane", "aircraft", "vehicle"],
-    "horse": ["horse", "animal"],
-    "cow": ["cow", "animal"],
-    "sheep": ["sheep", "animal"],
-    "elephant": ["elephant", "animal"],
-    "bear": ["bear", "animal"],
-    "zebra": ["zebra", "animal"],
-    "giraffe": ["giraffe", "animal"],
+    "bird": ["bird"],
+    "dog": ["dog"],
+    "cat": ["cat"],
+    "car": ["car", "automobile"],
+    "truck": ["truck"],
+    "bus": ["bus"],
+    "motorcycle": ["motorcycle", "motorbike"],
+    "bicycle": ["bicycle", "bike"],
+    "boat": ["boat", "ship"],
+    "airplane": ["airplane", "plane", "aircraft"],
+    "horse": ["horse"],
+    "cow": ["cow"],
+    "sheep": ["sheep"],
+    "elephant": ["elephant"],
+    "bear": ["bear"],
+    "zebra": ["zebra"],
+    "giraffe": ["giraffe"],
 }
 
 def _match_qwen_object(qwen_objects: list[dict], yolo_class: str) -> dict:
@@ -331,7 +359,32 @@ def _match_qwen_object(qwen_objects: list[dict], yolo_class: str) -> dict:
             return qo
     return {}
 
-def _qwen_matches_yolo(qwen_name: str, yolo_class: str) -> bool:
-    """Check if a Qwen object name semantically overlaps with a YOLO class."""
-    hints = _YOLO_TO_QWEN_HINTS.get(yolo_class, [yolo_class])
-    return qwen_name in hints or any(h in qwen_name or qwen_name in h for h in hints)
+_LEGACY_PROMPT_EVENT_ECHOES = {
+    "a butterfly is resting on a flower",
+}
+
+
+def _filter_semantic_events(
+    events: list[dict],
+    unconfirmed_object_names: set[str],
+) -> list[dict]:
+    """Drop semantic events that depend on an unlocalized object claim."""
+    filtered: list[dict] = []
+    for event in events:
+        event_text = str(event.get("type", "")).strip()
+        normalized = re.sub(r"\s+", " ", event_text.lower()).strip(" .")
+        if not normalized:
+            continue
+        if normalized in _LEGACY_PROMPT_EVENT_ECHOES:
+            logger.info("Discarded legacy prompt-echo event: %s", event_text)
+            continue
+        unsupported = any(
+            re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", normalized)
+            for name in unconfirmed_object_names
+            if name
+        )
+        if unsupported:
+            logger.info("Discarded event with unlocalized object claim: %s", event_text)
+            continue
+        filtered.append(event)
+    return filtered

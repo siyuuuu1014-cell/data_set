@@ -9,11 +9,13 @@ import { AnnotationCanvas } from '@/components/video-annotation/AnnotationCanvas
 import { TrackEditor } from '@/components/video-annotation/TrackEditor'
 import { SceneCameraEditor } from '@/components/video-annotation/SceneCameraEditor'
 import { JsonEditor } from '@/components/video-annotation/JsonEditor'
+import { TextContent } from '@/components/video-annotation/TextContent'
+import { UndoToast, type UndoToastItem } from '@/components/video-annotation/UndoToast'
 import { VideoBatchUploader } from '@/components/video-annotation/VideoBatchUploader'
 import { ExportDialog } from '@/components/video-annotation/ExportDialog'
 import { WorkspaceHeader } from '@/components/WorkspaceHeader'
 import { useLang } from '@/services/i18n'
-import { downloadAsFile, exportCustomJson, downloadYoloZip, exportCoco } from '@/services/video-annotation/export-service'
+import { downloadAsFile, exportCustomJson, downloadYoloZip, exportCoco, generateVideoDescription } from '@/services/video-annotation/export-service'
 import type {
   AnnotateSet, BBox, ExportFormat,
   SegmentState, VideoTaskItem, VideoAnnotation, SegmentAnnotation,
@@ -41,35 +43,6 @@ function getEffectiveAnnotation(seg: { humanAnnotation: SegmentAnnotation | null
   return hasRealData(seg.humanAnnotation, seg.modelAnnotation)
     ? seg.humanAnnotation
     : seg.modelAnnotation || null
-}
-
-function generateVideoDescription(segs: SegmentAnnotation[]): string {
-  if (segs.length === 0) return ''
-  const ann = segs[0]
-  const parts: string[] = []
-  const place = ann.scene?.place
-  if (place) {
-    const tags = ann.scene?.tags || []
-    const lighting = place.lighting && place.lighting !== 'unknown' ? place.lighting : null
-    const type = place.type && place.type !== 'unknown' ? place.type.replace(/_/g, ' ') : (tags[0] || '')
-    if (type) parts.push(lighting ? `${lighting} ${type}` : type)
-  }
-  for (const p of ann.persons || []) {
-    const desc: string[] = []
-    const gender = p.gender !== 'unknown' ? p.gender : null
-    const age = p.ageGroup !== 'unknown' ? p.ageGroup : null
-    if (gender || age) desc.push([gender, age].filter(Boolean).join(' '))
-    const clothes = (p.clothing || [])
-      .filter(c => c.type)
-      .map(c => c.color !== 'unknown' ? `${c.color} ${c.type}` : c.type)
-    if (clothes.length) desc.push(`wearing ${clothes.join(', ')}`)
-    const actions = (p.action || []).filter(a => a)
-    if (actions.length) desc.push(actions.join(', '))
-    if (desc.length) parts.push(desc.join(' '))
-  }
-  const events = (ann.events || []).filter(e => e.type)
-  if (events.length) parts.push(events.map(e => e.type).join(', '))
-  return parts.length ? parts.join('. ') + '.' : ''
 }
 
 export default function AnnotateDetailPage() {
@@ -119,7 +92,18 @@ export default function AnnotateDetailPage() {
   const [segEditDirty, setSegEditDirty] = useState(false)
   const [sceneThreshold, setSceneThreshold] = useState(0.4)
   const sceneThresholdRef = useRef(sceneThreshold)
+  // eslint-disable-next-line react-hooks/refs -- synced for use in callback closures
   sceneThresholdRef.current = sceneThreshold
+
+  // ── Undo / pending delete ─────────────────────────
+  const [pendingDeletes, setPendingDeletes] = useState<Set<number>>(new Set())
+  const commitTimersRef = useRef<Map<number, { timer: ReturnType<typeof setTimeout>; videoId: string; segmentId: number }>>(new Map())
+  const toastCounterRef = useRef(0)
+  const [toasts, setToasts] = useState<UndoToastItem[]>([])
+  // Refs for stale-closure safety in timers
+  const setRef = useRef(set)
+  // eslint-disable-next-line react-hooks/refs -- synced during render
+  setRef.current = set
 
   const scopedVideos = useMemo(() => {
     const videos = set?.videos || []
@@ -269,6 +253,46 @@ export default function AnnotateDetailPage() {
     else if (format === 'coco') downloadAsFile(exportCoco(annotations), `${set.name}_coco.json`)
   }, [set, scopedVideos])
 
+  const handleExportCurrentSegment = useCallback(() => {
+    if (!set || !selectedVideoId || selectedSegmentId == null) return
+    const video = (set.videos || []).find(item => item.videoId === selectedVideoId)
+    const segment = video?.segments?.find(item => item.segmentId === selectedSegmentId)
+    if (!video || !segment) return
+
+    const annotation = getEffectiveAnnotation(segment)
+    if (!annotation) {
+      alert(t('video.export_segment_unavailable'))
+      return
+    }
+
+    const allSegmentAnnotations = (video.segments || []).flatMap(item => {
+      const effective = getEffectiveAnnotation(item)
+      return effective ? [{ ...effective, segmentId: item.segmentId, start: item.start, end: item.end }] : []
+    })
+    const currentAnnotation = {
+      ...annotation,
+      segmentId: segment.segmentId,
+      start: segment.start,
+      end: segment.end,
+    }
+    const singleSegmentExport: VideoAnnotation[] = [{
+      video: {
+        videoId: video.videoId,
+        filePath: video.filePath || video.fileName,
+        duration: video.duration,
+        fps: video.fps,
+        width: video.width,
+        height: video.height,
+        description: generateVideoDescription(allSegmentAnnotations),
+      },
+      annotations: [currentAnnotation],
+    }]
+    downloadAsFile(
+      exportCustomJson(singleSegmentExport),
+      `${video.videoId}_segment_${segment.segmentId}.json`,
+    )
+  }, [set, selectedVideoId, selectedSegmentId, t])
+
   const handleDrawBox = useCallback((box: BBox) => {
     if (!set || !selectedVideoId || selectedSegmentId == null) return
     const seg = set.videos?.find(v => v.videoId === selectedVideoId)?.segments?.find(s => s.segmentId === selectedSegmentId)
@@ -323,15 +347,48 @@ export default function AnnotateDetailPage() {
     fetch(`/api/video-annotation/annotate-sets/${annotateId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newSet) }).catch(() => {})
   }, [set, selectedVideoId, selectedSegmentId, id, annotateId, updateAnnotateSet])
 
+  const commitPendingDeleteRef = useRef<((trackId: number) => void) | null>(null)
+
   const handleDeleteTrack = useCallback((trackId: number) => {
     if (!set || !selectedVideoId || selectedSegmentId == null) return
-    if (!confirm(`Delete track ${trackId}?`)) return
+
+    // Mark as pending — visually hidden but recoverable
+    setPendingDeletes(prev => new Set(prev).add(trackId))
+    setSelectedTrackId(null)
+
+    // Schedule commit after 6s — uses ref to avoid stale closure
+    const timer = setTimeout(() => {
+      commitPendingDeleteRef.current?.(trackId)
+    }, 6000)
+    commitTimersRef.current.set(trackId, { timer, videoId: selectedVideoId, segmentId: selectedSegmentId! })
+
+    // Show undo toast
+    const toastId = ++toastCounterRef.current
+    setToasts(prev => [...prev, { id: toastId, trackId, message: `已删除 Track #${trackId}` }])
+  }, [set, selectedVideoId, selectedSegmentId])
+
+  // commitPendingDelete: actually filters the track and persists
+  const commitPendingDelete = useCallback((trackId: number) => {
+    // Read videoId/segmentId before removing from map
+    const entry = commitTimersRef.current.get(trackId)
+    const vidId = entry?.videoId
+    const segId = entry?.segmentId
+    commitTimersRef.current.delete(trackId)
+    setPendingDeletes(prev => {
+      const next = new Set(prev)
+      next.delete(trackId)
+      return next
+    })
+    setToasts(prev => prev.filter(t => t.trackId !== trackId))
+
+    const curSet = setRef.current
+    if (!curSet || !vidId || segId == null) return
     const newSet: AnnotateSet = {
-      ...set,
-      videos: (set.videos || []).map(v => {
-        if (v.videoId !== selectedVideoId) return v
+      ...curSet,
+      videos: (curSet.videos || []).map(v => {
+        if (v.videoId !== vidId) return v
         return { ...v, segments: (v.segments || []).map(s => {
-          if (s.segmentId !== selectedSegmentId) return s
+          if (s.segmentId !== segId) return s
           const ann = getEffectiveAnnotation(s)
           if (!ann) return s
           ann.persons = (ann.persons || []).filter(p => p.trackId !== trackId)
@@ -341,10 +398,39 @@ export default function AnnotateDetailPage() {
       }),
     }
     setSet(newSet)
-    setSelectedTrackId(null)
     updateAnnotateSet(id, annotateId, newSet)
     fetch(`/api/video-annotation/annotate-sets/${annotateId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newSet) }).catch(() => {})
-  }, [set, selectedVideoId, selectedSegmentId, id, annotateId, updateAnnotateSet])
+  }, [id, annotateId, updateAnnotateSet])
+
+  // eslint-disable-next-line react-hooks/refs -- Keep ref in sync with latest commit function
+  commitPendingDeleteRef.current = commitPendingDelete
+
+  const undoDeleteTrack = useCallback((trackId: number) => {
+    // Cancel the pending commit
+    const entry = commitTimersRef.current.get(trackId)
+    if (entry) {
+      clearTimeout(entry.timer)
+      commitTimersRef.current.delete(trackId)
+    }
+    setPendingDeletes(prev => {
+      const next = new Set(prev)
+      next.delete(trackId)
+      return next
+    })
+    setToasts(prev => prev.filter(t => t.trackId !== trackId))
+    setSelectedTrackId(trackId)
+  }, [])
+
+  // Flush all pending deletes when switching segments
+  const flushPendingDeletes = useCallback(() => {
+    const trackIds = [...pendingDeletes]
+    if (trackIds.length === 0) return
+    for (const tid of trackIds) {
+      const entry = commitTimersRef.current.get(tid)
+      if (entry) { clearTimeout(entry.timer); commitTimersRef.current.delete(tid) }
+      commitPendingDelete(tid)
+    }
+  }, [pendingDeletes, commitPendingDelete])
 
   const handleDeleteSegment = useCallback((segVideoId: string, segSegmentId: number) => {
     if (!set) return
@@ -377,7 +463,8 @@ export default function AnnotateDetailPage() {
     if (!ann) return
     if (segScene) ann.scene = segScene
     if (segCamera) ann.camera = segCamera
-    ann.events = segEvents
+    const speechEvents = (ann.events || []).filter(event => event.type.startsWith('[Speech]'))
+    ann.events = [...segEvents, ...speechEvents]
     seg.humanAnnotation = ann
     updateAnnotateSet(id, annotateId, newSet)
     fetch(`/api/video-annotation/annotate-sets/${annotateId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newSet) }).catch(() => {})
@@ -393,11 +480,30 @@ export default function AnnotateDetailPage() {
 
   const handleJsonSave = useCallback((updated: SegmentAnnotation) => {
     if (!set || !selectedVideoId || selectedSegmentId == null) return
+    const currentSegment = set.videos
+      ?.find(video => video.videoId === selectedVideoId)
+      ?.segments?.find(segment => segment.segmentId === selectedSegmentId)
+    const currentAnnotation = getEffectiveAnnotation(currentSegment || { humanAnnotation: null, modelAnnotation: null })
+    const recognizedObjects = (currentAnnotation?.objects || []).filter(object => Boolean(object._textContent))
+    const speechEvents = (currentAnnotation?.events || []).filter(event => event.type.startsWith('[Speech]'))
+    const annotationWithRecognition: SegmentAnnotation = {
+      ...updated,
+      objects: [
+        ...(updated.objects || []).filter(object => !object._textContent),
+        ...recognizedObjects,
+      ],
+      events: [
+        ...(updated.events || []).filter(event => !event.type.startsWith('[Speech]')),
+        ...speechEvents,
+      ],
+      _recognition: currentAnnotation?._recognition,
+      _pipeline_errors: currentAnnotation?._pipeline_errors,
+    }
     const newSet: AnnotateSet = {
       ...set,
       videos: (set.videos || []).map(v => {
         if (v.videoId !== selectedVideoId) return v
-        return { ...v, segments: (v.segments || []).map(s => s.segmentId !== selectedSegmentId ? s : { ...s, humanAnnotation: updated }) }
+        return { ...v, segments: (v.segments || []).map(s => s.segmentId !== selectedSegmentId ? s : { ...s, humanAnnotation: annotationWithRecognition }) }
       }),
     }
     setSet(newSet)
@@ -471,6 +577,18 @@ export default function AnnotateDetailPage() {
   const selectedVideo: VideoTaskItem | undefined = scopedVideos.find(v => v.videoId === selectedVideoId) || scopedVideos[0]
   const selectedSegment = (selectedVideo?.segments || []).find(s => s.segmentId === selectedSegmentId) || selectedVideo?.segments?.[0]
   const activeAnnotation: SegmentAnnotation | null = getEffectiveAnnotation(selectedSegment || { humanAnnotation: null, modelAnnotation: null })
+  const recognitionStatus = activeAnnotation?._recognition || selectedSegment?.modelAnnotation?._recognition
+  const pipelineErrors = activeAnnotation?._pipeline_errors || selectedSegment?.modelAnnotation?._pipeline_errors || []
+
+  // Display arrays with pending deletes filtered out (track still exists in annotation, just visually hidden)
+  const displayPersons = useMemo(() =>
+    (activeAnnotation?.persons || []).filter(p => !pendingDeletes.has(p.trackId)),
+    [activeAnnotation, pendingDeletes]
+  )
+  const displayObjects = useMemo(() =>
+    (activeAnnotation?.objects || []).filter(o => !pendingDeletes.has(o.trackId)),
+    [activeAnnotation, pendingDeletes]
+  )
 
   useEffect(() => {
     if (selectedTrackId == null || !activeAnnotation) { setLocalEdits(null); return }
@@ -485,7 +603,7 @@ export default function AnnotateDetailPage() {
     if (!activeAnnotation) { setSegScene(null); setSegCamera(null); setSegEvents([]); return }
     setSegScene(activeAnnotation.scene || { tags: [], place: { type: 'unknown', indoor: true, weather: null, lighting: 'unknown', timeOfDay: 'unknown' } })
     setSegCamera(activeAnnotation.camera || { shot: 'unknown', angle: 'unknown', movement: [], lens: 'unknown', stabilization: 'unknown' })
-    setSegEvents(activeAnnotation.events || [])
+    setSegEvents((activeAnnotation.events || []).filter(event => !event.type.startsWith('[Speech]')))
     setSegEditDirty(false)
   }, [activeAnnotation])
 
@@ -501,6 +619,16 @@ export default function AnnotateDetailPage() {
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [selectedTrackId, handleDeleteTrack])
+
+  // Flush pending deletes when switching video or segment
+  const prevVideoSegRef = useRef(`${selectedVideoId || ''}_${selectedSegmentId ?? ''}`)
+  useEffect(() => {
+    const key = `${selectedVideoId || ''}_${selectedSegmentId ?? ''}`
+    if (prevVideoSegRef.current !== key) {
+      prevVideoSegRef.current = key
+      flushPendingDeletes()
+    }
+  }, [selectedVideoId, selectedSegmentId, flushPendingDeletes])
 
   // ── Render ─────────────────────────────────────────
 
@@ -552,7 +680,16 @@ export default function AnnotateDetailPage() {
           </button>
         )}
         {allSegments.some(s => s.status === 'completed') && (
-          <button onClick={() => setShowExport(true)} className="btn-outline rounded-lg px-4 py-2 text-sm">Export</button>
+          <>
+            {selectedSegmentId != null && (
+              <button onClick={handleExportCurrentSegment} className="btn-outline rounded-lg px-4 py-2 text-sm">
+                {t('video.export_current_segment')}
+              </button>
+            )}
+            <button onClick={() => setShowExport(true)} className="btn-outline rounded-lg px-4 py-2 text-sm">
+              {t('video.export_all_annotations')}
+            </button>
+          </>
         )}
       </div>
 
@@ -611,7 +748,7 @@ export default function AnnotateDetailPage() {
           <div className="w-1/2 border-r border-gv-border/50 flex flex-col">
             {selectedVideo && (
               <>
-                <div className="flex-1 flex items-center justify-center p-4"><VideoPlayer src={`/api/video-annotation/files/${selectedVideo.videoId}`} /></div>
+                <div className="flex-1 flex items-center justify-center p-4"><VideoPlayer src={`/api/video-annotation/files/${selectedVideo.videoId}`} startTime={selectedSegment?.start || 0} /></div>
                 <div className="border-t border-gv-border/50 p-3 flex items-center justify-between">
                   <span className="text-sm text-gv-text-dim truncate">{selectedVideo.fileName}</span>
                   {workerStatus === 'ok' && <button onClick={handleAnnotateAll} className="btn-primary rounded-lg px-4 py-2 text-sm">Annotate All Segments</button>}
@@ -696,7 +833,7 @@ export default function AnnotateDetailPage() {
       {phase === 'completed' && (
         <div className="flex-1 flex overflow-hidden">
           <div className="w-[45%] min-w-[400px] flex flex-col border-r border-gv-border/50">
-            {selectedVideo && <div className="flex-shrink-0"><VideoPlayer src={`/api/video-annotation/files/${selectedVideo.videoId}`} /></div>}
+            {selectedVideo && <div className="flex-shrink-0"><VideoPlayer src={`/api/video-annotation/files/${selectedVideo.videoId}`} startTime={selectedSegment?.start || 0} /></div>}
             <div className="flex-shrink-0 bg-gv-surface border-t border-gv-border/50 px-3 py-1.5 flex items-center gap-2">
               {allSegments.length > 0 && (
                 <button onClick={() => setViewMode(null)} className="px-2 py-0.5 rounded text-xs bg-gv-bg text-gv-text-dim hover:bg-gv-pink/10">← Segments</button>
@@ -715,7 +852,7 @@ export default function AnnotateDetailPage() {
             </div>
             {selectedVideo && selectedSegment && (
               <div className="flex-1 overflow-auto p-2 min-h-0">
-                <AnnotationCanvas imageUrl={`/api/video-annotation/files/${selectedVideo.videoId}?t=${(selectedSegment.start || 0) + 1}`} persons={activeAnnotation?.persons || []} objects={activeAnnotation?.objects || []} imgWidth={selectedVideo.width || 1920} imgHeight={selectedVideo.height || 1080} mode={canvasMode} hiddenTrackIds={hiddenTrackIds} onModeChange={setCanvasMode} onDrawBox={handleDrawBox} onSelectTrack={setSelectedTrackId} onResizeBox={handleResizeBox} onDeleteTrack={handleDeleteTrack} selectedTrackId={selectedTrackId} />
+                <AnnotationCanvas imageUrl={`/api/video-annotation/files/${selectedVideo.videoId}?t=${(selectedSegment.start || 0) + 1}`} persons={displayPersons} objects={displayObjects} imgWidth={selectedVideo.width || 1920} imgHeight={selectedVideo.height || 1080} mode={canvasMode} hiddenTrackIds={hiddenTrackIds} onModeChange={setCanvasMode} onDrawBox={handleDrawBox} onSelectTrack={setSelectedTrackId} onResizeBox={handleResizeBox} onDeleteTrack={handleDeleteTrack} selectedTrackId={selectedTrackId} />
               </div>
             )}
           </div>
@@ -740,6 +877,13 @@ export default function AnnotateDetailPage() {
                     <TrackEditor person={'gender' in localEdits ? localEdits as PersonAnnotation : null} object={!('gender' in localEdits) ? localEdits as ObjectAnnotation : null} onChange={handleTrackEdit} onSave={handleSaveEdits} dirty={editDirty} detectionConfidence={(localEdits as unknown as Record<string,unknown>)._detectionConfidence as number | undefined} />
                   </div>
                 )}
+                <TextContent
+                  objects={activeAnnotation.objects || []}
+                  events={activeAnnotation.events || []}
+                  recognition={recognitionStatus}
+                  pipelineErrors={pipelineErrors}
+                  completed={selectedSegment?.status === 'completed'}
+                />
                 {segScene && segCamera && (
                   <div className="mb-4 p-3 rounded-lg border border-gv-border bg-gv-surface">
                     <h4 className="text-sm font-semibold text-gv-text mb-2">Scene &amp; Camera</h4>
@@ -774,6 +918,11 @@ export default function AnnotateDetailPage() {
       )}
 
       <ExportDialog open={showExport} onClose={() => setShowExport(false)} onExport={handleExport} />
+      <UndoToast
+        toasts={toasts}
+        onUndo={undoDeleteTrack}
+        onDismiss={id => setToasts(prev => prev.filter(t => t.id !== id))}
+      />
       </main>
     </div>
   )

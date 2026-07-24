@@ -67,13 +67,13 @@ class YOLO11Detector:
         self,
         frames: list[np.ndarray],
         conf: float | None = None,
-        iou: float = 0.45,
+        iou: float | None = None,
     ) -> list[FrameDetection]:
         if self._model is None:
             raise RuntimeError("YOLO model not loaded — call .load() first")
 
-        conf = conf or DEFAULT_CONFIDENCE_THRESHOLD
-        iou = iou if iou != 0.45 else DEFAULT_IOU_THRESHOLD
+        conf = DEFAULT_CONFIDENCE_THRESHOLD if conf is None else conf
+        iou = DEFAULT_IOU_THRESHOLD if iou is None else iou
         results: list[FrameDetection] = []
 
         for i, frame in enumerate(frames):

@@ -1,20 +1,36 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface Props {
   src: string
   poster?: string
   onFrameSeek?: (time: number) => void
   currentTime?: number
+  startTime?: number
 }
 
-export function VideoPlayer({ src, poster, onFrameSeek, currentTime }: Props) {
+export function VideoPlayer({ src, poster, onFrameSeek, currentTime, startTime = 0 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [time, setTime] = useState(0)
   const [duration, setDuration] = useState(0)
 
   const displayTime = currentTime ?? time
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const seekToSegment = () => {
+      const target = Math.max(0, startTime)
+      const bounded = Number.isFinite(video.duration) ? Math.min(video.duration, target) : target
+      video.currentTime = bounded
+      setTime(bounded)
+      onFrameSeek?.(bounded)
+    }
+    if (video.readyState >= 1) seekToSegment()
+    else video.addEventListener('loadedmetadata', seekToSegment, { once: true })
+    return () => video.removeEventListener('loadedmetadata', seekToSegment)
+  }, [src, startTime, onFrameSeek])
 
   function formatTime(sec: number): string {
     const m = Math.floor(sec / 60)

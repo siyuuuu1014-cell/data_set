@@ -1,7 +1,110 @@
 /** Export service — generates Custom JSON, YOLO, COCO formats. */
 
 import JSZip from 'jszip'
-import type { VideoAnnotation } from './types'
+import type { SegmentAnnotation, VideoAnnotation } from './types'
+
+const MAX_DESCRIPTION_LENGTH = 300
+
+function compactValue(rawValue: string, maxLength = 48): string {
+  const value = rawValue.replace(/_/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.;,]+$/, '')
+  if (value.length <= maxLength) return value
+  const shortened = value.slice(0, maxLength - 1).replace(/\s+\S*$/, '').trim()
+  return `${shortened || value.slice(0, maxLength - 1)}…`
+}
+
+function rankedValues(values: string[], limit: number): string[] {
+  const counts = new Map<string, number>()
+  for (const rawValue of values) {
+    const value = compactValue(rawValue)
+    if (!value || value === 'unknown') continue
+    counts.set(value, (counts.get(value) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([value]) => value)
+}
+
+function joinNatural(values: string[]): string {
+  if (values.length < 2) return values[0] || ''
+  return `${values.slice(0, -1).join(', ')} and ${values[values.length - 1]}`
+}
+
+function limitDescription(description: string): string {
+  if (description.length <= MAX_DESCRIPTION_LENGTH) return description
+  const shortened = description
+    .slice(0, MAX_DESCRIPTION_LENGTH - 1)
+    .replace(/\s+\S*$/, '')
+    .replace(/[.,;: ]+$/, '')
+  return `${shortened}…`
+}
+
+/** Build one deterministic video-level summary from every annotated segment. */
+export function generateVideoDescription(segments: SegmentAnnotation[]): string {
+  if (segments.length === 0) return ''
+
+  const chronological = [...segments].sort((a, b) => a.start - b.start)
+  const places: string[] = []
+  const people: string[] = []
+  const actions: string[] = []
+  const eventDescriptions: string[] = []
+  const objects: string[] = []
+  let hasSpeech = false
+  let hasOnScreenText = false
+
+  for (const segment of chronological) {
+    const place = segment.scene?.place?.type
+    const sceneLabels = new Set<string>()
+    if (place && place !== 'unknown') sceneLabels.add(place.replace(/_/g, ' '))
+    for (const tag of segment.scene?.tags || []) sceneLabels.add(tag.replace(/_/g, ' '))
+    places.push(...sceneLabels)
+
+    for (const person of segment.persons || []) {
+      const identity = [
+        person.gender !== 'unknown' ? person.gender : '',
+        person.ageGroup !== 'unknown' ? person.ageGroup : '',
+      ].filter(Boolean).join(' ')
+      if (identity) people.push(identity)
+      actions.push(...(person.action || []).filter(Boolean))
+    }
+
+    for (const object of segment.objects || []) {
+      if (object._textContent) hasOnScreenText = true
+      else if (object.name && object.name !== 'unknown') objects.push(object.name)
+    }
+
+    for (const event of segment.events || []) {
+      if (!event.type) continue
+      if (event.type.startsWith('[Speech]')) hasSpeech = true
+      else eventDescriptions.push(event.type)
+    }
+  }
+
+  const start = chronological[0].start
+  const end = chronological[chronological.length - 1].end
+  const duration = Math.max(0, end - start)
+  let summary = `A ${duration.toFixed(1)}-second video`
+
+  const mainScenes = rankedValues(places, 2)
+  if (mainScenes.length) summary += ` mainly set in ${joinNatural(mainScenes)}`
+
+  const mainPeople = rankedValues(people, 2)
+  if (mainPeople.length) summary += `, featuring ${joinNatural(mainPeople)}`
+
+  const mainActions = rankedValues(actions, 3)
+  const mainEvents = rankedValues(eventDescriptions, 2)
+  if (mainActions.length) summary += `${mainPeople.length ? ' engaged in' : ', centered on'} ${joinNatural(mainActions)}`
+  else if (mainEvents.length) summary += `, with key events involving ${joinNatural(mainEvents)}`
+
+  const mainObjects = rankedValues(objects, 3)
+  if (mainObjects.length) summary += `, with ${joinNatural(mainObjects)} recurring on screen`
+
+  if (hasSpeech && hasOnScreenText) summary += ', and containing both speech and on-screen text'
+  else if (hasSpeech) summary += ', and containing speech'
+  else if (hasOnScreenText) summary += ', and containing on-screen text'
+
+  return limitDescription(`${summary}.`)
+}
 
 /** Generate user-specified Custom JSON format. */
 export function exportCustomJson(annotations: VideoAnnotation[]): string {

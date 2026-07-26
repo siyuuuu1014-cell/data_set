@@ -24,7 +24,7 @@
 - **批量视频上传**，并以本地文件持久化标注任务
 - **场景感知处理**，在模型推理前完成视频分段
 - **可选本地模型提供者** — YOLO11、LocateAnything、Qwen3-VL、RapidOCR、Whisper 和 Depth Anything
-- **基于 IoU 的跟踪**，关联处理帧中的目标
+- **ByteTrack 跟踪**，包含 Kalman 预测、高低置信度两阶段关联，并保留可配置的旧 IoU 回退
 - **人工审核**，包含画布编辑器、场景导航和时间轴
 - **自定义 JSON、COCO 和 YOLO ZIP 导出**，包含标签和关键帧图像
 
@@ -186,7 +186,20 @@ npm run start
 
 如需单独启动 Web 应用，请运行 `npm run dev`。
 
-> **Worker 配置：** 各脚本现在共用同一个 Python 解析器，并可加载 `workers/video-annotation/worker.env`。复制 `worker.env.example`、选择安装配置，并把 `HF_TOKEN` 保留在进程环境或密钥管理器中；脚本不会持久化该令牌。
+`setup-video-worker.ps1` 会创建 `workers/video-annotation/.venv`；启动和环境检查脚本只使用这个 Nuwa 专用解释器，不再回退到当前激活的 Conda/base 环境，因此不会通过修改 Worker 依赖影响其他项目。`NUWA_WORKER_PYTHON` 仅用于显式指定另一个 Nuwa 专用解释器。
+
+当前已验证的 Windows/NVIDIA 环境可使用以下命令安装完整配置：
+
+```powershell
+./scripts/setup-video-worker.ps1 -Profile full `
+  -TorchIndexUrl https://download.pytorch.org/whl/cu132 `
+  -TorchVersion 2.13.0+cu132 `
+  -TorchvisionVersion 0.28.0+cu132
+```
+
+CPU 部署可省略三个 PyTorch 参数；其他 GPU 应选择与驱动匹配的下载索引和版本。LocateAnything 所需的 Transformers 已固定为 `4.57.1`。
+
+> **Worker 配置：** 脚本可以加载 `workers/video-annotation/worker.env`。复制 `worker.env.example`、选择安装配置，并把 `HF_HOME` 指向持久化缓存，以复用已有模型权重。Hugging Face 可在共享设置页连接一次，也可由部署环境通过 `HF_TOKEN`/密钥管理器提供。除非显式传入 `-DownloadModels`，安装不会下载模型权重。
 
 ## 列类型
 
@@ -241,11 +254,18 @@ FastAPI Worker 提供健康检查、任务状态和处理接口，由 Next.js �
 | `SCENE_THRESHOLD` | Worker 场景检测阈值 |
 | `YOLO_MODEL` | YOLO 模型名称或路径 |
 | `LOCATE_ANYTHING_MODEL` | LocateAnything 模型设置 |
+| `LOCATE_MAX_SIDE` / `LOCATE_MAX_NEW_TOKENS` | LocateAnything 视觉输入和响应上限，默认分别为 `1024` 与 `512` |
+| `LOCATE_GENERATION_MODE` | LocateAnything 生成模式；`hybrid` 保持默认精度路径，可选 `fast` 但复杂场景质量可能下降 |
+| `LOCATE_CATEGORY_MODE` | 精细定位任务的类别策略：默认 `adaptive`，也可设为 `full` |
+| `LOCATE_ADAPTIVE_MAX_CATEGORIES` / `LOCATE_ADAPTIVE_GENERATION_MODE` / `LOCATE_ADAPTIVE_MAX_NEW_TOKENS` | 自适应精细定位的边界，默认分别为 `18`、`fast` 和 `256` |
 | `QWEN_LOCAL_MODEL` | 本地 Qwen 模型标识 |
 | `QWEN_LOCAL_MODEL_PATH` | 本地 Qwen 模型目录，优先于 `QWEN_LOCAL_MODEL` |
 | `DEPTH_MODEL` | Depth Anything 模型标识或本地路径 |
 | `NUWA_PROVIDER_*` | 启用或禁用单个视频模型提供者 |
+| `NUWA_TRACKER_BACKEND` | 跟踪后端，默认 `bytetrack`，可设为 `iou` 使用旧回退 |
+| `TRACK_LOW_THRESHOLD` / `TRACK_HIGH_THRESHOLD` / `TRACK_MATCH_THRESHOLD` / `TRACK_BUFFER` | ByteTrack 置信度、关联和丢失轨迹保留参数 |
 | `NUWA_WORKER_PYTHON` | 所有 Worker 脚本统一使用的 Python 解释器 |
+| `NUWA_TORCH_INDEX_URL` / `NUWA_TORCH_VERSION` / `NUWA_TORCHVISION_VERSION` | 可选的安装期 GPU wheel 来源与精确 PyTorch 版本 |
 | `HF_TOKEN` | 可选的 Hugging Face 访问令牌 |
 | `HF_HOME` / `HF_HUB_CACHE` | Hugging Face 缓存位置 |
 | `NUWA_AUTH_USER` / `NUWA_AUTH_PASSWORD` | 可选的 HTTP Basic 凭据；在共享网络上提供女娲服务时应同时设置 |
@@ -261,13 +281,17 @@ FastAPI Worker 提供健康检查、任务状态和处理接口，由 Next.js �
 | `npm run build` | 创建生产构建 |
 | `npm run start` | 启动生产服务器 |
 | `npm run lint` | 运行 ESLint |
+| `npm run typecheck` | 只执行 TypeScript 类型检查，不生成文件 |
+| `npm test` | 运行 Node 回归、Worker 单元测试和 TypeScript 检查 |
+| `npm run test:node` | 运行流式上传和模型结果保存回归测试 |
+| `npm run test:worker` | 使用项目本地 Python 环境运行 Worker 单元测试 |
 | `npm run setup` | 创建项目运行时目录 |
 | `./scripts/check-video-environment.ps1` | 检查本地视频 Worker 环境 |
 | `./scripts/setup-video-worker.ps1 -Profile full` | 安装可选择的 Worker 依赖配置（基础、单提供者或完整） |
 | `./scripts/start-video-worker.ps1` | 启动视频 Worker |
 | `./scripts/start-all.ps1` | 同时启动 Worker 和 Next.js 开发服务器 |
 
-当前没有自动化测试命令，也没有检入单元测试或集成测试套件。
+`npm test` 是不执行真实模型推理的统一回归入口，覆盖流式上传、超限/中断清理、模型重跑保留人工标注、Provider 状态、ByteTrack 两阶段关联、轨迹身份、OCR、语义解析和结果合并。调用真实模型的完整浏览器/API 流程仍需独立媒体夹具和已配置 Provider。
 
 ## 项目结构
 
@@ -336,13 +360,33 @@ python -m unittest discover -s tests -v
 - RapidOCR 在 CPU 上对片段起始、中间和结束三张完整关键帧执行文字检测与中英文识别，重复文字会去重并保留置信度最高的像素边界框；为兼容现有配置，历史 `trocr` Provider ID 仍然有效。
 - Whisper 识别到语音时返回 `{"text": "..."}`，不再生成虚假的固定置信度，也不返回带时间戳的 `segments`；推理失败会与“正常执行但没有语音”明确区分。
 - 新产生的片段结果包含 OCR 和语音的内部 `_recognition` 状态（`completed`、`no_content`、`no_audio`、`disabled`、`skipped` 或 `failed`）；即使没有识别文字，审核页面也会展示执行状态。
+- LocateAnything 现在声明所需的 Transformers、PEFT、Decord 和 LMDB 版本。缺包或版本不匹配时，Provider 状态会返回 `missing_dependency` 或 `incompatible_dependency`，而不是错误显示为 `ready`，模型准备也会在下载权重前被阻止。Worker 继续复用配置的 Hugging Face 缓存，这些 Python 运行库不会复制模型权重。
+- LocateAnything 使用受支持的 PyTorch SDPA 注意力路径。缺少可选的 FlashAttention 或 MagiAttention 时会给出性能警告并自动回退到可运行的 SDPA，不代表标注失败。
+- 配置的本地 LocateAnything 快照包含 NVIDIA 官方优化 hybrid 执行器时，Worker 会自动使用；不可用时自动回退原有 `generate()` 路径。默认 1024 像素输入上限与该执行器保持一致，类别提示使用模型官方的 `</c>` 分隔符，日志会分别记录模型加载与 grounding 耗时。检测类别、合并规则和导出 JSON 字段均未改变。
+- 普通“标注”“重新运行片段”“全部重新运行”和失败片段重试都会在每个 Worker 任务中显式跳过 LocateAnything；其他 Provider、OCR、语音、跟踪、审核和导出行为保持不变。片段审核工具栏新增“精细定位”，只为当前选中的片段启用 LocateAnything。后端仅在完整增强模式已启用且模型已就绪时接受该请求，避免界面显示精细定位、实际却静默跳过。
+- 片段任务状态会记录当前或最近一次完成的是标准标注还是精细定位；这只是页面运行信息，不改变标注或导出 JSON 结构。重新运行仍只更新 `modelAnnotation`，不会覆盖人工审核副本。
+- 新 pipeline 结果包含 `_provider_statuses`。启用的核心视觉 Provider（YOLO、tracker、LocateAnything 或 Qwen）失败或缺少必需输入时会保留其他可用结果，但片段、视频和标注项目均显示为 `partial_completed`；Qwen 推理异常和无效响应不再被转换为空结果并错误显示成功。主动禁用的 Provider 不会导致降级，检测阶段确实没有目标而使 tracker 跳过则视为正常空结果。审核页会提示降级状态并允许定向重标；包含已知核心 Provider 错误的历史 `completed` 结果，在读取时也会归一化为该状态。
+- 语音识别结果保存在顶层 `speechTranscript` 字段中，不再作为视觉 Event。页面和 Custom JSON 导出会在读取/导出时兼容迁移历史 `[Speech] ...` 条目；OCR 仍保存为带定位框的文字对象。
+- 视觉 Event 由固定 `type` 和一句简短的 `description` 组成，只概括画面中可见的活动。Qwen 会在较长的人物/物体数组之前输出这两个字段，降低输出截断导致 Event 缺失的概率；若语义 Event 缺失或因未定位物体声明被过滤，系统只根据已定位人物、已识别动作和已定位非文字物体生成一条 `visual_activity` 兜底概括。
+- “Edit JSON”会保留 OCR 文字对象、单独展示 `speechTranscript`，历史自由文本视觉 Event 也能在下拉框中显示。仅用于运行诊断的 `_recognition`、`_pipeline_errors`、`_provider_statuses` 和 `_pipeline_status` 继续保存在内部任务数据中，但不会出现在可编辑或导出的标注 JSON 中。已有 `events: []` 的历史标注会在审核页和 Custom JSON 导出时使用同一套基于已定位证据的视觉兜底；只有需要重新执行模型识别时才需要重跑片段。
+- 场景、相机、人物、服装、物体和 Event 的人工审核选项均提供“自定义…”入口；选择后可直接输入任意标签字符串，不改变现有标注字段结构。布尔字段仍保持固定选项，遮挡比例可输入 0–1 范围内的任意数值。
+- “片段文字与语音”区域中的每条 OCR 和语音转写都可以直接修改并保存为人工标注。OCR 修正会同步更新文字对象名称，历史语音 Event 会迁移到 `speechTranscript`；清空错误 OCR 后保存会删除该文字对象，清空语音输入则会清除人工转写，并且人工清除结果不会再次回退显示原模型误识。
+- 重新运行片段只更新 `modelAnnotation`，不再删除已有 `humanAnnotation`。审核页面继续优先显示人工确认版本，同时单独保留新的模型输出和诊断信息。
 - 已保存的历史片段结果不会被自动重写。需要对受影响片段手动执行一次“重新运行片段”，才能生成 RapidOCR 结果和新的识别状态；现在打开片段时，视频播放器也会自动定位到该片段的开始时间。
 
 ## 视频标注导出
 
-- Custom JSON 中的 `video.description` 现在根据全部可用标注片段生成，不再只读取首个片段；最终只输出一句不超过 300 个字符的概括，保留占比最高的场景、人物、动作/事件和代表物体，语音与画面文字仅记录是否存在。
-- “导出当前片段 JSON”只下载当前选中的片段，同时保持与整包 Custom JSON 一致的外层结构和视频级概括；“导出全部标注”继续保留原有 JSON、YOLO ZIP 和 COCO 导出流程。
+- Custom JSON 中的 `video.description` 现在按时间顺序读取全部可用片段的场景、已定位人物/物体、视觉事件、OCR 与语音上下文，由 **Settings** 中配置的通用 OpenAI/Anthropic 兼容 LLM 生成一句视频级总结；长视频会先按时间线分块概括，再归并为最终一句话。
+- 生成视频描述不会重新运行视频 Worker，也不会下载额外视觉模型。未配置通用 LLM 或调用失败时，导出仍会使用原有的本地确定性概括并在页面提示已回退。
+- 单片段导出会把 `speechTranscript` 与仅包含画面信息的 `events` 分开；每条视觉 Event 可包含一句简短的帧/片段 `description`。
+- “导出当前片段 JSON”只下载当前选中的片段，但外层 `video.description` 仍概括整个视频；“导出全部标注”继续保留原有 JSON、YOLO ZIP 和 COCO 导出流程。
 - 女娲当前持久化的标注单位是场景片段（`S1`、`S2`……），一个片段可以合并多个采样帧的观察结果。因此单项导出对应一个选中的片段标注，而不是视频编码层面的每一帧。
+
+## 失败片段恢复
+
+- 失败片段支持通过复选框逐个选择，也可以使用“全选失败片段”，然后点击“重新标注已选”只提交选中的子集；原有单片段重试和全部重新运行功能继续保留。
+- 标注任务文件的更新现已串行化，状态轮询不会再用旧快照覆盖刚提交的新 Worker Job ID。Worker 中确实不存在的作业会明确提示 Job ID 已过期并建议重试，不再只显示裸 `HTTP 404`。
+- 标准重试不会运行 LocateAnything。只有在确实需要额外 grounding 时，才进入选中片段并点击“精细定位”；若完整增强模式尚未就绪，接口会返回明确错误且不会排入一个名不副实的标准任务。
 
 ## 安全与部署说明
 
@@ -359,11 +403,16 @@ python -m unittest discover -s tests -v
 ## 当前限制
 
 - 视频标注模块仍在持续开发；提供者行为还取决于上游模型实现、FFmpeg 以及可用的 CPU/GPU 内存。
-- Python 依赖采用有上下界的兼容范围，而非完全可复现的锁文件；需要特定 CUDA 版本时，应先安装对应的 PyTorch 构建。
+- **LocateAnything 兼容性修复（2026-07-26 已完成真实验证）：** Nuwa 已固定 Transformers `4.57.1`、PEFT `0.19.1`、Decord `0.6.0` 和 LMDB `1.7.5`，使用隔离 Worker 环境，选择 SDPA 而非不受支持的 eager 注意力路径，在报告就绪前检查依赖，并显示降级完成状态。真实运行了 0–8 秒的 `S1`，YOLO、跟踪、LocateAnything、Qwen、OCR、语音和深度阶段全部完成，`_provider_statuses.locate_anything` 与 `_pipeline_status` 均为 `completed`。
+- 在已验证的 8GB Windows GPU 上，LocateAnything 的 SDPA/hybrid 路径仍可能耗时数分钟并接近显存上限，因此它改为按片段主动启用，而不再进入普通标注。自适应类别和有边界的 fast-first 路径用于减少精细任务的预期工作量，但本次没有对该路径给出新的真实模型速度结论；需要优先完整性时仍可设置 `LOCATE_CATEGORY_MODE=full`。
+- 已检查的历史 `ign` 任务是在 LocateAnything 对 62 个片段全部失败期间生成的。现在读取任务会把这些结果显示为 `partial_completed`，但不会自动重写模型标注；重启 Worker 后需对选中的受影响片段执行重新标注。
+- 检测质量仍受 `yolo11n`、固定 `0.5 FPS` 采样和 `0.65` 置信度阈值限制。Qwen 继续采用保守策略，没有定位证据的 Qwen 单独物体会被丢弃；因此即使恢复 LocateAnything 兼容性，较小、短暂、遮挡或非 COCO 目标仍可能漏识。
+- 极短场景片段在当前固定采样率下可能得不到检测帧。自适应采样、强制中点帧兜底、短片段治理、Qwen 候选证据平衡以及 YOLO 模型/阈值基准测试仍属待办，详见 `PROJECT_STATUS_AND_ISSUES.md` 的 P1-6。
+- Transformers、LocateAnything 远程代码的直接依赖以及已验证的 Windows CUDA PyTorch 构建使用精确版本；其余部分 Python 依赖仍采用有上下界的兼容范围，而非完整的传递依赖锁文件。
 - 受限 Hugging Face 模型需要在共享设置页面完成一次授权，或由部署环境通过 `HF_TOKEN` 提供凭据；模型准备是独立的显式操作，并会在下载前报告缓存/本地模型路径。
-- 服务端会将上传视频缓冲到内存，大文件可能消耗大量内存。
-- 名为 `ByteTrackTracker` 的跟踪器仍使用保守的 IoU 匹配，并非完整的 ByteTrack；视频身份注册表修复了 ID 作用域和不安全的重复分配，但不能替代生产级 ReID 模型。
-- Worker 重点回归测试已经覆盖轨迹身份、抽帧错误、Provider 阈值、RapidOCR 结果转换和识别结果合并，但尚无完整的浏览器/API 端到端测试及数据迁移测试套件。
+- 视频上传现在直接解析 multipart 请求流，通过有上限的临时文件增量写盘并计算哈希；中断、无效或超限请求会清理临时上传目录。自动化测试已用小型流验证内存有界的处理方式，生产部署仍建议补做一次 2GB 规模的内存压力测试。
+- 默认 Tracker 现使用 Ultralytics ByteTrack，包含 Kalman 预测和高低置信度两阶段关联；低置信度框只能维持已确认轨迹，不能单独创建导出轨迹。设置 `NUWA_TRACKER_BACKEND=iou` 可恢复确定性的旧实现。它仍属于片段内运动跟踪，不能替代生产级跨镜头 ReID。
+- `npm test` 已提供统一的 Node/Worker/类型检查回归入口，但尚无调用真实模型的完整浏览器端到端测试及通用数据迁移测试套件。
 - 当前没有传统数据库、多人协作、按用户划分的权限控制或通用迁移系统。
 
 ## License

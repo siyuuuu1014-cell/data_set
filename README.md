@@ -24,7 +24,7 @@ The project is intended primarily for trusted local or internal use. Synthetic p
 - **Batch video upload** with persistent, file-backed annotation jobs
 - **Scene-aware processing** before model inference
 - **Optional local providers** — YOLO11, LocateAnything, Qwen3-VL, RapidOCR, Whisper, and Depth Anything
-- **IoU-based tracking** across processed frames
+- **ByteTrack tracking** with Kalman prediction, two-stage confidence association, and a configurable legacy IoU fallback
 - **Human review** with a canvas editor, scene navigation, and timeline
 - **Custom JSON, COCO, and YOLO ZIP export** with labels and keyframe images
 
@@ -186,7 +186,20 @@ The checked-in helper scripts target PowerShell on Windows:
 
 Run the web application separately with `npm run dev`.
 
-> **Worker configuration:** the scripts share one Python resolver and optionally load `workers/video-annotation/worker.env`. Copy `worker.env.example`, choose an installation profile, and set `HF_HOME` to the persistent cache location you want every Worker to reuse. Hugging Face can be connected once from the shared Settings page, or managed with `HF_TOKEN` in a deployment secret manager.
+`setup-video-worker.ps1` creates `workers/video-annotation/.venv`; the start and environment-check scripts use that Nuwa-only interpreter and never fall back to an active Conda/base environment. This keeps Nuwa's model dependencies from changing other projects. `NUWA_WORKER_PYTHON` remains available only for an explicitly selected, Nuwa-dedicated interpreter.
+
+On the currently validated Windows/NVIDIA setup, install the full profile with the matching CUDA wheel index:
+
+```powershell
+./scripts/setup-video-worker.ps1 -Profile full `
+  -TorchIndexUrl https://download.pytorch.org/whl/cu132 `
+  -TorchVersion 2.13.0+cu132 `
+  -TorchvisionVersion 0.28.0+cu132
+```
+
+Omit the three PyTorch options for a CPU installation, or select the index and versions that match the deployment GPU driver. The LocateAnything-compatible Transformers version is pinned to `4.57.1`.
+
+> **Worker configuration:** the scripts optionally load `workers/video-annotation/worker.env`. Copy `worker.env.example`, choose an installation profile, and set `HF_HOME` to a persistent cache location so existing model weights are reused. Hugging Face can be connected once from the shared Settings page, or managed with `HF_TOKEN` in a deployment secret manager. Setup does not download model weights unless `-DownloadModels` is passed.
 
 ## Column Types
 
@@ -241,11 +254,18 @@ The FastAPI worker exposes health, status, and processing endpoints used by the 
 | `SCENE_THRESHOLD` | Worker scene-detection threshold |
 | `YOLO_MODEL` | YOLO model name or path |
 | `LOCATE_ANYTHING_MODEL` | LocateAnything repository identifier or existing local snapshot directory |
+| `LOCATE_MAX_SIDE` / `LOCATE_MAX_NEW_TOKENS` | LocateAnything visual-input and response limits; defaults are `1024` and `512` |
+| `LOCATE_GENERATION_MODE` | LocateAnything generation mode; `hybrid` preserves the default accuracy path, while optional `fast` may reduce complex-scene quality |
+| `LOCATE_CATEGORY_MODE` | Grounding category strategy for precision jobs: `adaptive` (default) or `full` |
+| `LOCATE_ADAPTIVE_MAX_CATEGORIES` / `LOCATE_ADAPTIVE_GENERATION_MODE` / `LOCATE_ADAPTIVE_MAX_NEW_TOKENS` | Bounds for adaptive precision jobs; defaults are `18`, `fast`, and `256` |
 | `QWEN_LOCAL_MODEL` | Local Qwen model identifier |
 | `QWEN_LOCAL_MODEL_PATH` | Local Qwen model directory; takes precedence over `QWEN_LOCAL_MODEL` |
 | `DEPTH_MODEL` | Depth Anything model identifier or local path |
 | `NUWA_PROVIDER_*` | Enable or disable an individual video model provider |
+| `NUWA_TRACKER_BACKEND` | Tracking backend: `bytetrack` by default, or `iou` for the legacy fallback |
+| `TRACK_LOW_THRESHOLD` / `TRACK_HIGH_THRESHOLD` / `TRACK_MATCH_THRESHOLD` / `TRACK_BUFFER` | ByteTrack confidence, association, and lost-track settings |
 | `NUWA_WORKER_PYTHON` | Explicit Python interpreter used by all worker scripts |
+| `NUWA_TORCH_INDEX_URL` / `NUWA_TORCH_VERSION` / `NUWA_TORCHVISION_VERSION` | Optional setup-time GPU wheel source and exact PyTorch versions |
 | `HF_TOKEN` | Optional Hugging Face access token |
 | `HF_HOME` / `HF_HUB_CACHE` | Hugging Face cache locations |
 | `NUWA_AUTH_USER` / `NUWA_AUTH_PASSWORD` | Optional HTTP Basic credentials; set both when serving Nuwa on a shared network |
@@ -261,13 +281,17 @@ When changing the worker bind host or port, set `VIDEO_ANNOTATION_WORKER_URL` in
 | `npm run build` | Create a production build |
 | `npm run start` | Start the production server |
 | `npm run lint` | Run ESLint |
+| `npm run typecheck` | Run the TypeScript compiler without emitting files |
+| `npm test` | Run Node regression tests, Worker unit tests, and TypeScript checks |
+| `npm run test:node` | Run streaming-upload and model-result regression tests |
+| `npm run test:worker` | Run Worker unit tests with the project-local Python environment |
 | `npm run setup` | Create the project's runtime directories |
 | `./scripts/check-video-environment.ps1` | Check local video-worker prerequisites |
 | `./scripts/setup-video-worker.ps1 -Profile full` | Install a selectable worker dependency profile (`base`, provider-specific, or `full`) |
 | `./scripts/start-video-worker.ps1` | Start the video worker |
 | `./scripts/start-all.ps1` | Start the worker and Next.js development server |
 
-There is currently no automated test command or checked-in unit/integration test suite.
+`npm test` is the unified non-inference regression entry point. It covers the streaming upload sink, interrupted/oversized upload cleanup, preservation of human annotations across model reruns, provider status rules, ByteTrack two-stage association, tracking identity, OCR, semantic parsing, and result merging. A full browser/API test that executes real models remains separate because it requires media fixtures and configured model providers.
 
 ## Project Structure
 
@@ -336,13 +360,32 @@ python -m unittest discover -s tests -v
 - RapidOCR performs full-frame text detection plus Chinese/English recognition on the CPU. OCR checks the start, middle, and end keyframes of each segment, deduplicates repeated lines, and retains the highest-confidence pixel bounding box; the historical `trocr` provider id remains accepted for configuration compatibility.
 - Whisper returns `{"text": "..."}` when speech is recognized. It does not fabricate a confidence score or return timestamped `segments`; failures are reported separately from a valid no-speech result.
 - New segment results include an internal `_recognition` status for OCR and speech (`completed`, `no_content`, `no_audio`, `disabled`, `skipped`, or `failed`). The review page displays these states even when no text was produced.
-- Existing saved segment results are not rewritten automatically. Re-run the affected segment once to generate RapidOCR output and the new recognition status; opening a segment now seeks the video player to that segment's start time.
+- LocateAnything declares its required Transformers, PEFT, Decord, and LMDB versions. Provider readiness reports `incompatible_dependency` or `missing_dependency` instead of `ready`, and model preparation is blocked before any unnecessary model download. The Worker reuses the configured Hugging Face cache; these Python runtime libraries do not duplicate model weights.
+- LocateAnything uses the supported PyTorch SDPA attention path. Missing optional FlashAttention or MagiAttention produces a performance warning and a functional SDPA fallback, not a failed annotation.
+- When the configured local LocateAnything snapshot includes NVIDIA's optimized hybrid executor, the Worker uses it automatically and falls back to the original `generate()` path if it is unavailable. The default 1024-pixel input bound matches that runtime, category prompts use the model's official `</c>` separator, and logs now report model-load and grounding times separately. Detection categories, merge rules, and exported JSON fields are unchanged.
+- Ordinary **Annotate**, **Re-run Segment**, **Re-run All**, and failed-segment retries explicitly skip LocateAnything for each Worker job; all other providers, OCR, speech, tracking, review, and export behavior remain unchanged. In the segment review toolbar, **Precise Locate** enables LocateAnything for that selected segment only. It is accepted only when enhanced mode is active and its model is ready, so an unavailable provider cannot be silently reported as a precision run.
+- Segment task state records whether the current or last completed run was standard or precise. This execution metadata is used by the page only and does not change the annotation or export JSON schema. A re-run still updates only `modelAnnotation` and preserves the human-reviewed copy.
+- New pipeline results include `_provider_statuses`. If an enabled core visual provider (YOLO, tracker, LocateAnything, or Qwen) fails or cannot produce its required input, the usable result is retained but the segment, video, and annotation set are reported as `partial_completed`; Qwen inference and invalid-response errors are no longer converted into empty successful results. Explicitly disabled providers do not degrade a job, and a tracker skipped because detection found no objects is treated as a valid empty result. The review page exposes degraded states and permits targeted re-annotation. Historical completed results containing a known core-provider error are normalized to the same state when read.
+- Speech recognition is stored in the top-level `speechTranscript` field and is not treated as a visual event. The UI and Custom JSON exporter migrate historical `[Speech] ...` entries at read/export time, while OCR remains represented by localized text objects.
+- Visual events contain a fixed `type` and a short `description` of what is visibly happening. Qwen is asked for these fields before long person/object arrays so truncated output is less likely to omit them. If the semantic event is absent or rejected for an unsupported object claim, Nuwa derives one `visual_activity` summary only from localized people, their recognized actions, and localized non-text objects.
+- **Edit JSON** preserves OCR text objects, displays `speechTranscript` separately, and keeps historical free-form visual events selectable. Runtime-only `_recognition`, `_pipeline_errors`, `_provider_statuses`, and `_pipeline_status` remain in internal task storage for diagnostics but are hidden from editable and exported annotation JSON. Existing saved annotations with an empty event list receive the same grounded visual fallback in review and Custom JSON export; re-run a segment only when fresh model recognition is required.
+- Human review selectors for scene, camera, person, clothing, object, and event labels include a **Custom…** option. Selecting it opens a text input and stores the supplied string without changing the existing annotation schema. Boolean fields remain constrained, while occlusion accepts any numeric value from 0 to 1.
+- OCR lines and the speech transcript are directly editable in the Segment Text & Speech panel. Saving creates a human annotation, updates both the OCR text and its object name, migrates legacy speech events to `speechTranscript`, and preserves the correction even when a false OCR/speech result is cleared. Clearing an OCR line removes that false text object; clearing the transcript removes the human-visible transcript.
+- Re-running a segment updates `modelAnnotation` without deleting its `humanAnnotation`. The reviewed copy remains authoritative in the UI, while the new model output and diagnostics remain available separately.
 
 ## Video Annotation Exports
 
-- The `video.description` field in Custom JSON is generated from every available annotation segment, not only the first segment. It is emitted as one concise sentence (up to 300 characters) containing only the dominant settings, people, activities/events, representative objects, and whether speech or on-screen text is present.
-- **Export Current Segment JSON** downloads only the currently selected segment while preserving the same Custom JSON envelope and the video-level summary. **Export All Annotations** keeps the existing JSON, YOLO ZIP, and COCO export flow.
+- The `video.description` field in Custom JSON is a single video-level sentence generated from the chronological semantics of every available annotation segment: scene, grounded people/objects, visual events, OCR, and speech context. Nuwa uses the shared OpenAI- or Anthropic-compatible LLM configured in **Settings**; long videos are summarized in chronological chunks and reduced to one final sentence.
+- Video-description generation does not re-run the video Worker or download another vision model. If the shared LLM is unconfigured or unavailable, export still completes with the previous deterministic local summary and the page reports that fallback.
+- Segment exports keep `speechTranscript` separate from visual-only `events`; each visual event may include its concise frame/segment `description`.
+- **Export Current Segment JSON** downloads only the currently selected segment while its outer `video.description` still summarizes the whole video. **Export All Annotations** keeps the existing JSON, YOLO ZIP, and COCO export flow.
 - Nuwa's persistent annotation unit is a scene segment (`S1`, `S2`, ...), which may combine observations from multiple sampled frames. The single-item export therefore exports one selected segment annotation, not an annotation for every encoded video frame.
+
+## Failed Segment Recovery
+
+- Failed segments can be selected individually with checkboxes. Use **Select All Failed** as a shortcut, then **Retry Selected** to submit only that subset; the existing per-segment retry and full re-run actions remain available.
+- Annotation task-file updates are serialized so status polling cannot overwrite a newly submitted Worker Job ID with an older snapshot. A genuinely missing Worker job is reported as a stale Job ID with a retry instruction instead of a bare `HTTP 404`.
+- Standard retries do not invoke LocateAnything. Open a selected segment and use **Precise Locate** only when additional grounding is worth the longer GPU run; if enhanced mode is not ready, the API returns a clear error and does not enqueue a misleading standard job.
 
 ## Security and Deployment Notes
 
@@ -359,11 +402,16 @@ python -m unittest discover -s tests -v
 ## Current Limitations
 
 - The video annotation module remains under active development; provider behavior also depends on upstream model implementations, FFmpeg, and available CPU/GPU memory.
-- Python dependencies use bounded compatible ranges rather than a fully reproducible lock file. Install a platform-specific PyTorch/CUDA build first when required.
+- **LocateAnything compatibility repair (validated 2026-07-26):** Nuwa pins Transformers `4.57.1`, PEFT `0.19.1`, Decord `0.6.0`, and LMDB `1.7.5`, uses an isolated Worker environment, selects SDPA instead of the unsupported eager attention path, checks dependencies before reporting readiness, and exposes degraded completion. A real 0–8 second `S1` run completed with YOLO, tracking, LocateAnything, Qwen, OCR, speech, and depth; `_provider_statuses.locate_anything` and `_pipeline_status` were both `completed`.
+- On the validated 8GB Windows GPU, LocateAnything's SDPA/hybrid path can still take minutes and approach the VRAM limit. It is therefore opt-in per segment rather than part of ordinary annotation. Adaptive category selection and a bounded fast-first path reduce expected precision-job work, but no new real-model speed claim is made for that path; `LOCATE_CATEGORY_MODE=full` remains available when completeness is more important than latency.
+- The inspected historical `ign` task was produced while LocateAnything was failing in all 62 segments. Reading the task now exposes those results as `partial_completed`, but saved model annotations are not regenerated automatically; re-annotate the selected affected segments after restarting the Worker.
+- Detection quality is still limited by `yolo11n`, fixed `0.5 FPS` sampling, and a `0.65` confidence threshold. Qwen is deliberately conservative, and unlocalized Qwen-only objects are discarded. Small, brief, occluded, or non-COCO targets can therefore still be missed even after LocateAnything compatibility is restored.
+- Very short scene segments can produce no detection frame at the current fixed sample rate. Adaptive sampling, a mandatory midpoint-frame fallback, short-segment handling, balanced Qwen evidence, and YOLO model/threshold benchmarking remain planned work; see `PROJECT_STATUS_AND_ISSUES.md` P1-6.
+- Transformers, LocateAnything's direct remote-code dependencies, and the validated Windows CUDA PyTorch build are exact-versioned; several other Python dependencies still use bounded compatible ranges rather than a complete transitive lock file.
 - Gated Hugging Face models require one-time authorization from the shared Settings page or an externally managed `HF_TOKEN`. Model preparation is an explicit action and reports the cache/local model path before downloading.
-- Video uploads are buffered by the server and may use substantial memory for large files.
-- The tracker named `ByteTrackTracker` still implements conservative IoU matching rather than the full ByteTrack algorithm; the video identity registry fixes ID scope and unsafe duplicate assignment but does not replace a production ReID model.
-- Focused Worker regression tests cover tracking identity, frame-extraction failures, provider thresholds, RapidOCR result conversion, and recognition-result merging, but there is not yet a complete browser/API end-to-end or data-migration test suite.
+- Video uploads are parsed directly from the multipart request stream, written through a bounded temporary file, and hashed incrementally; interrupted, invalid, and oversized requests clean up their temporary upload directory. The automated suite verifies bounded-stream behavior with small fixtures, while a deployment-scale 2GB memory stress test is still recommended.
+- The default tracker now uses Ultralytics ByteTrack with Kalman prediction and high/low-confidence association. Low-confidence detections may maintain a confirmed track but cannot create a new exported track. `NUWA_TRACKER_BACKEND=iou` restores the deterministic legacy implementation. This remains within-segment motion tracking and does not replace production cross-shot ReID.
+- `npm test` provides a unified Node/Worker/typecheck regression entry point, but there is not yet a complete real-model browser end-to-end or general data-migration test suite.
 - There is no conventional database, multi-user collaboration, per-user authorization, or general migration system.
 
 ## License

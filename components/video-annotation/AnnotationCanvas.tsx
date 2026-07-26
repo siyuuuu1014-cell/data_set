@@ -21,7 +21,6 @@ interface Props {
   onDrawBox: (box: BBox) => void
   onSelectTrack: (trackId: number) => void
   onResizeBox: (trackId: number, newBox: BBox) => void
-  onDeleteTrack: (trackId: number) => void
   selectedTrackId: number | null
 }
 
@@ -30,12 +29,11 @@ const HANDLE_HIT = 10
 
 export function AnnotationCanvas({
   imageUrl, persons, objects, imgWidth, imgHeight,
-  mode, hiddenTrackIds, onModeChange, onDrawBox, onSelectTrack, onResizeBox, onDeleteTrack, selectedTrackId,
+  mode, hiddenTrackIds, onModeChange, onDrawBox, onSelectTrack, onResizeBox, selectedTrackId,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef(0)
-  const imgCacheRef = useRef<HTMLImageElement | null>(null)
-  const imgUrlRef = useRef('')
+  const [loadedImage, setLoadedImage] = useState<{ url: string; image: HTMLImageElement } | null>(null)
 
   // All drag state in refs (no re-renders during drag, direct canvas painting)
   const dragRef = useRef<{
@@ -55,18 +53,14 @@ export function AnnotationCanvas({
 
   const [cursor, setCursor] = useState('default')
 
-  // Get selected box data (stable, uses refs to persons/objects via props)
-  const selectedTrackRef = useRef(selectedTrackId)
-  selectedTrackRef.current = selectedTrackId
-
   const getSelectedBox = useCallback(() => {
-    if (selectedTrackRef.current == null) return null
-    const p = persons.find(x => x.trackId === selectedTrackRef.current)
+    if (selectedTrackId == null) return null
+    const p = persons.find(x => x.trackId === selectedTrackId)
     if (p) return { bbox: p.bbox, trackId: p.trackId }
-    const o = objects.find(x => x.trackId === selectedTrackRef.current)
+    const o = objects.find(x => x.trackId === selectedTrackId)
     if (o && o.bbox) return { bbox: o.bbox, trackId: o.trackId }
     return null
-  }, [persons, objects])
+  }, [persons, objects, selectedTrackId])
 
   const hitHandle = useCallback((mx: number, my: number, selBbox: BBox): ResizeHandle | null => {
     const s = scaleRef.current
@@ -108,15 +102,6 @@ export function AnnotationCanvas({
     return map[h]
   }
 
-  // Ensure cached image is current (re-loads only when imageUrl changes)
-  if (imageUrl !== imgUrlRef.current) {
-    imgUrlRef.current = imageUrl
-    imgCacheRef.current = null
-    const img = new Image()
-    img.src = imageUrl
-    img.onload = () => { imgCacheRef.current = img; redraw() }
-  }
-
   // Canvas redraw — uses cached image (no network during drag)
   const redraw = useCallback(() => {
     const canvas = canvasRef.current
@@ -141,10 +126,9 @@ export function AnnotationCanvas({
     // Store dynamic scale — used by all mouse/touch coordinate mapping
     scaleRef.current = dynamicScale
 
-    const img = imgCacheRef.current
-    if (!img) return  // image not yet loaded, will redraw on onload
-
     ctx.clearRect(0, 0, displayW, displayH)
+    const img = loadedImage?.url === imageUrl ? loadedImage.image : null
+    if (!img) return
     ctx.drawImage(img, 0, 0, displayW, displayH)
 
     const isDragging = dragRef.current !== null
@@ -201,7 +185,19 @@ export function AnnotationCanvas({
         }
       }
     }
-  }, [imageUrl, persons, objects, hiddenTrackIds, selectedTrackId, actualW, actualH, mode, getSelectedBox])
+  }, [imageUrl, loadedImage, persons, objects, hiddenTrackIds, selectedTrackId, actualW, actualH, mode, getSelectedBox])
+
+  // Load images outside render. The stale-load guard prevents a slow previous
+  // frame from replacing the image after the selected segment changes.
+  useEffect(() => {
+    let active = true
+    const image = new Image()
+    image.onload = () => {
+      if (active) setLoadedImage({ url: imageUrl, image })
+    }
+    image.src = imageUrl
+    return () => { active = false }
+  }, [imageUrl])
 
   useEffect(() => { redraw() }, [redraw])
 
@@ -237,7 +233,7 @@ export function AnnotationCanvas({
     ctx.restore()
   }, [redraw])
 
-  windowMoveRef.current = useCallback((e: MouseEvent) => {
+  const handleWindowMove = useCallback((e: MouseEvent) => {
     const dr = dragRef.current
     if (!dr) return
     const { x, y } = getCanvasPos(e.clientX, e.clientY)
@@ -274,7 +270,7 @@ export function AnnotationCanvas({
     rafRef.current = requestAnimationFrame(paintFrame)
   }, [actualW, actualH, paintFrame])
 
-  windowUpRef.current = useCallback((e: MouseEvent) => {
+  const handleWindowUp = useCallback(() => {
     const dr = dragRef.current
     if (!dr) return
     // Detach listeners
@@ -295,6 +291,17 @@ export function AnnotationCanvas({
     cancelAnimationFrame(rafRef.current)
     setTimeout(redraw, 0)
   }, [onDrawBox, onResizeBox, redraw])
+
+  useEffect(() => {
+    windowMoveRef.current = handleWindowMove
+    windowUpRef.current = handleWindowUp
+  }, [handleWindowMove, handleWindowUp])
+
+  useEffect(() => () => {
+    window.removeEventListener('mousemove', windowMoveRef.current as EventListener)
+    window.removeEventListener('mouseup', windowUpRef.current as EventListener)
+    cancelAnimationFrame(rafRef.current)
+  }, [])
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     const { x, y } = getCanvasPos(e.clientX, e.clientY)

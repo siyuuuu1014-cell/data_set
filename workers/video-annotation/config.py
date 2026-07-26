@@ -125,5 +125,53 @@ DEFAULT_SAMPLE_FPS = _env_float("SAMPLE_FPS", 0.5)
 DEFAULT_MAX_FRAMES = _env_int("MAX_FRAMES", 8)
 DEFAULT_MAX_NEW_TOKENS = _env_int("MAX_NEW_TOKENS", 900)
 DEFAULT_MAX_PIXELS = _env_int("MAX_PIXELS", 256 * 256)
+LOCATE_MAX_SIDE = _env_int("LOCATE_MAX_SIDE", 1024, minimum=256)
+LOCATE_MAX_NEW_TOKENS = _env_int("LOCATE_MAX_NEW_TOKENS", 512, minimum=64)
+LOCATE_GENERATION_MODE = os.environ.get(
+    "LOCATE_GENERATION_MODE", "hybrid"
+).strip().lower()
+if LOCATE_GENERATION_MODE not in {"hybrid", "fast", "slow"}:
+    raise ValueError(
+        "LOCATE_GENERATION_MODE must be 'hybrid', 'fast', or 'slow'"
+    )
+LOCATE_CATEGORY_MODE = os.environ.get(
+    "LOCATE_CATEGORY_MODE", "adaptive"
+).strip().lower()
+if LOCATE_CATEGORY_MODE not in {"adaptive", "full"}:
+    raise ValueError(
+        "LOCATE_CATEGORY_MODE must be 'adaptive' or 'full'"
+    )
+LOCATE_ADAPTIVE_MAX_CATEGORIES = _env_int(
+    "LOCATE_ADAPTIVE_MAX_CATEGORIES", 18, minimum=8
+)
+LOCATE_ADAPTIVE_GENERATION_MODE = os.environ.get(
+    "LOCATE_ADAPTIVE_GENERATION_MODE", "fast"
+).strip().lower()
+if LOCATE_ADAPTIVE_GENERATION_MODE not in {"fast", "hybrid"}:
+    raise ValueError(
+        "LOCATE_ADAPTIVE_GENERATION_MODE must be 'fast' or 'hybrid'"
+    )
+LOCATE_ADAPTIVE_MAX_NEW_TOKENS = _env_int(
+    "LOCATE_ADAPTIVE_MAX_NEW_TOKENS", 256, minimum=64
+)
 DEFAULT_CONFIDENCE_THRESHOLD = _env_float("CONFIDENCE_THRESHOLD", 0.65)
 DEFAULT_IOU_THRESHOLD = _env_float("IOU_THRESHOLD", 0.6)
+TRACKER_BACKEND = os.environ.get("NUWA_TRACKER_BACKEND", "bytetrack").strip().lower()
+if TRACKER_BACKEND not in {"bytetrack", "iou"}:
+    raise ValueError("NUWA_TRACKER_BACKEND must be 'bytetrack' or 'iou'")
+DEFAULT_TRACK_LOW_THRESHOLD = min(
+    DEFAULT_CONFIDENCE_THRESHOLD,
+    max(0.0, _env_float("TRACK_LOW_THRESHOLD", 0.1)),
+)
+DEFAULT_TRACK_HIGH_THRESHOLD = min(
+    1.0,
+    max(DEFAULT_TRACK_LOW_THRESHOLD, _env_float(
+        "TRACK_HIGH_THRESHOLD",
+        DEFAULT_CONFIDENCE_THRESHOLD,
+    )),
+)
+DEFAULT_TRACK_MATCH_THRESHOLD = min(
+    1.0,
+    max(0.0, _env_float("TRACK_MATCH_THRESHOLD", 0.8)),
+)
+DEFAULT_TRACK_BUFFER = max(1, _env_int("TRACK_BUFFER", 30))

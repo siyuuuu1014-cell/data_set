@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import type { SegmentAnnotation } from '@/services/video-annotation/types'
+import { visualEventsFor } from '@/services/video-annotation/visual-events'
 
 interface Props {
   annotation: SegmentAnnotation | null
@@ -17,21 +18,33 @@ export function JsonEditor({ annotation, onSave }: Props) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset editable text from source
     if (!annotation) { setText(''); return }
     // Clean internal fields before showing
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { _pipeline_errors, _recognition, ...topClean } = annotation as unknown as Record<string, unknown>
+    const topClean = { ...annotation } as unknown as Record<string, unknown>
+    delete topClean._pipeline_errors
+    delete topClean._recognition
+    delete topClean._provider_statuses
+    delete topClean._pipeline_status
+    delete topClean._humanEdited
+    const legacySpeech = (annotation.events || [])
+      .filter(event => event.type.startsWith('[Speech]'))
+      .map(event => event.type.replace(/^\[Speech\]\s*/, '').trim())
+      .filter(Boolean)
+      .join('\n')
     const cleaned = {
       ...topClean,
+      speechTranscript: annotation.speechTranscript || legacySpeech || undefined,
       persons: (annotation.persons || []).map(({ ...p }) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { _className, _detectionConfidence, ...rest } = p as unknown as Record<string, unknown>
         return rest as unknown as typeof p
       }),
-      objects: (annotation.objects || []).filter(o => !o._textContent).map(({ ...o }) => {
+      objects: (annotation.objects || []).map(({ ...o }) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { _detectionConfidence, _textContent, ...rest } = o as unknown as Record<string, unknown>
+        const { _detectionConfidence, ...rest } = o as unknown as Record<string, unknown>
         return rest as unknown as typeof o
       }),
-      events: (annotation.events || []).filter(event => !event.type.startsWith('[Speech]')),
+      // Speech is stored separately from visual events. Migrate old
+      // "[Speech] ..." entries when opening annotations created by older builds.
+      events: visualEventsFor(annotation),
     }
     setText(JSON.stringify(cleaned, null, 2))
     setError('')

@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useLang } from '@/services/i18n'
 import type {
   EventAnnotation,
@@ -11,9 +12,16 @@ import type {
 interface Props {
   objects: ObjectAnnotation[]
   events: EventAnnotation[]
+  speechTranscript?: string
   recognition?: SegmentRecognitionStatus
   pipelineErrors?: string[]
   completed?: boolean
+  onSave?: (edits: TextContentEdits) => void
+}
+
+export interface TextContentEdits {
+  ocr: Array<{ trackId: number; text: string }>
+  speechTranscript: string
 }
 
 function stripSpeechPrefix(eventType: string): string {
@@ -28,21 +36,54 @@ function matchingError(errors: string[], kind: 'ocr' | 'speech'): string | undef
 export function TextContent({
   objects,
   events,
+  speechTranscript,
   recognition,
   pipelineErrors = [],
   completed = false,
+  onSave,
 }: Props) {
   const { t } = useLang()
   const textObjects = objects.filter(object => Boolean(object._textContent))
   const speechEvents = events.filter(event => event.type.startsWith('[Speech]'))
+  const speechTexts = [
+    speechTranscript?.trim(),
+    ...speechEvents.map(event => stripSpeechPrefix(event.type).trim()),
+  ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
+  const [ocrDrafts, setOcrDrafts] = useState<Record<number, string>>(() => Object.fromEntries(
+    textObjects.map(object => [object.trackId, object._textContent || '']),
+  ))
+  const [speechDraft, setSpeechDraft] = useState(() => speechTexts.join('\n'))
+  const [dirty, setDirty] = useState(false)
 
-  if (!completed && !recognition && textObjects.length === 0 && speechEvents.length === 0) {
+  if (!completed && !recognition && textObjects.length === 0 && speechTexts.length === 0) {
     return null
   }
 
   return (
     <div className="mb-4 p-3 rounded-lg border border-gv-border bg-gv-surface">
-      <h4 className="text-sm font-semibold text-gv-text mb-3">{t('recognition.title')}</h4>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold text-gv-text">{t('recognition.title')}</h4>
+        {onSave && (
+          <button
+            onClick={() => {
+              onSave({
+                ocr: textObjects.map(object => ({
+                  trackId: object.trackId,
+                  text: (ocrDrafts[object.trackId] ?? object._textContent ?? '').trim(),
+                })),
+                speechTranscript: speechDraft.trim(),
+              })
+              setDirty(false)
+            }}
+            disabled={!dirty}
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${
+              dirty ? 'btn-primary' : 'bg-gv-border text-gv-text-muted cursor-not-allowed'
+            }`}
+          >
+            {t('recognition.save_corrections')}
+          </button>
+        )}
+      </div>
 
       <RecognitionSection
         title={t('recognition.ocr_title')}
@@ -53,10 +94,25 @@ export function TextContent({
         {textObjects.length > 0 && (
           <div className="space-y-1.5">
             {textObjects.map(object => (
-              <div key={object.trackId} className="bg-gv-bg-deep rounded px-2.5 py-1.5 text-xs text-gv-text break-words">
-                <span>{object._textContent}</span>
+              <div key={object.trackId} className="flex items-center gap-2">
+                {onSave ? (
+                  <input
+                    type="text"
+                    value={ocrDrafts[object.trackId] ?? object._textContent ?? ''}
+                    onChange={event => {
+                      setOcrDrafts(current => ({ ...current, [object.trackId]: event.target.value }))
+                      setDirty(true)
+                    }}
+                    className="input-field min-w-0 flex-1 text-xs py-1.5"
+                    placeholder={t('recognition.ocr_placeholder')}
+                  />
+                ) : (
+                  <div className="min-w-0 flex-1 bg-gv-bg-deep rounded px-2.5 py-1.5 text-xs text-gv-text break-words">
+                    {object._textContent}
+                  </div>
+                )}
                 {object._detectionConfidence != null && (
-                  <span className="ml-1.5 text-gv-text-muted">
+                  <span className="shrink-0 text-[11px] text-gv-text-muted">
                     ({(object._detectionConfidence * 100).toFixed(0)}%)
                   </span>
                 )}
@@ -70,17 +126,27 @@ export function TextContent({
         title={t('recognition.speech_title')}
         stage={recognition?.speech}
         legacyError={matchingError(pipelineErrors, 'speech')}
-        hasContent={speechEvents.length > 0}
+        hasContent={speechTexts.length > 0}
       >
-        {speechEvents.length > 0 && (
+        {onSave ? (
+          <textarea
+            value={speechDraft}
+            onChange={event => {
+              setSpeechDraft(event.target.value)
+              setDirty(true)
+            }}
+            className="input-field min-h-20 w-full resize-y text-xs py-1.5"
+            placeholder={t('recognition.speech_placeholder')}
+          />
+        ) : speechTexts.length > 0 ? (
           <div className="space-y-1.5">
-            {speechEvents.map((event, index) => (
-              <div key={`${event.type}_${index}`} className="bg-gv-bg-deep rounded px-2.5 py-1.5 text-xs text-gv-text break-words">
-                {stripSpeechPrefix(event.type)}
+            {speechTexts.map((speechText, index) => (
+              <div key={`${speechText}_${index}`} className="bg-gv-bg-deep rounded px-2.5 py-1.5 text-xs text-gv-text break-words">
+                {speechText}
               </div>
             ))}
           </div>
-        )}
+        ) : null}
       </RecognitionSection>
     </div>
   )

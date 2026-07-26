@@ -10,7 +10,7 @@ import torch
 from PIL import Image
 
 from config import DEPTH_ANYTHING_MODEL, DEVICE
-from providers.registry import model_load_kwargs
+from providers.registry import model_load_kwargs, resolve_model_reference
 from .base import DepthResult
 
 logger = logging.getLogger(__name__)
@@ -32,13 +32,14 @@ class DepthAnythingEstimator:
     def load(self) -> None:
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
-        logger.info("Loading Depth Anything v2: %s", self._model_name)
-        load_kwargs = model_load_kwargs("depth_anything", self._model_name)
+        model_ref = resolve_model_reference("depth_anything", self._model_name)
+        logger.info("Loading Depth Anything v2: %s", model_ref)
+        load_kwargs = model_load_kwargs("depth_anything", model_ref)
         self._processor = AutoImageProcessor.from_pretrained(
-            self._model_name, **load_kwargs
+            model_ref, **load_kwargs
         )
         self._model = AutoModelForDepthEstimation.from_pretrained(
-            self._model_name, **load_kwargs
+            model_ref, **load_kwargs
         )
         if DEVICE in {"cuda", "mps"}:
             self._model = self._model.to(DEVICE)

@@ -3,7 +3,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 
 // GET /api/restore/tables — scan parquet files for a project (lightweight, no row reads)
-export async function GET(_req: Request) {
+export async function GET() {
   try {
     const dir = path.join(process.cwd(), 'generated_data', 'mr1h21v5')
     if (!existsSync(dir)) {

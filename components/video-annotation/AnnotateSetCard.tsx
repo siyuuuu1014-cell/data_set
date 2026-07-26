@@ -15,6 +15,7 @@ const STATUS_STYLES: Record<AnnotateSetStatus, { labelKey: string; color: string
   awaiting_review: { labelKey: 'video.status.review', color: 'bg-gv-pink' },
   approved: { labelKey: 'video.status.approved', color: 'bg-gv-green-deep' },
   completed: { labelKey: 'video.status.completed', color: 'bg-gv-green-deep' },
+  partial_completed: { labelKey: 'video.status.partial_completed', color: 'bg-gv-gold' },
   failed: { labelKey: 'video.status.failed', color: 'bg-gv-pink-dark' },
   cancelled: { labelKey: 'video.status.cancelled', color: 'bg-gv-text-muted' },
 }

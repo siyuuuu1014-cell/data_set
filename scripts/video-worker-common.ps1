@@ -41,33 +41,13 @@ function Resolve-NuwaWorkerPython {
         return $venvPython
     }
 
-    $conda = Get-Command conda -ErrorAction SilentlyContinue
-    if ($conda) {
-        try {
-            $envInfo = ((& $conda.Source env list --json 2>$null) | Out-String | ConvertFrom-Json)
-            $yoloEnv = $envInfo.envs | Where-Object { (Split-Path $_ -Leaf) -eq "yolo" } | Select-Object -First 1
-            if ($yoloEnv) {
-                $condaPython = Join-Path $yoloEnv "python.exe"
-                if (Test-Path -LiteralPath $condaPython -PathType Leaf) {
-                    return $condaPython
-                }
-            }
-        } catch {
-            # Fall through to the active/system interpreter.
-        }
-    }
+    throw @"
+Nuwa's isolated Video Worker environment is missing:
+  $venvPython
 
-    if ($Env:CONDA_PREFIX) {
-        $activeCondaPython = Join-Path $Env:CONDA_PREFIX "python.exe"
-        if (Test-Path -LiteralPath $activeCondaPython -PathType Leaf) {
-            return $activeCondaPython
-        }
-    }
-
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        return $python.Source
-    }
-
-    throw "No Python interpreter found. Create workers/video-annotation/.venv or set NUWA_WORKER_PYTHON."
+Run .\scripts\setup-video-worker.ps1 to create it, or explicitly set
+NUWA_WORKER_PYTHON to another Nuwa-only interpreter. The launcher will not
+fall back to a shared Conda/base environment because changing Worker
+dependencies there could break other projects.
+"@
 }

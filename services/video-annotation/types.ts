@@ -67,6 +67,7 @@ export interface ObjectAnnotation {
 
 export interface EventAnnotation {
   type: string
+  description?: string
   confidence: number
   _confidenceAvailable?: boolean
 }
@@ -92,6 +93,14 @@ export interface SegmentRecognitionStatus {
   speech?: RecognitionStageResult
 }
 
+export type ProviderExecutionStatus = 'pending' | 'completed' | 'disabled' | 'skipped' | 'failed'
+
+export interface ProviderExecutionResult {
+  status: ProviderExecutionStatus
+  reason?: string
+  error?: string
+}
+
 export interface SceneAnnotation {
   tags: string[]
   place: PlaceInfo
@@ -115,8 +124,12 @@ export interface SegmentAnnotation {
   persons: PersonAnnotation[]
   objects: ObjectAnnotation[]
   events: EventAnnotation[]
+  speechTranscript?: string
   _recognition?: SegmentRecognitionStatus
   _pipeline_errors?: string[]
+  _provider_statuses?: Record<string, ProviderExecutionResult>
+  _pipeline_status?: 'completed' | 'partial_completed'
+  _humanEdited?: boolean
 }
 
 // ── Video & Task ───────────────────────────────────────────
@@ -143,6 +156,7 @@ export type VideoTaskStatus =
   | 'uploading'
   | 'processing'
   | 'completed'
+  | 'partial_completed'
   | 'failed'
 
 export interface VideoTaskItem {
@@ -165,8 +179,11 @@ export type SegmentStatus =
   | 'confirmed'
   | 'processing'
   | 'completed'
+  | 'partial_completed'
   | 'failed'
   | 'skipped'
+
+export type AnnotationExecutionMode = 'standard' | 'precision'
 
 export interface SegmentState {
   segmentId: number
@@ -178,6 +195,8 @@ export interface SegmentState {
   error?: string
   progressPhase?: string
   workerJobId?: string
+  processingMode?: AnnotationExecutionMode
+  lastCompletedMode?: AnnotationExecutionMode
 }
 
 // ── Annotate set ───────────────────────────────────────────
@@ -192,6 +211,7 @@ export type AnnotateSetStatus =
   | 'awaiting_review'
   | 'approved'
   | 'completed'
+  | 'partial_completed'
   | 'failed'
   | 'cancelled'
 
@@ -227,7 +247,7 @@ export type DeploymentMode = 'standard' | 'enhanced'
 
 export interface EnhancedSetupStatus {
   status: 'idle' | 'auth_required' | 'checking_access' | 'access_required' | 'downloading' | 'ready' | 'failed'
-  phase: 'authorization' | 'access' | 'download' | 'ready' | null
+  phase: 'authorization' | 'access' | 'download' | 'compatibility' | 'ready' | null
   error: string | null
   updatedAt: number | null
   model: string | null

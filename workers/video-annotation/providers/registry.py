@@ -10,6 +10,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from config import (
     PROVIDER_ENABLED,
     QWEN_MODEL,
     QWEN_MODEL_REVISION,
+    TRACKER_BACKEND,
     WHISPER_MODEL,
     WHISPER_MODEL_REVISION,
     YOLO_MODEL,
@@ -46,6 +48,7 @@ class ProviderSpec:
     gated: bool = False
     approximate_vram_gb: float = 0.0
     download_patterns: tuple[str, ...] = ()
+    required_versions: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -61,6 +64,8 @@ class ProviderStatus:
     profile: str
     approximateVramGb: float
     missingDependencies: list[str]
+    incompatibleDependencies: list[str]
+    requiredPackageVersions: dict[str, str]
     reason: str | None = None
 
 
@@ -71,15 +76,31 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         approximate_vram_gb=0.5,
     ),
     "tracker": ProviderSpec(
-        "tracker", "IoU tracker", "providers.tracker.bytetrack:ByteTrackTracker",
-        ("numpy",), "detect",
+        "tracker",
+        "ByteTrack" if TRACKER_BACKEND == "bytetrack" else "Legacy IoU tracker",
+        "providers.tracker.bytetrack:ByteTrackTracker",
+        (
+            ("numpy", "ultralytics", "lap")
+            if TRACKER_BACKEND == "bytetrack"
+            else ("numpy",)
+        ),
+        "detect",
     ),
     "locate_anything": ProviderSpec(
         "locate_anything", "LocateAnything-3B",
         "providers.grounding.locate_anything:LocateAnythingGrounding",
-        ("torch", "transformers", "accelerate", "timm", "PIL"), "grounding",
+        (
+            "torch", "torchvision", "transformers", "accelerate", "timm",
+            "PIL", "peft", "decord", "lmdb", "cv2",
+        ), "grounding",
         LOCATE_ANYTHING_MODEL, LOCATE_ANYTHING_REVISION, True, 6.0,
         ("*.json", "*.py", "*.safetensors", "*.txt", "*.model", "*.tiktoken"),
+        (
+            ("transformers", "4.57.1"),
+            ("peft", "0.19.1"),
+            ("decord", "0.6.0"),
+            ("lmdb", "1.7.5"),
+        ),
     ),
     "qwen_vl": ProviderSpec(
         "qwen_vl", "Qwen3-VL", "providers.semantic.qwen_vl:QwenVLSemantic",
@@ -175,11 +196,62 @@ def model_revision(provider_id: str) -> str | None:
     return spec.revision
 
 
-def model_load_kwargs(provider_id: str, model_ref: str) -> dict[str, str]:
+def _cached_model_snapshot(
+    model_ref: str,
+    revision: str | None,
+) -> Path | None:
+    """Return a complete local snapshot for a remote model when available."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return None
+
+    def cached(filename: str) -> Path | None:
+        try:
+            path = try_to_load_from_cache(
+                model_ref,
+                filename,
+                revision=revision,
+            )
+        except (OSError, ValueError):
+            return None
+        candidate = Path(path) if isinstance(path, str) else None
+        return candidate if candidate is not None and candidate.is_file() else None
+
+    config_path = cached("config.json")
+    if config_path is None:
+        return None
+    has_weights = any(cached(filename) is not None for filename in (
+        "model.safetensors",
+        "model.safetensors.index.json",
+        "pytorch_model.bin",
+        "pytorch_model.bin.index.json",
+    ))
+    return config_path.parent if has_weights else None
+
+
+def resolve_model_reference(provider_id: str, model_ref: str) -> str:
+    """Prefer a complete local snapshot and otherwise retain the remote ID."""
+    local_path = Path(model_ref).expanduser()
+    if local_path.exists():
+        return str(local_path.resolve())
+    snapshot = _cached_model_snapshot(
+        model_ref,
+        model_revision(provider_id),
+    )
+    return str(snapshot) if snapshot is not None else model_ref
+
+
+def model_load_kwargs(provider_id: str, model_ref: str) -> dict[str, Any]:
     if Path(model_ref).expanduser().exists():
         return {}
     revision = model_revision(provider_id)
-    return {"revision": revision} if revision else {}
+    kwargs: dict[str, Any] = {"revision": revision} if revision else {}
+    if _cached_model_snapshot(model_ref, revision) is not None:
+        # Avoid repeated Hugging Face HEAD retries when a complete local model
+        # is already present. Uncached models keep the normal download path.
+        kwargs["local_files_only"] = True
+    return kwargs
 
 
 def is_provider_enabled(provider_id: str, options: dict[str, Any] | None = None) -> bool:
@@ -199,6 +271,11 @@ def is_provider_enabled(provider_id: str, options: dict[str, Any] | None = None)
 
 def create_provider(provider_id: str) -> Any:
     spec = PROVIDER_SPECS[provider_id]
+    incompatible = _incompatible_versions(spec)
+    if incompatible:
+        raise RuntimeError(
+            f"{spec.label} has incompatible Python dependencies: {', '.join(incompatible)}"
+        )
     module_name, class_name = spec.factory.split(":", 1)
     module = importlib.import_module(module_name)
     return getattr(module, class_name)()
@@ -219,6 +296,18 @@ def loaded_provider_ids() -> list[str]:
 
 def _missing_modules(spec: ProviderSpec) -> list[str]:
     return [name for name in spec.modules if importlib.util.find_spec(name) is None]
+
+
+def _incompatible_versions(spec: ProviderSpec) -> list[str]:
+    incompatible: list[str] = []
+    for package, expected in spec.required_versions:
+        try:
+            actual = package_version(package)
+        except PackageNotFoundError:
+            continue
+        if actual != expected:
+            incompatible.append(f"{package}=={expected} required (found {actual})")
+    return incompatible
 
 
 def has_hf_token() -> bool:
@@ -320,6 +409,7 @@ def provider_status(provider_id: str, check_model: bool = True) -> ProviderStatu
     spec = PROVIDER_SPECS[provider_id]
     enabled = PROVIDER_ENABLED.get(provider_id, True)
     missing = _missing_modules(spec)
+    incompatible = _incompatible_versions(spec)
     loaded = provider_id in loaded_provider_ids()
     status = "loaded" if loaded else "ready"
     reason: str | None = None
@@ -334,6 +424,9 @@ def provider_status(provider_id: str, check_model: bool = True) -> ProviderStatu
     elif missing:
         status = "missing_dependency"
         reason = f"Missing Python dependencies: {', '.join(missing)}"
+    elif incompatible:
+        status = "incompatible_dependency"
+        reason = f"Incompatible Python dependencies: {', '.join(incompatible)}"
     elif check_model and spec.model and not _local_model_ready(spec):
         if spec.gated and not has_hf_token():
             status = "auth_required"
@@ -354,6 +447,8 @@ def provider_status(provider_id: str, check_model: bool = True) -> ProviderStatu
         profile=spec.profile,
         approximateVramGb=spec.approximate_vram_gb,
         missingDependencies=missing,
+        incompatibleDependencies=incompatible,
+        requiredPackageVersions=dict(spec.required_versions),
         reason=reason,
     )
 
@@ -373,6 +468,11 @@ def download_provider(provider_id: str) -> dict[str, Any]:
     missing = _missing_modules(spec)
     if missing:
         raise RuntimeError(f"Missing dependencies for {provider_id}: {', '.join(missing)}")
+    incompatible = _incompatible_versions(spec)
+    if incompatible:
+        raise RuntimeError(
+            f"Incompatible dependencies for {provider_id}: {', '.join(incompatible)}"
+        )
     if not spec.model:
         return {"provider": provider_id, "status": "ready", "path": None}
 

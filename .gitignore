@@ -45,16 +45,19 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Claude
+# Claude / Agent harnesses
 .claude/
 CLAUDE.md
 AGENTS.md
+.agent_harnesses.json
 
 # Video annotation
 data/video-annotations/
 workers/video-annotation/.venv/
 workers/video-annotation/worker.env
-workers/video-annotation/__pycache__/
+workers/video-annotation/**/__pycache__/
+workers/video-annotation/.pytest_cache/
+workers/video-annotation/*.egg-info/
 workers/video-annotation/models/
 workers/video-annotation/cache/
 *.mp4
@@ -66,3 +69,6 @@ workers/video-annotation/cache/
 *.pt
 *.pth
 *.onnx
+
+# Project snapshot
+project_tree.txt

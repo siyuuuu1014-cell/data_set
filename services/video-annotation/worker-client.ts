@@ -53,7 +53,10 @@ export async function getJobStatus(jobId: string): Promise<WorkerJobStatus> {
     signal: AbortSignal.timeout(5000),
   })
   if (!res.ok) {
-    return { jobId, status: 'failed', progress: 0, result: null, error: `HTTP ${res.status}` }
+    const error = res.status === 404
+      ? 'Worker job not found (HTTP 404). The saved job ID is stale; retry this segment.'
+      : `Worker job status request failed (HTTP ${res.status})`
+    return { jobId, status: 'failed', progress: 0, result: null, error }
   }
   return res.json() as Promise<WorkerJobStatus>
 }

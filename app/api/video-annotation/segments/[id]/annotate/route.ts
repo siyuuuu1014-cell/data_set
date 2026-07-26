@@ -1,9 +1,16 @@
 import { NextRequest } from 'next/server'
 import { readFile, writeFile, readdir } from 'fs/promises'
 import { existsSync } from 'fs'
-import { submitJob, getJobStatus } from '@/services/video-annotation/worker-client'
+import { submitJob, getJobStatus, workerDeployment } from '@/services/video-annotation/worker-client'
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskPath, getUploadDir, getUploadFile } from '@/services/video-annotation/server-paths'
+import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { applyCompletedModelResult } from '@/services/video-annotation/model-result'
+import {
+  buildAnnotationOptions,
+  precisionAvailabilityError,
+} from '@/services/video-annotation/annotation-options'
+import type { AnnotationExecutionMode } from '@/services/video-annotation/types'
 
 // POST /api/video-annotation/segments/[id]/annotate — trigger annotation
 export async function POST(
@@ -12,11 +19,44 @@ export async function POST(
 ) {
   const segmentId = (await params).id
   try {
-    const body = await req.json() as { annotateSetId: string; videoId: string; start: number; end: number }
+    const body = await req.json() as {
+      annotateSetId: string
+      videoId: string
+      start: number
+      end: number
+      mode?: AnnotationExecutionMode
+    }
     assertSafeIdentifier(body.annotateSetId, 'annotation set ID')
     assertSafeIdentifier(body.videoId, 'video ID')
     if (!/^\d+$/.test(segmentId)) {
       return Response.json({ error: { code: 'VALIDATION', message: 'Invalid segment ID' } }, { status: 400 })
+    }
+    if (body.mode !== undefined && body.mode !== 'standard' && body.mode !== 'precision') {
+      return Response.json({ error: { code: 'VALIDATION', message: 'Invalid annotation mode' } }, { status: 400 })
+    }
+    const mode: AnnotationExecutionMode = body.mode || 'standard'
+    if (mode === 'precision') {
+      let deployment
+      try {
+        deployment = await workerDeployment()
+      } catch (error) {
+        return Response.json(
+          {
+            error: {
+              code: 'WORKER_UNAVAILABLE',
+              message: error instanceof Error ? error.message : 'Worker not reachable',
+            },
+          },
+          { status: 503 },
+        )
+      }
+      const unavailable = precisionAvailabilityError(deployment)
+      if (unavailable) {
+        return Response.json(
+          { error: { code: 'PRECISION_UNAVAILABLE', message: unavailable } },
+          { status: 409 },
+        )
+      }
     }
 
     // Find video file
@@ -34,17 +74,17 @@ export async function POST(
       video_path: videoPath,
       segment_start: body.start,
       segment_end: body.end,
-      options: {
-        sample_fps: 0.5,
-        ontology: {},
-        video_id: body.videoId,
-        segment_id: parseInt(segmentId, 10),
-      },
+      options: buildAnnotationOptions({
+        videoId: body.videoId,
+        segmentId: parseInt(segmentId, 10),
+        mode,
+      }),
     })
 
     // Store jobId mapping
     const taskPath = getTaskPath(body.annotateSetId)
-    if (existsSync(taskPath)) {
+    await withTaskFileLock(taskPath, async () => {
+      if (!existsSync(taskPath)) return
       const raw = await readFile(taskPath, 'utf-8')
       const task = JSON.parse(raw)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
@@ -55,12 +95,15 @@ export async function POST(
         if (seg) {
           seg.workerJobId = jobId
           seg.status = 'processing'
+          seg.processingMode = mode
+          delete seg.error
+          delete seg.progressPhase
           await writeFile(taskPath, JSON.stringify(task, null, 2))
         }
       }
-    }
+    })
 
-    return Response.json({ data: { jobId, segmentId } }, { status: 202 })
+    return Response.json({ data: { jobId, segmentId, mode } }, { status: 202 })
   } catch (err) {
     if (isUnsafePathError(err)) return Response.json({ error: { code: 'VALIDATION', message: err.message } }, { status: 400 })
     return Response.json({ error: { code: 'INTERNAL', message: String(err) } }, { status: 500 })
@@ -84,47 +127,62 @@ export async function GET(
     }
     const taskPath = getTaskPath(annotateSetId)
 
-    let jobId: string | null = null
-    if (existsSync(taskPath)) {
-      const raw = await readFile(taskPath, 'utf-8')
-      const task = JSON.parse(raw)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
-      const vid = task.videos?.find((v: any) => v.videoId === videoId)
-      if (vid) {
+    return await withTaskFileLock(taskPath, async () => {
+      let jobId: string | null = null
+      if (existsSync(taskPath)) {
+        const raw = await readFile(taskPath, 'utf-8')
+        const task = JSON.parse(raw)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
-        const seg = vid.segments?.find((s: any) => s.segmentId === parseInt(segmentId))
-        if (seg?.workerJobId) {
-          jobId = seg.workerJobId
+        const vid = task.videos?.find((v: any) => v.videoId === videoId)
+        if (vid) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
+          const seg = vid.segments?.find((s: any) => s.segmentId === parseInt(segmentId))
+          if (seg?.workerJobId) {
+            jobId = seg.workerJobId
+          }
         }
       }
-    }
 
-    if (!jobId) {
-      return Response.json({ data: { status: 'draft' } })
-    }
+      if (!jobId) {
+        return Response.json({ data: { status: 'draft' } })
+      }
 
-    const status = await getJobStatus(jobId)
+      const status = await getJobStatus(jobId)
 
-    // If completed, save result
-    if (status.status === 'completed' && status.result && existsSync(taskPath)) {
-      const raw = await readFile(taskPath, 'utf-8')
-      const task = JSON.parse(raw)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
-      const vid = task.videos?.find((v: any) => v.videoId === videoId)
-      if (vid) {
+      // If completed, save result. Re-check the ID before writing so an old
+      // poll can never overwrite a newly submitted retry.
+      if (status.status === 'completed' && status.result && existsSync(taskPath)) {
+        const raw = await readFile(taskPath, 'utf-8')
+        const task = JSON.parse(raw)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
-        const seg = vid.segments?.find((s: any) => s.segmentId === parseInt(segmentId))
-        if (seg) {
-          seg.modelAnnotation = status.result
-          seg.status = 'completed'
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          delete (seg as any).humanAnnotation  // clear stale human edits — model regenerated
-          await writeFile(taskPath, JSON.stringify(task, null, 2))
+        const vid = task.videos?.find((v: any) => v.videoId === videoId)
+        if (vid) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
+          const seg = vid.segments?.find((s: any) => s.segmentId === parseInt(segmentId))
+          if (seg?.workerJobId === jobId) {
+            applyCompletedModelResult(seg, status.result)
+            await writeFile(taskPath, JSON.stringify(task, null, 2))
+          }
+        }
+      } else if (status.status === 'failed' && existsSync(taskPath)) {
+        const raw = await readFile(taskPath, 'utf-8')
+        const task = JSON.parse(raw)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
+        const vid = task.videos?.find((v: any) => v.videoId === videoId)
+        if (vid) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON parsing from file
+          const seg = vid.segments?.find((s: any) => s.segmentId === parseInt(segmentId))
+          if (seg?.workerJobId === jobId) {
+            seg.status = 'failed'
+            seg.error = status.error || 'Unknown error'
+            delete seg.processingMode
+            await writeFile(taskPath, JSON.stringify(task, null, 2))
+          }
         }
       }
-    }
 
-    return Response.json({ data: status })
+      return Response.json({ data: status })
+    })
   } catch (err) {
     if (isUnsafePathError(err)) return Response.json({ error: { code: 'VALIDATION', message: err.message } }, { status: 400 })
     return Response.json({ error: { code: 'INTERNAL', message: String(err) } }, { status: 500 })

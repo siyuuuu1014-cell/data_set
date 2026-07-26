@@ -6,6 +6,7 @@ import {
   HAIR_COLORS, HAIR_STYLES, CLOTHING_TYPES, CLOTHING_COLORS,
   OBJECT_CATEGORIES,
 } from '@/services/video-annotation/constants'
+import { EditableSelect } from './EditableSelect'
 
 interface Props {
   person: PersonAnnotation | null
@@ -24,54 +25,39 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Gender">
-            <select value={person.gender} onChange={e => onChange({ ...person, gender: e.target.value })}
-              className="input-field w-full text-xs py-1.5">
-              {GENDERS.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.gender} options={GENDERS}
+              onChange={value => onChange({ ...person, gender: value })} />
           </Field>
           <Field label="Age Group">
-            <select value={person.ageGroup} onChange={e => onChange({ ...person, ageGroup: e.target.value })}
-              className="input-field w-full text-xs py-1.5">
-              {AGE_GROUPS.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.ageGroup} options={AGE_GROUPS}
+              onChange={value => onChange({ ...person, ageGroup: value })} />
           </Field>
           <Field label="Pose">
-            <select value={person.pose} onChange={e => onChange({ ...person, pose: e.target.value })}
-              className="input-field w-full text-xs py-1.5">
-              {POSES.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.pose} options={POSES}
+              onChange={value => onChange({ ...person, pose: value })} />
           </Field>
           <Field label="Facing">
-            <select value={person.facing} onChange={e => onChange({ ...person, facing: e.target.value })}
-              className="input-field w-full text-xs py-1.5">
-              {FACING.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.facing} options={FACING}
+              onChange={value => onChange({ ...person, facing: value })} />
           </Field>
           <Field label="Expression">
-            <select value={person.expression} onChange={e => onChange({ ...person, expression: e.target.value })}
-              className="input-field w-full text-xs py-1.5">
-              {EXPRESSIONS.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.expression} options={EXPRESSIONS}
+              onChange={value => onChange({ ...person, expression: value })} />
           </Field>
           <Field label="Occlusion">
-            <select value={String(person.occlusion)} onChange={e => onChange({ ...person, occlusion: parseFloat(e.target.value) })}
-              className="input-field w-full text-xs py-1.5">
-              {[0, 0.1, 0.25, 0.5, 0.75, 1.0].map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <input type="number" value={person.occlusion} min={0} max={1} step={0.05}
+              onChange={e => onChange({ ...person, occlusion: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)) })}
+              className="input-field w-full text-xs py-1.5" />
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Hair Color">
-            <select value={person.hair?.color || 'unknown'} onChange={e => onChange({ ...person, hair: { ...person.hair, color: e.target.value } })}
-              className="input-field w-full text-xs py-1.5">
-              {HAIR_COLORS.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.hair?.color || 'unknown'} options={HAIR_COLORS}
+              onChange={value => onChange({ ...person, hair: { ...person.hair, color: value } })} />
           </Field>
           <Field label="Hair Style">
-            <select value={person.hair?.style || 'unknown'} onChange={e => onChange({ ...person, hair: { ...person.hair, style: e.target.value } })}
-              className="input-field w-full text-xs py-1.5">
-              {HAIR_STYLES.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
+            <EditableSelect value={person.hair?.style || 'unknown'} options={HAIR_STYLES}
+              onChange={value => onChange({ ...person, hair: { ...person.hair, style: value } })} />
           </Field>
         </div>
         <Field label="Actions (comma separated)">
@@ -86,21 +72,21 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
         <div>
           <p className="text-xs text-gv-text-dim mb-1">Clothing</p>
           {(person.clothing || []).map((c, i) => (
-            <div key={i} className="flex gap-2 mb-1">
-              <select value={c.type} onChange={e => {
+            <div key={i} className="flex items-start gap-2 mb-1">
+              <div className="flex-1">
+                <EditableSelect value={c.type} options={CLOTHING_TYPES} onChange={value => {
                 const next = [...(person.clothing || [])]
-                next[i] = { ...next[i], type: e.target.value }
+                next[i] = { ...next[i], type: value }
                 onChange({ ...person, clothing: next })
-              }} className="input-field flex-1 text-xs py-1">
-                {CLOTHING_TYPES.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
-              <select value={c.color} onChange={e => {
+                }} selectClassName="input-field w-full text-xs py-1" inputClassName="input-field w-full text-xs py-1" />
+              </div>
+              <div className="w-28">
+                <EditableSelect value={c.color} options={CLOTHING_COLORS} onChange={value => {
                 const next = [...(person.clothing || [])]
-                next[i] = { ...next[i], color: e.target.value }
+                next[i] = { ...next[i], color: value }
                 onChange({ ...person, clothing: next })
-              }} className="input-field w-24 text-xs py-1">
-                {CLOTHING_COLORS.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
+                }} selectClassName="input-field w-full text-xs py-1" inputClassName="input-field w-full text-xs py-1" />
+              </div>
               <button onClick={() => {
                 const next = (person.clothing || []).filter((_, j) => j !== i)
                 onChange({ ...person, clothing: next })
@@ -136,16 +122,12 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
             className="input-field w-full text-xs py-1.5" />
         </Field>
         <Field label="Category">
-          <select value={object.category} onChange={e => onChange({ ...object, category: e.target.value })}
-            className="input-field w-full text-xs py-1.5">
-            {OBJECT_CATEGORIES.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
+          <EditableSelect value={object.category} options={OBJECT_CATEGORIES}
+            onChange={value => onChange({ ...object, category: value })} />
         </Field>
         <Field label="Color">
-          <select value={object.color} onChange={e => onChange({ ...object, color: e.target.value })}
-            className="input-field w-full text-xs py-1.5">
-            {CLOTHING_COLORS.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
+          <EditableSelect value={object.color} options={CLOTHING_COLORS}
+            onChange={value => onChange({ ...object, color: value })} />
         </Field>
         <Field label="Brand">
           <input type="text" value={object.brand || ''} onChange={e => onChange({ ...object, brand: e.target.value || null })}

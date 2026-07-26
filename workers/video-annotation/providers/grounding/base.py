@@ -18,6 +18,8 @@ class GroundingProvider(Protocol):
         self,
         image_path: str,
         categories: list[str],
+        generation_mode: str | None = None,
+        max_new_tokens: int | None = None,
     ) -> list[dict]:
         """Detect objects of given categories in image.
         

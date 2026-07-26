@@ -26,7 +26,7 @@ def merge_results(
     1. Build a track→attributes map from semantic results (person attributes matched by class).
     2. Match fine_objects (from LocateAnything-3B) to tracks based on spatial overlap.
     3. Attach depth/height from Depth Anything to each track's keyframe bbox.
-    4. Append OCR-detected texts and audio transcript.
+    4. Append OCR-detected texts and keep audio transcript separate from visual events.
     5. Return structured dict matching the JSON schema.
     """
     ocr_texts = ocr_texts or []
@@ -210,6 +210,10 @@ def merge_results(
         list(semantic.events) if semantic else [],
         unconfirmed_qwen_names,
     )
+    if not events:
+        grounded_event = _build_grounded_visual_event(persons, objects)
+        if grounded_event:
+            events = [grounded_event]
 
     # ── Append OCR-detected text objects ───────────────
     existing_track_ids = [o.get("trackId", 0) for o in objects]
@@ -246,16 +250,10 @@ def merge_results(
         objects.append(text_entry)
         ocr_start_id += 1
 
-    # ── Append audio transcript ────────────────────────
-    if transcript.get("text"):
-        events.append({
-            "type": f"[Speech] {transcript['text'][:200]}",
-            # EventAnnotation historically requires a numeric value. Keep a
-            # neutral placeholder for compatibility and mark it unavailable so
-            # the UI never presents it as a measured confidence score.
-            "confidence": 0.0,
-            "_confidenceAvailable": False,
-        })
+    # Speech is recognition output, not a visual event. Older saved results
+    # used "[Speech] ..." event entries; the web layer still reads those as a
+    # legacy fallback without producing them for new annotations.
+    speech_transcript = str(transcript.get("text", "")).strip()
 
     return {
         "scene": scene,
@@ -263,6 +261,7 @@ def merge_results(
         "persons": persons,
         "objects": objects,
         "events": events,
+        "speechTranscript": speech_transcript,
         "_recognition": recognition_status,
     }
 
@@ -371,7 +370,9 @@ def _filter_semantic_events(
     """Drop semantic events that depend on an unlocalized object claim."""
     filtered: list[dict] = []
     for event in events:
-        event_text = str(event.get("type", "")).strip()
+        event_type = str(event.get("type", "")).strip()
+        event_description = str(event.get("description", "")).strip()
+        event_text = " ".join(value for value in (event_type, event_description) if value)
         normalized = re.sub(r"\s+", " ", event_text.lower()).strip(" .")
         if not normalized:
             continue
@@ -388,3 +389,57 @@ def _filter_semantic_events(
             continue
         filtered.append(event)
     return filtered
+
+
+def _build_grounded_visual_event(
+    persons: list[dict],
+    objects: list[dict],
+) -> dict | None:
+    """Build a concise visual-only fallback from localized observations."""
+    actions: list[str] = []
+    for person in persons:
+        for raw_action in person.get("action", []):
+            action = re.sub(r"\s+", " ", str(raw_action)).strip()
+            if action and action.lower() != "unknown" and action not in actions:
+                actions.append(action)
+
+    object_names: list[str] = []
+    for obj in objects:
+        if obj.get("bbox") is None or obj.get("category") == "text":
+            continue
+        name = re.sub(r"\s+", " ", str(obj.get("name", ""))).strip()
+        if name and name.lower() != "unknown" and name not in object_names:
+            object_names.append(name)
+
+    parts: list[str] = []
+    if persons:
+        person_label = "one person" if len(persons) == 1 else f"{len(persons)} people"
+        if actions:
+            parts.append(
+                f"The frame shows {person_label}, with visible actions including "
+                f"{_join_english(actions[:3])}"
+            )
+        else:
+            parts.append(f"The frame shows {person_label}")
+    if object_names:
+        object_phrase = _join_english(object_names[:3])
+        if parts:
+            parts.append(f"alongside {object_phrase}")
+        else:
+            parts.append(f"The frame shows {object_phrase}")
+    if not parts:
+        return None
+
+    return {
+        "type": "visual_activity",
+        "description": ", ".join(parts) + ".",
+        "confidence": 0.6,
+    }
+
+
+def _join_english(values: list[str]) -> str:
+    if len(values) < 2:
+        return values[0] if values else ""
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"

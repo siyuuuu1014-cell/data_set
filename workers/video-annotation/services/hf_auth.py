@@ -80,6 +80,8 @@ def setup_summary() -> dict[str, Any]:
         setup = dict(_setup)
     if model.status in {"ready", "loaded"}:
         setup.update(status="ready", phase="ready", error=None)
+    elif model.status == "incompatible_dependency":
+        setup.update(status="failed", phase="compatibility", error=model.reason)
     elif deployment_mode() == "standard" and setup["status"] not in {"checking_access", "downloading"}:
         setup.update(status="idle", phase=None, error=None)
     return {

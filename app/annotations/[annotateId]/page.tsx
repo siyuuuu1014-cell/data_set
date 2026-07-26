@@ -23,7 +23,9 @@ function formatDuration(seconds: number): string {
 function videoProgress(video: VideoTaskItem): { completed: number; total: number } {
   const segments = video.segments || []
   return {
-    completed: segments.filter(segment => segment.status === 'completed').length,
+    completed: segments.filter(segment => (
+      segment.status === 'completed' || segment.status === 'partial_completed'
+    )).length,
     total: segments.length,
   }
 }

@@ -41,12 +41,91 @@ class TrackerAssociationTests(unittest.TestCase):
             ]),
         ]
 
-        tracker = ByteTrackTracker(match_thresh=0.8)
+        tracker = ByteTrackTracker(match_thresh=0.8, backend="iou")
         result = tracker.track(detections, "segment-1")
 
         second_frame_ids = [track["trackId"] for track in result[1].tracks]
         self.assertEqual(len(second_frame_ids), len(set(second_frame_ids)))
         self.assertEqual(second_frame_ids, [1, 2])
+
+
+class ByteTrackBackendTests(unittest.TestCase):
+    def test_low_confidence_detection_cannot_start_a_track(self) -> None:
+        tracker = ByteTrackTracker(
+            track_thresh=0.65,
+            low_thresh=0.1,
+            backend="bytetrack",
+        )
+        result = tracker.track([
+            FrameDetection(0, [{
+                "bbox": [0, 0, 100, 100],
+                "className": "person",
+                "confidence": 0.3,
+            }]),
+        ], "segment-1")
+
+        self.assertEqual(result[0].tracks, [])
+
+    def test_low_confidence_detection_keeps_confirmed_track_alive(self) -> None:
+        tracker = ByteTrackTracker(
+            track_thresh=0.65,
+            low_thresh=0.1,
+            backend="bytetrack",
+        )
+        result = tracker.track([
+            FrameDetection(0, [{
+                "bbox": [0, 0, 100, 100],
+                "className": "person",
+                "confidence": 0.95,
+            }]),
+            FrameDetection(1, [{
+                "bbox": [2, 0, 100, 100],
+                "className": "person",
+                "confidence": 0.3,
+            }]),
+        ], "segment-1")
+
+        self.assertEqual(len(result[0].tracks), 1)
+        self.assertEqual(len(result[1].tracks), 1)
+        self.assertEqual(
+            result[0].tracks[0]["trackId"],
+            result[1].tracks[0]["trackId"],
+        )
+
+    def test_first_high_confidence_appearance_starts_track_after_empty_frame(self) -> None:
+        tracker = ByteTrackTracker(backend="bytetrack")
+        result = tracker.track([
+            FrameDetection(0, []),
+            FrameDetection(1, [{
+                "bbox": [0, 0, 100, 100],
+                "className": "person",
+                "confidence": 0.95,
+            }]),
+        ], "segment-1")
+
+        self.assertEqual(result[0].tracks, [])
+        self.assertEqual(len(result[1].tracks), 1)
+
+    def test_different_classes_never_share_exported_track_id(self) -> None:
+        tracker = ByteTrackTracker(backend="bytetrack")
+        result = tracker.track([
+            FrameDetection(0, [
+                {
+                    "bbox": [0, 0, 100, 100],
+                    "className": "person",
+                    "confidence": 0.95,
+                },
+                {
+                    "bbox": [0, 0, 100, 100],
+                    "className": "dog",
+                    "confidence": 0.95,
+                },
+            ]),
+        ], "segment-1")
+
+        ids = [track["trackId"] for track in result[0].tracks]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(len(set(ids)), 2)
 
 
 class VideoIdentityTests(unittest.TestCase):

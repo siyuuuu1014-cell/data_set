@@ -3,7 +3,7 @@
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams } from 'next/navigation'
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import Link from 'next/link'
 import { exportSql, exportJson, exportCsv, exportXml, exportExcel, downloadFile } from '@/services/export'
 
@@ -23,19 +23,8 @@ export default function ProjectPage() {
   const { getTables, deleteTable, setTables, updateTable } = useStore()
   const { t } = useLang()
   const tables = getTables(id)
-  const [orderedTables, setOrderedTables] = useState(tables)
+  const orderedTables = tables
   const [dragIdx, setDragIdx] = useState<number | null>(null)
-
-  const tablesRef = useRef(tables)
-
-  // Sync orderedTables when tables change
-  /* eslint-disable-next-line react-hooks/set-state-in-effect */
-  useEffect(() => {
-    tablesRef.current = tables
-    if (orderedTables.length !== tables.length || !tables.every((t, i) => orderedTables[i]?.id === t.id)) {
-      setOrderedTables(tables)
-    }
-  }, [tables, orderedTables])
 
   // On mount or when tables change, fetch row counts from Parquet for tables
   // that show 0 rows (either no cached rowCount or genuinely empty).
@@ -59,7 +48,7 @@ export default function ProjectPage() {
         }
       })
     )
-  }, [id, tables.length])
+  }, [id, tables, updateTable])
 
   const [showExport, setShowExport] = useState(false)
   const [exportFormats, setExportFormats] = useState<Record<string, ExportFormat>>({})
@@ -109,7 +98,6 @@ export default function ProjectPage() {
     const reordered = [...orderedTables]
     const [moved] = reordered.splice(dragIdx, 1)
     reordered.splice(i, 0, moved)
-    setOrderedTables(reordered)
     setDragIdx(i)
     setTables(id, reordered)
   }, [dragIdx, orderedTables, id, setTables])

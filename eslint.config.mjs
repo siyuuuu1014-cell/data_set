@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "workers/video-annotation/.venv/**",
+    "workers/video-annotation/.pytest_cache/**",
+    "workers/video-annotation/**/__pycache__/**",
+    "workers/video-annotation/*.egg-info/**",
   ]),
 ]);
 

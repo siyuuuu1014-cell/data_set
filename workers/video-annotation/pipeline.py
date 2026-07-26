@@ -14,7 +14,15 @@ from typing import Any
 
 import numpy as np
 
-from config import DEFAULT_SAMPLE_FPS
+from config import (
+    DEFAULT_SAMPLE_FPS,
+    DEFAULT_TRACK_LOW_THRESHOLD,
+    LOCATE_ADAPTIVE_GENERATION_MODE,
+    LOCATE_ADAPTIVE_MAX_CATEGORIES,
+    LOCATE_ADAPTIVE_MAX_NEW_TOKENS,
+    LOCATE_CATEGORY_MODE,
+    TRACKER_BACKEND,
+)
 from providers.depth.base import DepthResult
 from providers.registry import create_provider, is_provider_enabled, mark_loaded
 from services.frame_sampling import (
@@ -28,6 +36,127 @@ from services.video_identity import assign_fallback_identities, assign_video_ide
 from services.video_metadata import get_video_metadata
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_GROUNDING_CATEGORIES = (
+    "person", "man", "woman", "child", "adult", "teenager", "elderly",
+    "car", "truck", "bus", "bicycle", "motorcycle", "chair", "table",
+    "desk", "sofa", "bed", "cabinet", "shelf", "bench", "piano",
+    "guitar", "violin", "drum", "instrument", "laptop", "phone",
+    "television", "monitor", "keyboard", "mouse", "camera", "book",
+    "newspaper", "magazine", "cup", "bottle", "bowl", "plate", "knife",
+    "fork", "spoon", "backpack", "handbag", "suitcase", "bag", "hat",
+    "glasses", "watch", "shoe", "clothing", "door", "window", "curtain",
+    "lamp", "clock", "plant", "vase", "picture", "painting", "mirror",
+    "dog", "cat", "bird", "ball", "toy", "food", "fruit", "cake",
+    "pizza", "sandwich",
+)
+
+_ADAPTIVE_CORE_CATEGORIES = (
+    "person", "man", "woman", "child", "adult", "clothing", "phone", "bag",
+)
+
+_ADAPTIVE_FILL_CATEGORIES = (
+    "chair", "table", "car", "bottle", "cup", "backpack", "door", "window",
+    "laptop", "television", "book", "shoe", "hat", "glasses", "food",
+)
+
+
+def _normalize_grounding_category(value: Any) -> str:
+    """Normalize a model hint before adding it to an open-vocabulary prompt."""
+    if not isinstance(value, str):
+        return ""
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    normalized = re.sub(r"\s+", " ", normalized.replace("_", " "))
+    if not normalized or "</c>" in normalized or len(normalized) > 64:
+        return ""
+    return normalized
+
+
+def _select_grounding_categories(
+    explicit_categories: Any,
+    detections: list[Any],
+    semantic: Any,
+) -> tuple[list[str], str]:
+    """Choose a bounded LocateAnything query without hiding explicit choices.
+
+    Custom categories always win. The default adaptive mode uses grounded YOLO
+    classes and Qwen's semantic candidates, then fills a small common-object
+    core. If neither provider supplies evidence, it falls back to the complete
+    list so a provider failure cannot silently erase grounding coverage.
+    """
+    if isinstance(explicit_categories, (list, tuple)):
+        custom: list[str] = []
+        seen: set[str] = set()
+        for value in explicit_categories:
+            category = _normalize_grounding_category(value)
+            key = category.casefold()
+            if category and key not in seen:
+                seen.add(key)
+                custom.append(category)
+        return custom, "custom"
+
+    if LOCATE_CATEGORY_MODE == "full":
+        return list(DEFAULT_GROUNDING_CATEGORIES), "full"
+
+    evidence: list[str] = []
+
+    for frame in detections:
+        for detection in getattr(frame, "detections", []) or []:
+            category = _normalize_grounding_category(
+                detection.get("className") if isinstance(detection, dict) else ""
+            )
+            if category:
+                evidence.append(category)
+
+    if semantic is not None:
+        person_attributes = getattr(semantic, "persons_attributes", []) or []
+        if person_attributes:
+            evidence.append("person")
+        for person in person_attributes:
+            if not isinstance(person, dict):
+                continue
+            gender = str(person.get("gender") or "").strip().lower()
+            age_group = str(
+                person.get("ageGroup") or person.get("age") or ""
+            ).strip().lower()
+            if gender == "male":
+                evidence.append("man")
+            elif gender == "female":
+                evidence.append("woman")
+            if age_group in {"child", "adult", "teenager", "elderly"}:
+                evidence.append(age_group)
+            if person.get("clothing"):
+                evidence.append("clothing")
+
+        for obj in getattr(semantic, "objects_attributes", []) or []:
+            if not isinstance(obj, dict):
+                continue
+            category = _normalize_grounding_category(obj.get("name"))
+            if category:
+                evidence.append(category)
+
+    if not evidence:
+        return list(DEFAULT_GROUNDING_CATEGORIES), "full_fallback"
+
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    def add(values: Any) -> None:
+        for value in values:
+            category = _normalize_grounding_category(value)
+            key = category.casefold()
+            if (
+                category
+                and key not in seen
+                and len(selected) < LOCATE_ADAPTIVE_MAX_CATEGORIES
+            ):
+                seen.add(key)
+                selected.append(category)
+
+    add(evidence)
+    add(_ADAPTIVE_CORE_CATEGORIES)
+    add(_ADAPTIVE_FILL_CATEGORIES)
+    return selected, "adaptive"
 
 
 def _deduplicate_ocr_texts(items: list[dict]) -> list[dict]:
@@ -54,6 +183,41 @@ def _deduplicate_ocr_texts(items: list[dict]) -> list[dict]:
         ):
             best_by_text[normalized] = {**item, "text": text}
     return [best_by_text[key] for key in order]
+
+
+def _degraded_visual_providers(
+    provider_results: dict[str, dict[str, Any]],
+    visual_provider_enabled: dict[str, bool],
+) -> list[str]:
+    """Return enabled visual providers whose result makes the segment partial."""
+    degraded: list[str] = []
+    for provider_id in ("yolo", "tracker", "locate_anything", "qwen_vl"):
+        if not visual_provider_enabled.get(provider_id, False):
+            continue
+
+        result = provider_results.get(provider_id, {})
+        if result.get("status") == "completed":
+            continue
+        if (
+            provider_id == "tracker"
+            and result.get("status") == "skipped"
+            and result.get("reason") == "no_detections"
+        ):
+            continue
+        degraded.append(provider_id)
+    return degraded
+
+
+def _detector_confidence_for_tracking(
+    visual_provider_enabled: dict[str, bool],
+) -> float | None:
+    """Keep low-score boxes only when the real ByteTrack backend can use them."""
+    if (
+        visual_provider_enabled.get("tracker", False)
+        and TRACKER_BACKEND == "bytetrack"
+    ):
+        return DEFAULT_TRACK_LOW_THRESHOLD
+    return None
 
 
 @contextmanager
@@ -124,9 +288,19 @@ def run_annotation_pipeline(
     """
     opts = options or {}
     sample_fps = opts.get("sample_fps", DEFAULT_SAMPLE_FPS)
-    categories = opts.get("categories", ["person","man","woman","child","adult","teenager","elderly","car","truck","bus","bicycle","motorcycle","chair","table","desk","sofa","bed","cabinet","shelf","bench","piano","guitar","violin","drum","instrument","laptop","phone","television","monitor","keyboard","mouse","camera","book","newspaper","magazine","cup","bottle","bowl","plate","knife","fork","spoon","backpack","handbag","suitcase","bag","hat","glasses","watch","shoe","clothing","door","window","curtain","lamp","clock","plant","vase","picture","painting","mirror","dog","cat","bird","ball","toy","food","fruit","cake","pizza","sandwich"])
+    explicit_categories = opts.get("categories")
 
     errors: list[str] = []
+    visual_provider_enabled = {
+        provider_id: is_provider_enabled(provider_id, opts)
+        for provider_id in ("yolo", "tracker", "locate_anything", "qwen_vl")
+    }
+    provider_results: dict[str, dict[str, Any]] = {
+        provider_id: {
+            "status": "pending" if enabled else "disabled",
+        }
+        for provider_id, enabled in visual_provider_enabled.items()
+    }
     recognition_status: dict[str, dict[str, Any]] = {
         "ocr": {"status": "pending", "count": 0},
         "speech": {"status": "pending", "count": 0},
@@ -148,24 +322,41 @@ def run_annotation_pipeline(
         errors.append(f"Frame extraction failed: {e}")
         logger.warning("Frame extraction failed (will skip detection): %s", e)
 
-    if frames and is_provider_enabled("yolo", opts):
+    if not visual_provider_enabled["yolo"]:
+        provider_results["yolo"] = {"status": "disabled"}
+    elif not frames:
+        provider_results["yolo"] = {"status": "skipped", "reason": "no_detection_frames"}
+    else:
         try:
             with _loaded_provider("yolo") as detector:
-                detections = detector.detect_frames(frames)
+                detections = detector.detect_frames(
+                    frames,
+                    conf=_detector_confidence_for_tracking(
+                        visual_provider_enabled,
+                    ),
+                )
                 logger.info("YOLO11: %d frames detected", len(detections))
+            provider_results["yolo"] = {"status": "completed"}
         except Exception as e:
             errors.append(f"YOLO11 detection failed: {e}")
+            provider_results["yolo"] = {"status": "failed", "error": str(e)}
             logger.warning("YOLO11 failed (will skip): %s", e)
 
     # ── Phase 2: ByteTrack tracking ────────────────────
     _report(progress_cb, "ByteTrack tracking", 25)
-    if detections and is_provider_enabled("tracker", opts):
+    if not visual_provider_enabled["tracker"]:
+        provider_results["tracker"] = {"status": "disabled"}
+    elif not detections:
+        provider_results["tracker"] = {"status": "skipped", "reason": "no_detections"}
+    else:
         try:
             with _loaded_provider("tracker") as tracker:
                 tracks = tracker.track(detections, f"seg_{int(segment_start)}")
                 logger.info("ByteTrack: %d frame tracks", len(tracks))
+            provider_results["tracker"] = {"status": "completed"}
         except Exception as e:
             errors.append(f"ByteTrack tracking failed: {e}")
+            provider_results["tracker"] = {"status": "failed", "error": str(e)}
             logger.warning("ByteTrack failed (will skip): %s", e)
 
     # Convert segment-local tracker IDs to video-scoped IDs before any
@@ -203,26 +394,16 @@ def run_annotation_pipeline(
         errors.append(f"Keyframe extraction failed: {e}")
         logger.warning("Keyframe extraction failed (will skip visual phases): %s", e)
 
-    # Phase 3: LocateAnything-3B fine-grained
-    _report(progress_cb, "LocateAnything grounding", 45)
-    fine_objects: list[dict] = []
-    try:
-        if keyframe_paths and is_provider_enabled("locate_anything", opts):
-            with _loaded_provider("locate_anything") as grounding:
-                fine_objects = grounding.detect_objects(keyframe_paths[0], categories)
-                logger.info("LocateAnything: %d objects", len(fine_objects))
-    except ImportError:
-        logger.warning("LocateAnything not installed — skipping")
-    except Exception as e:
-        errors.append(f"LocateAnything grounding failed: {e}")
-        logger.warning("LocateAnything failed (will skip): %s", e)
-        # Continue with other phases — partial results are better than nothing
-
-    # Phase 4: Qwen3-VL semantic attributes
-    _report(progress_cb, "Qwen3-VL semantic", 60)
+    # Phase 3: Qwen3-VL semantic attributes. Semantic candidates also keep the
+    # following open-vocabulary grounding query bounded.
+    _report(progress_cb, "Qwen3-VL semantic", 45)
     semantic: Any = None
-    try:
-        if keyframe_paths and is_provider_enabled("qwen_vl", opts):
+    if not visual_provider_enabled["qwen_vl"]:
+        provider_results["qwen_vl"] = {"status": "disabled"}
+    elif not keyframe_paths:
+        provider_results["qwen_vl"] = {"status": "skipped", "reason": "no_keyframe"}
+    else:
+        try:
             with _loaded_provider("qwen_vl") as semantic_provider:
                 semantic = semantic_provider.annotate_semantic(
                     video_path=video_path,
@@ -234,11 +415,79 @@ def run_annotation_pipeline(
                     examples=opts.get("examples"),
                 )
                 logger.info("Qwen3-VL: semantic complete")
-    except ImportError:
-        logger.warning("Qwen3-VL not installed — skipping")
-    except Exception as e:
-        errors.append(f"Qwen3-VL semantic failed: {e}")
-        logger.warning("Qwen3-VL failed (will skip): %s", e)
+            provider_results["qwen_vl"] = {"status": "completed"}
+        except ImportError as e:
+            message = f"Qwen3-VL not installed: {e}"
+            errors.append(f"Qwen3-VL semantic failed: {message}")
+            provider_results["qwen_vl"] = {"status": "failed", "error": message}
+            logger.warning("Qwen3-VL not installed — skipping")
+        except Exception as e:
+            errors.append(f"Qwen3-VL semantic failed: {e}")
+            provider_results["qwen_vl"] = {"status": "failed", "error": str(e)}
+            logger.warning("Qwen3-VL failed (will skip): %s", e)
+
+    # Phase 4: LocateAnything-3B fine-grained
+    _report(progress_cb, "LocateAnything grounding", 60)
+    fine_objects: list[dict] = []
+    grounding_categories, category_mode = _select_grounding_categories(
+        explicit_categories,
+        detections,
+        semantic,
+    )
+    logger.info(
+        "LocateAnything category selection: mode=%s selected=%d full=%d",
+        category_mode,
+        len(grounding_categories),
+        len(DEFAULT_GROUNDING_CATEGORIES),
+    )
+    if not visual_provider_enabled["locate_anything"]:
+        provider_results["locate_anything"] = {"status": "disabled"}
+    elif not keyframe_paths:
+        provider_results["locate_anything"] = {"status": "skipped", "reason": "no_keyframe"}
+    else:
+        try:
+            with _loaded_provider("locate_anything") as grounding:
+                adaptive_kwargs = (
+                    {
+                        "generation_mode": LOCATE_ADAPTIVE_GENERATION_MODE,
+                        "max_new_tokens": LOCATE_ADAPTIVE_MAX_NEW_TOKENS,
+                    }
+                    if category_mode == "adaptive"
+                    else {}
+                )
+                fine_objects = grounding.detect_objects(
+                    keyframe_paths[0],
+                    grounding_categories,
+                    **adaptive_kwargs,
+                )
+                if (
+                    category_mode == "adaptive"
+                    and LOCATE_ADAPTIVE_GENERATION_MODE == "fast"
+                    and grounding_categories
+                    and not fine_objects
+                ):
+                    logger.warning(
+                        "LocateAnything fast mode returned no boxes; "
+                        "retrying bounded hybrid mode"
+                    )
+                    fine_objects = grounding.detect_objects(
+                        keyframe_paths[0],
+                        grounding_categories,
+                        generation_mode="hybrid",
+                        max_new_tokens=LOCATE_ADAPTIVE_MAX_NEW_TOKENS,
+                    )
+                logger.info("LocateAnything: %d objects", len(fine_objects))
+            provider_results["locate_anything"] = {"status": "completed"}
+        except ImportError as e:
+            message = f"LocateAnything not installed: {e}"
+            errors.append(f"LocateAnything grounding failed: {message}")
+            provider_results["locate_anything"] = {"status": "failed", "error": message}
+            logger.warning("LocateAnything not installed — skipping")
+        except Exception as e:
+            errors.append(f"LocateAnything grounding failed: {e}")
+            provider_results["locate_anything"] = {"status": "failed", "error": str(e)}
+            logger.warning("LocateAnything failed (will skip): %s", e)
+            # Continue with other phases — partial results are better than nothing
 
     # ── Phase 5: scene-text detection and recognition ──
     _report(progress_cb, "OCR text recognition", 70)
@@ -378,6 +627,12 @@ def run_annotation_pipeline(
 
     if errors:
         merged["_pipeline_errors"] = errors
+    degraded_providers = _degraded_visual_providers(
+        provider_results,
+        visual_provider_enabled,
+    )
+    merged["_provider_statuses"] = provider_results
+    merged["_pipeline_status"] = "partial_completed" if degraded_providers else "completed"
 
     elapsed = time.perf_counter() - t0
     logger.info("Pipeline complete in %.1fs", elapsed)

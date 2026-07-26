@@ -15,7 +15,7 @@ import torch
 from PIL import Image
 
 from config import QWEN_MODEL, DEVICE
-from providers.registry import model_load_kwargs
+from providers.registry import model_load_kwargs, resolve_model_reference
 
 logger = logging.getLogger(__name__)
 
@@ -26,18 +26,84 @@ scene: the visible place type, or "unknown"
 lighting: "bright", "dim", "dark", or "unknown"
 indoor: true or false
 camera_angle: "eye-level", "low", "high", "overhead", or "unknown"
+event_type: one event label for the main visible activity
+event_description: one short sentence summarizing what is visibly happening
 persons: a list of clearly visible people; for each include gender, age, action, clothing, and hair
 objects: a list of clearly visible non-person objects; for each include name, category, color, and brand
-event: one short description of the visible activity, or an empty string
 
 Rules:
 - Never guess an object, person, action, or event that is not visually supported.
 - If an object is uncertain or too small to identify, omit it from objects.
 - Use an empty list when no person or object is clearly visible.
 - Use "unknown" for an uncertain attribute instead of inventing a value.
+- For event_type, return exactly one of: music_performance, sports_activity,
+  dance_performance, conversation, argument, celebration, ceremony, cooking,
+  eating, cleaning, repairing, shopping, commuting, exercising, playing,
+  studying, working, accident, emergency; otherwise return visual_activity.
+- event_description must describe only visible people, actions, and objects.
+  Never copy speech or infer an event from dialogue alone. If something is
+  visible, event_description must not be empty.
 - Do not copy entities or activities from these instructions.
 
 Return ONLY JSON. No markdown and no explanation."""
+
+EVENT_TYPES = {
+    "music_performance", "sports_activity", "dance_performance",
+    "conversation", "argument", "celebration", "ceremony",
+    "cooking", "eating", "cleaning", "repairing",
+    "shopping", "commuting", "exercising", "playing",
+    "studying", "working", "accident", "emergency",
+    "visual_activity",
+}
+
+_EVENT_ALIASES = {
+    "music performance": "music_performance",
+    "sports activity": "sports_activity",
+    "dance performance": "dance_performance",
+}
+
+_EVENT_KEYWORDS = (
+    ("music_performance", ("singing", "playing guitar", "playing piano", "music performance")),
+    ("sports_activity", ("playing football", "playing basketball", "playing soccer", "playing tennis")),
+    ("dance_performance", ("dancing", "dance performance")),
+    ("conversation", ("conversation", "talking to", "speaking to", "chatting", "discussion")),
+    ("argument", ("argument", "arguing", "quarreling")),
+    ("celebration", ("celebrating", "celebration")),
+    ("cooking", ("cooking", "preparing food")),
+    ("eating", ("eating", "having a meal")),
+    ("cleaning", ("cleaning",)),
+    ("repairing", ("repairing", "fixing")),
+    ("shopping", ("shopping",)),
+    ("commuting", ("commuting",)),
+    ("exercising", ("exercising", "working out")),
+    ("studying", ("studying",)),
+    ("working", ("working",)),
+    ("accident", ("accident", "collision", "crash")),
+    ("emergency", ("emergency",)),
+)
+
+_EVENT_DEFAULT_DESCRIPTIONS = {
+    "music_performance": "A person is visibly performing music.",
+    "sports_activity": "People are visibly taking part in a sports activity.",
+    "dance_performance": "A person is visibly dancing.",
+    "conversation": "Multiple people are visibly talking with each other.",
+    "argument": "People are visibly arguing.",
+    "celebration": "People are visibly celebrating.",
+    "ceremony": "People are visibly taking part in a ceremony.",
+    "cooking": "A person is visibly preparing food.",
+    "eating": "A person is visibly eating.",
+    "cleaning": "A person is visibly cleaning.",
+    "repairing": "A person is visibly repairing something.",
+    "shopping": "A person is visibly shopping.",
+    "commuting": "People are visibly commuting.",
+    "exercising": "A person is visibly exercising.",
+    "playing": "A person is visibly playing.",
+    "studying": "A person is visibly studying.",
+    "working": "A person is visibly working.",
+    "accident": "An accident is visibly occurring.",
+    "emergency": "An emergency situation is visibly occurring.",
+    "visual_activity": "The frame shows visible people, objects, or activity.",
+}
 
 
 def _parse_response(raw: str) -> dict:
@@ -67,6 +133,14 @@ def _parse_response(raw: str) -> dict:
         except json.JSONDecodeError:
             logger.warning("Qwen3-VL JSON parse failed: %.300s", raw)
             return {}
+
+    semantic_keys = {
+        "scene", "lighting", "indoor", "camera_angle",
+        "persons", "objects", "event", "event_type", "event_description",
+    }
+    if not isinstance(data, dict) or not semantic_keys.intersection(data):
+        logger.warning("Qwen3-VL JSON contained no semantic fields: %.300s", raw)
+        return {}
 
     # --- Parse persons into attributes list ---
     persons_attrs: list[dict] = []
@@ -166,9 +240,24 @@ def _parse_response(raw: str) -> dict:
 
     # --- Events ---
     events: list[dict] = []
-    event = data.get("event", "")
+    raw_description = data.get("event_description", data.get("event", ""))
+    event = _normalize_event(data.get("event_type", raw_description))
+    if not event and str(raw_description or "").strip():
+        event = "visual_activity"
     if event:
-        events.append({"type": str(event), "confidence": 0.7})
+        events.append({
+            "type": event,
+            "description": _event_description(raw_description, event),
+            "confidence": 0.7,
+        })
+    else:
+        derived_event = _derive_event_from_person_actions(persons_attrs)
+        if derived_event:
+            events.append({
+                "type": derived_event,
+                "description": _EVENT_DEFAULT_DESCRIPTIONS[derived_event],
+                "confidence": 0.65,
+            })
 
     return {
         "scene": scene,
@@ -177,6 +266,67 @@ def _parse_response(raw: str) -> dict:
         "objects_attributes": objects_attrs,
         "events": events,
     }
+
+
+def _normalize_event(value: object) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "").lower()).strip(" .")
+    if not normalized:
+        return ""
+    ontology_value = normalized.replace("-", "_").replace(" ", "_")
+    if ontology_value in EVENT_TYPES:
+        return ontology_value
+    if normalized in _EVENT_ALIASES:
+        return _EVENT_ALIASES[normalized]
+    for event_type, keywords in _EVENT_KEYWORDS:
+        if any(keyword in normalized for keyword in keywords):
+            return event_type
+    return ""
+
+
+def _event_description(value: object, event_type: str) -> str:
+    description = re.sub(r"\s+", " ", str(value or "")).strip()
+    normalized = description.lower().strip(" .").replace("-", "_").replace(" ", "_")
+    if not description or normalized == event_type:
+        return _EVENT_DEFAULT_DESCRIPTIONS[event_type]
+    if len(description) > 200:
+        description = description[:197].rstrip() + "..."
+    return description
+
+
+def _derive_event_from_person_actions(persons: list[dict]) -> str:
+    actions_per_person = [
+        {
+            re.sub(r"[_-]+", " ", str(action).lower()).strip()
+            for action in person.get("action", [])
+            if str(action).strip()
+        }
+        for person in persons
+    ]
+    speakers = sum(
+        any(action in {"talking", "speaking", "chatting"} for action in actions)
+        for actions in actions_per_person
+    )
+    if speakers >= 2:
+        return "conversation"
+
+    all_actions = {action for actions in actions_per_person for action in actions}
+    if all_actions & {"singing", "playing piano", "playing guitar"}:
+        return "music_performance"
+    if "dancing" in all_actions:
+        return "dance_performance"
+    for action, event_type in (
+        ("cooking", "cooking"),
+        ("eating", "eating"),
+        ("cleaning", "cleaning"),
+        ("repairing", "repairing"),
+        ("shopping", "shopping"),
+        ("exercising", "exercising"),
+        ("studying", "studying"),
+        ("working", "working"),
+    ):
+        if action in all_actions:
+            return event_type
+    return ""
 
 
 def _pick(
@@ -230,15 +380,16 @@ class QwenVLSemantic:
 
         if DEVICE == "cuda":
             torch.cuda.empty_cache()
-        logger.info("Loading Qwen3-VL-2B v2 (short prompt): %s", self._model_name)
+        model_ref = resolve_model_reference("qwen_vl", self._model_name)
+        logger.info("Loading Qwen3-VL-2B v2 (short prompt): %s", model_ref)
 
-        load_kwargs = model_load_kwargs("qwen_vl", self._model_name)
+        load_kwargs = model_load_kwargs("qwen_vl", model_ref)
         model_dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
         self._processor = AutoProcessor.from_pretrained(
-            self._model_name, trust_remote_code=True, **load_kwargs
+            model_ref, trust_remote_code=True, **load_kwargs
         )
         self._model = Qwen3VLForConditionalGeneration.from_pretrained(
-            self._model_name,
+            model_ref,
             torch_dtype=model_dtype,
             trust_remote_code=True,
             **load_kwargs,
@@ -319,8 +470,7 @@ class QwenVLSemantic:
 
             parsed = _parse_response(raw_text)
             if not parsed:
-                logger.warning("Qwen3-VL returned empty parse")
-                return self._empty()
+                raise RuntimeError("Qwen3-VL returned an empty or invalid semantic response")
 
             return SegmentSemantic(
                 scene=parsed.get("scene", {"tags": [], "place": {"type": "unknown", "indoor": True, "weather": None, "lighting": "unknown", "timeOfDay": "unknown"}}),
@@ -331,7 +481,11 @@ class QwenVLSemantic:
             )
         except Exception as e:
             logger.warning("Qwen3-VL failed: %s (%s)", type(e).__name__, e)
-            return self._empty()
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(
+                f"Qwen3-VL semantic inference failed: {type(e).__name__}: {e}"
+            ) from e
         finally:
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()

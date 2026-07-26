@@ -149,6 +149,7 @@ export const EVENT_TYPES = [
   'shopping', 'commuting', 'exercising',
   'playing', 'studying', 'working',
   'accident', 'emergency',
+  'visual_activity',
   'unknown',
 ]
 

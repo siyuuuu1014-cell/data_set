@@ -1,16 +1,37 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import numpy as np
+import torch
+from PIL import Image
 
+import pipeline
 from config import DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_IOU_THRESHOLD
-from pipeline import _deduplicate_ocr_texts
+from pipeline import (
+    DEFAULT_GROUNDING_CATEGORIES,
+    _deduplicate_ocr_texts,
+    _degraded_visual_providers,
+    _detector_confidence_for_tracking,
+    _select_grounding_categories,
+)
 from providers.detector.yolo11 import YOLO11Detector
+from providers.grounding import locate_anything
+from providers.grounding.locate_anything import (
+    LOCATE_ATTN_IMPLEMENTATION,
+    LocateAnythingGrounding,
+    _category_query,
+    _resize_for_inference,
+)
 from providers.ocr.trocr import TrOCRProvider
+from providers import registry
+from providers.semantic import qwen_vl
 from providers.semantic.base import SegmentSemantic
-from providers.semantic.qwen_vl import PROMPT, _pick
+from providers.semantic.qwen_vl import PROMPT, QwenVLSemantic, _parse_response, _pick
 from providers.tracker.base import FrameTrack
 from services.merge_service import merge_results
 
@@ -19,6 +40,40 @@ class SemanticPickTests(unittest.TestCase):
     def test_prompt_does_not_seed_specific_object_hallucinations(self) -> None:
         self.assertNotIn("butterfly", PROMPT.lower())
         self.assertIn("never guess", PROMPT.lower())
+
+    def test_free_form_event_is_normalized_to_ontology(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"restaurant","lighting":"bright","indoor":true,'
+            '"camera_angle":"eye-level","persons":[],"objects":[],'
+            '"event":"Two people are talking to each other."}'
+        )
+        self.assertEqual(parsed["events"], [{
+            "type": "conversation",
+            "description": "Two people are talking to each other.",
+            "confidence": 0.7,
+        }])
+
+    def test_two_speakers_derive_conversation_but_one_does_not(self) -> None:
+        common = (
+            '{"scene":"restaurant","lighting":"bright","indoor":true,'
+            '"camera_angle":"eye-level","objects":[],"event":"","persons":'
+        )
+        two = _parse_response(
+            common
+            + '[{"gender":"male","age":"unknown","action":"talking","clothing":"","hair":""},'
+            '{"gender":"female","age":"unknown","action":"speaking","clothing":"","hair":""}]}'
+        )
+        one = _parse_response(
+            common
+            + '[{"gender":"male","age":"unknown","action":"talking","clothing":"","hair":""},'
+            '{"gender":"female","age":"unknown","action":"standing","clothing":"","hair":""}]}'
+        )
+        self.assertEqual(two["events"], [{
+            "type": "conversation",
+            "description": "Multiple people are visibly talking with each other.",
+            "confidence": 0.65,
+        }])
+        self.assertEqual(one["events"], [])
 
     def test_female_does_not_match_male_substring(self) -> None:
         self.assertEqual(_pick("female", ["male", "female"], "unknown"), "female")
@@ -29,6 +84,418 @@ class SemanticPickTests(unittest.TestCase):
         options = ["child", "teen", "young adult", "middle aged", "elderly"]
         self.assertEqual(_pick("young", options, "unknown", aliases=aliases), "young adult")
         self.assertEqual(_pick("middle", options, "unknown", aliases=aliases), "middle aged")
+
+
+class ProviderCompatibilityTests(unittest.TestCase):
+    def test_locate_anything_uses_supported_sdpa_attention(self) -> None:
+        self.assertEqual(LOCATE_ATTN_IMPLEMENTATION, "sdpa")
+
+    def test_locate_anything_rejects_unverified_transformers_version(self) -> None:
+        with (
+            patch.object(registry, "deployment_mode", return_value="enhanced"),
+            patch.object(registry, "_missing_modules", return_value=[]),
+            patch.object(registry, "package_version", return_value="5.14.1"),
+        ):
+            status = registry.provider_status("locate_anything", check_model=False)
+
+        self.assertEqual(status.status, "incompatible_dependency")
+        self.assertIn("transformers==4.57.1 required", status.reason or "")
+        self.assertEqual(
+            status.requiredPackageVersions,
+            {
+                "transformers": "4.57.1",
+                "peft": "0.19.1",
+                "decord": "0.6.0",
+                "lmdb": "1.7.5",
+            },
+        )
+
+    def test_locate_anything_declares_remote_code_dependencies(self) -> None:
+        modules = registry.PROVIDER_SPECS["locate_anything"].modules
+        self.assertIn("lmdb", modules)
+        self.assertIn("peft", modules)
+        self.assertIn("decord", modules)
+
+    def test_locate_anything_uses_official_category_separator(self) -> None:
+        self.assertEqual(
+            _category_query([" person ", "", "car"]),
+            "person</c>car",
+        )
+
+    def test_locate_anything_bounds_visual_input_without_stretching(self) -> None:
+        original = Image.new("RGB", (2560, 1440), "white")
+        resized = _resize_for_inference(original, 1024)
+        try:
+            self.assertEqual(resized.size, (1024, 576))
+            self.assertEqual(original.size, (2560, 1440))
+        finally:
+            if resized is not original:
+                resized.close()
+            original.close()
+
+    def test_locate_anything_uses_and_releases_local_optimized_runtime(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            batch_package = Path(temp_dir) / "batch_utils"
+            batch_package.mkdir()
+            (batch_package / "__init__.py").write_text("", encoding="utf-8")
+            model = object()
+            runtime = SimpleNamespace(_model=model, _proc="processor", _tok="tokenizer")
+            batch_utils = SimpleNamespace(
+                load=lambda: ("tokenizer", "processor", model),
+            )
+            provider = LocateAnythingGrounding(temp_dir)
+
+            with (
+                patch.object(locate_anything, "DEVICE", "cuda"),
+                patch.object(
+                    locate_anything.importlib,
+                    "import_module",
+                    side_effect=[batch_utils, runtime],
+                ),
+            ):
+                self.assertTrue(provider._load_official_batch_runtime())
+                self.assertIs(provider._model, model)
+                provider._release_batch_runtime()
+
+            self.assertIsNone(runtime._model)
+            self.assertIsNone(runtime._proc)
+            self.assertIsNone(runtime._tok)
+
+    def test_cached_remote_model_loads_without_network_checks(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            cache = Path(temp_dir)
+            config_path = cache / "config.json"
+            weights_path = cache / "model.safetensors"
+            config_path.write_text("{}", encoding="utf-8")
+            weights_path.write_bytes(b"cached")
+
+            def cached_file(
+                _model_ref: str,
+                filename: str,
+                revision: str | None = None,
+            ) -> str | None:
+                self.assertEqual(revision, "main")
+                if filename == "config.json":
+                    return str(config_path)
+                if filename == "model.safetensors":
+                    return str(weights_path)
+                return None
+
+            with (
+                patch.object(registry, "model_revision", return_value="main"),
+                patch(
+                    "huggingface_hub.try_to_load_from_cache",
+                    side_effect=cached_file,
+                ),
+            ):
+                kwargs = registry.model_load_kwargs("qwen_vl", "Qwen/test")
+                resolved = registry.resolve_model_reference(
+                    "qwen_vl",
+                    "Qwen/test",
+                )
+                resolves_to_cache = Path(resolved).samefile(cache)
+
+        self.assertEqual(kwargs, {
+            "revision": "main",
+            "local_files_only": True,
+        })
+        self.assertTrue(resolves_to_cache)
+
+    def test_incomplete_remote_model_keeps_download_path(self) -> None:
+        with (
+            patch.object(registry, "model_revision", return_value="main"),
+            patch(
+                "huggingface_hub.try_to_load_from_cache",
+                return_value=None,
+            ),
+        ):
+            kwargs = registry.model_load_kwargs("qwen_vl", "Qwen/missing")
+
+        self.assertEqual(kwargs, {"revision": "main"})
+
+    def test_fast_override_bypasses_hybrid_batch_executor(self) -> None:
+        class Processor:
+            @staticmethod
+            def apply_chat_template(*_args, **_kwargs) -> str:
+                return "prompt"
+
+            @staticmethod
+            def process_vision_info(*_args, **_kwargs) -> tuple[list, list]:
+                return [object()], []
+
+            @staticmethod
+            def __call__(*_args, **_kwargs) -> dict:
+                return {
+                    "pixel_values": torch.zeros((1, 3, 2, 2)),
+                    "input_ids": torch.ones((1, 2), dtype=torch.long),
+                    "attention_mask": torch.ones((1, 2), dtype=torch.long),
+                }
+
+        with TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "frame.jpg"
+            Image.new("RGB", (100, 100), "white").save(image_path)
+            model = SimpleNamespace(generate=Mock(return_value=(
+                "<ref>person</ref><box><100><100><900><900></box>"
+                "<conf>0.9</conf>"
+            )))
+            batch = SimpleNamespace(
+                generate_batch_hybrid=Mock(
+                    side_effect=AssertionError("hybrid executor should be bypassed")
+                ),
+            )
+            provider = LocateAnythingGrounding(temp_dir)
+            provider._loaded = True
+            provider._model = model
+            provider._processor = Processor()
+            provider._tokenizer = object()
+            provider._batch_utils = batch
+
+            with patch.object(locate_anything, "DEVICE", "cpu"):
+                boxes = provider.detect_objects(
+                    str(image_path),
+                    ["person"],
+                    generation_mode="fast",
+                    max_new_tokens=128,
+                )
+
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(boxes[0]["className"], "person")
+        model.generate.assert_called_once()
+        self.assertEqual(
+            model.generate.call_args.kwargs["generation_mode"],
+            "fast",
+        )
+        self.assertEqual(
+            model.generate.call_args.kwargs["max_new_tokens"],
+            128,
+        )
+        batch.generate_batch_hybrid.assert_not_called()
+
+    def test_tracker_declares_assignment_dependency_for_bytetrack(self) -> None:
+        modules = registry.PROVIDER_SPECS["tracker"].modules
+        self.assertEqual(
+            "lap" in modules,
+            registry.TRACKER_BACKEND == "bytetrack",
+        )
+
+
+class PipelineStatusTests(unittest.TestCase):
+    def test_custom_grounding_categories_are_preserved_and_deduplicated(self) -> None:
+        selected, mode = _select_grounding_categories(
+            ["person", "Train", "train", "", "platform"],
+            [],
+            None,
+        )
+
+        self.assertEqual(mode, "custom")
+        self.assertEqual(selected, ["person", "Train", "platform"])
+
+    def test_adaptive_grounding_uses_detector_and_semantic_evidence(self) -> None:
+        detections = [
+            SimpleNamespace(detections=[
+                {"className": "person"},
+                {"className": "suitcase"},
+            ]),
+        ]
+        semantic = SegmentSemantic(
+            scene={},
+            camera={},
+            persons_attributes=[{
+                "gender": "male",
+                "ageGroup": "adult",
+                "clothing": [{"type": "coat"}],
+            }],
+            objects_attributes=[
+                {"name": "train"},
+                {"name": "railway_tracks"},
+            ],
+            events=[],
+        )
+
+        with (
+            patch.object(pipeline, "LOCATE_CATEGORY_MODE", "adaptive"),
+            patch.object(pipeline, "LOCATE_ADAPTIVE_MAX_CATEGORIES", 12),
+        ):
+            selected, mode = _select_grounding_categories(
+                None,
+                detections,
+                semantic,
+            )
+
+        self.assertEqual(mode, "adaptive")
+        self.assertLessEqual(len(selected), 12)
+        self.assertIn("person", selected)
+        self.assertIn("suitcase", selected)
+        self.assertIn("train", selected)
+        self.assertIn("railway tracks", selected)
+        self.assertIn("man", selected)
+        self.assertIn("clothing", selected)
+
+    def test_adaptive_grounding_falls_back_when_evidence_is_empty(self) -> None:
+        with patch.object(pipeline, "LOCATE_CATEGORY_MODE", "adaptive"):
+            selected, mode = _select_grounding_categories(None, [], None)
+
+        self.assertEqual(mode, "full_fallback")
+        self.assertEqual(selected, list(DEFAULT_GROUNDING_CATEGORIES))
+
+    def test_full_grounding_mode_preserves_complete_default_list(self) -> None:
+        with patch.object(pipeline, "LOCATE_CATEGORY_MODE", "full"):
+            selected, mode = _select_grounding_categories(
+                None,
+                [SimpleNamespace(detections=[{"className": "person"}])],
+                None,
+            )
+
+        self.assertEqual(mode, "full")
+        self.assertEqual(selected, list(DEFAULT_GROUNDING_CATEGORIES))
+
+    def test_enabled_tracker_failure_degrades_segment(self) -> None:
+        enabled = {
+            "yolo": True,
+            "tracker": True,
+            "locate_anything": False,
+            "qwen_vl": True,
+        }
+        results = {
+            "yolo": {"status": "completed"},
+            "tracker": {"status": "failed", "error": "synthetic failure"},
+            "locate_anything": {"status": "disabled"},
+            "qwen_vl": {"status": "completed"},
+        }
+
+        self.assertEqual(_degraded_visual_providers(results, enabled), ["tracker"])
+
+    def test_disabled_visual_provider_does_not_degrade_segment(self) -> None:
+        enabled = {
+            "yolo": False,
+            "tracker": False,
+            "locate_anything": False,
+            "qwen_vl": False,
+        }
+        results = {
+            provider_id: {"status": "disabled"}
+            for provider_id in enabled
+        }
+
+        self.assertEqual(_degraded_visual_providers(results, enabled), [])
+
+    def test_real_bytetrack_requests_low_confidence_detections(self) -> None:
+        with (
+            patch.object(pipeline, "TRACKER_BACKEND", "bytetrack"),
+            patch.object(pipeline, "DEFAULT_TRACK_LOW_THRESHOLD", 0.1),
+        ):
+            confidence = _detector_confidence_for_tracking({
+                "tracker": True,
+            })
+
+        self.assertEqual(confidence, 0.1)
+
+    def test_iou_or_disabled_tracker_preserves_detector_default(self) -> None:
+        with patch.object(pipeline, "TRACKER_BACKEND", "iou"):
+            self.assertIsNone(_detector_confidence_for_tracking({
+                "tracker": True,
+            }))
+        with patch.object(pipeline, "TRACKER_BACKEND", "bytetrack"):
+            self.assertIsNone(_detector_confidence_for_tracking({
+                "tracker": False,
+            }))
+
+    def test_tracker_without_detections_is_not_a_failure(self) -> None:
+        enabled = {
+            "yolo": True,
+            "tracker": True,
+            "locate_anything": False,
+            "qwen_vl": True,
+        }
+        results = {
+            "yolo": {"status": "completed"},
+            "tracker": {"status": "skipped", "reason": "no_detections"},
+            "locate_anything": {"status": "disabled"},
+            "qwen_vl": {"status": "completed"},
+        }
+
+        self.assertEqual(_degraded_visual_providers(results, enabled), [])
+
+
+class _FailingQwenProcessor:
+    def apply_chat_template(self, *args, **kwargs) -> str:
+        raise ValueError("synthetic processor failure")
+
+
+class _InvalidQwenProcessor:
+    def apply_chat_template(self, *args, **kwargs) -> str:
+        return "synthetic prompt"
+
+    def __call__(self, *args, **kwargs) -> dict:
+        return {"input_ids": torch.tensor([[1, 2]])}
+
+    def decode(self, *args, **kwargs) -> str:
+        return "not valid json"
+
+
+class _EmptyQwenProcessor(_InvalidQwenProcessor):
+    def decode(self, *args, **kwargs) -> str:
+        return "{}"
+
+
+class _InvalidQwenModel:
+    def generate(self, **kwargs):
+        return torch.tensor([[1, 2, 3]])
+
+
+class QwenFailurePropagationTests(unittest.TestCase):
+    def test_inference_failure_is_not_returned_as_empty_success(self) -> None:
+        provider = QwenVLSemantic()
+        provider._loaded = True
+        provider._processor = _FailingQwenProcessor()
+
+        with TemporaryDirectory() as temp_dir:
+            frame_path = Path(temp_dir) / "frame.jpg"
+            Image.new("RGB", (8, 8), "white").save(frame_path)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Qwen3-VL semantic inference failed",
+            ):
+                provider.annotate_semantic(frame_paths=[str(frame_path)])
+
+    def test_invalid_response_is_not_returned_as_empty_success(self) -> None:
+        provider = QwenVLSemantic()
+        provider._loaded = True
+        provider._processor = _InvalidQwenProcessor()
+        provider._model = _InvalidQwenModel()
+
+        with TemporaryDirectory() as temp_dir:
+            frame_path = Path(temp_dir) / "frame.jpg"
+            Image.new("RGB", (8, 8), "white").save(frame_path)
+
+            with (
+                patch.object(qwen_vl, "DEVICE", "cpu"),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "empty or invalid semantic response",
+                ),
+            ):
+                provider.annotate_semantic(frame_paths=[str(frame_path)])
+
+    def test_empty_json_is_not_returned_as_default_success(self) -> None:
+        provider = QwenVLSemantic()
+        provider._loaded = True
+        provider._processor = _EmptyQwenProcessor()
+        provider._model = _InvalidQwenModel()
+
+        with TemporaryDirectory() as temp_dir:
+            frame_path = Path(temp_dir) / "frame.jpg"
+            Image.new("RGB", (8, 8), "white").save(frame_path)
+
+            with (
+                patch.object(qwen_vl, "DEVICE", "cpu"),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "empty or invalid semantic response",
+                ),
+            ):
+                provider.annotate_semantic(frame_paths=[str(frame_path)])
 
 
 class _FakeYoloModel:
@@ -133,8 +600,8 @@ class RecognitionMergeTests(unittest.TestCase):
 
         self.assertEqual(result["objects"][0]["bbox"]["x"], 100)
         self.assertEqual(result["objects"][0]["_detectionConfidence"], 0.97)
-        self.assertEqual(result["events"][0]["confidence"], 0.0)
-        self.assertFalse(result["events"][0]["_confidenceAvailable"])
+        self.assertEqual(result["events"], [])
+        self.assertEqual(result["speechTranscript"], "And they died.")
         self.assertEqual(result["_recognition"], recognition)
 
 
@@ -187,7 +654,9 @@ class SemanticEvidenceTests(unittest.TestCase):
 
         self.assertEqual(result["objects"][0]["name"], "bird")
         self.assertIsNotNone(result["objects"][0]["bbox"])
-        self.assertEqual(result["events"], [])
+        self.assertEqual(result["events"][0]["type"], "visual_activity")
+        self.assertIn("bird", result["events"][0]["description"])
+        self.assertNotIn("butterfly", result["events"][0]["description"])
 
 
 if __name__ == "__main__":

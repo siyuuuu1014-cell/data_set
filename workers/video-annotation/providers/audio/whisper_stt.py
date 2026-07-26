@@ -15,7 +15,7 @@ from typing import Any
 import torch
 
 from config import DEVICE, FFMPEG_PATH, WHISPER_MODEL
-from providers.registry import model_load_kwargs
+from providers.registry import model_load_kwargs, resolve_model_reference
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +33,15 @@ class WhisperSTTProvider:
 
         if DEVICE == "cuda":
             torch.cuda.empty_cache()
-        logger.info("Loading Whisper STT: %s", self._model_name)
-        load_kwargs = model_load_kwargs("whisper", self._model_name)
+        model_ref = resolve_model_reference("whisper", self._model_name)
+        logger.info("Loading Whisper STT: %s", model_ref)
+        load_kwargs = model_load_kwargs("whisper", model_ref)
 
         self._processor = WhisperProcessor.from_pretrained(
-            self._model_name, **load_kwargs
+            model_ref, **load_kwargs
         )
         self._model = WhisperForConditionalGeneration.from_pretrained(
-            self._model_name, **load_kwargs
+            model_ref, **load_kwargs
         )
         self._model.eval()
         if DEVICE == "cuda":

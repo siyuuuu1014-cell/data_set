@@ -23,6 +23,7 @@ export function buildAnnotationOptions({
 }: AnnotationOptionsInput): Record<string, unknown> {
   return {
     sample_fps: 0.5,
+    tracking_fps: 3,
     ontology: {},
     video_id: videoId,
     segment_id: segmentId,

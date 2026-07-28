@@ -26,5 +26,5 @@ class DetectorProvider(Protocol):
         ...
 
     def detect_frames(self, frames: list[np.ndarray]) -> list[FrameDetection]:
-        """Run detection on a list of frame images. Returns per-frame detections."""
+        """Return exactly one result per input frame, using batch-local indexes."""
         ...

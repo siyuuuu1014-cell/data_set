@@ -1,9 +1,10 @@
 """Video-scoped track and person identity assignment.
 
 The detector/tracker runs once per annotation segment to keep GPU usage bounded.
-This module stitches only high-confidence, temporally adjacent boundary tracks
-and persists the ID allocator per video.  Ambiguous tracks receive new IDs;
-false splits are safer than merging two different people.
+This module combines conservative boundary overlap with person appearance ReID,
+persists the ID allocator per video, and reconciles identities when segments are
+processed out of order. Ambiguous tracks still receive new IDs because a false
+split is safer than merging two different people.
 """
 
 from __future__ import annotations
@@ -20,13 +21,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from config import CACHE_DIR
+from config import (
+    CACHE_DIR,
+    PERSON_REID_MATCH_THRESHOLD,
+    PERSON_REID_MAX_GAP_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _MAX_STITCH_GAP_SECONDS = 2.5
 _MIN_STITCH_IOU = 0.65
+_PERSON_REID_CONFLICT_THRESHOLD = 0.35
 _thread_lock = threading.RLock()
 
 
@@ -36,6 +42,7 @@ class IdentityAssignment:
 
     track_ids: frozenset[int]
     person_ids: dict[int, str]
+    aliases: dict[int, int]
 
 
 def assign_video_identities(
@@ -46,17 +53,18 @@ def assign_video_identities(
     segment_id: int | str | None,
     segment_start: float,
     segment_end: float,
+    track_embeddings: dict[int, list[float]] | None = None,
     registry_root: Path | None = None,
 ) -> IdentityAssignment:
     """Remap local tracker IDs to stable video-scoped IDs in place.
 
     Existing mappings are reused when the same segment is annotated again.
-    A track from the immediately preceding segment is reused only when class,
-    timing, and boundary IoU all agree.  All other tracks get fresh IDs.
+    Nearby segments can be linked by high-confidence appearance similarity or
+    boundary IoU. All other tracks get fresh IDs.
     """
-    summaries = _summarize_tracks(tracks)
+    summaries = _summarize_tracks(tracks, track_embeddings or {})
     if not summaries:
-        return IdentityAssignment(frozenset(), {})
+        return IdentityAssignment(frozenset(), {}, {})
 
     normalized_video_id = _normalize_video_id(video_id, video_path)
     segment_key = _segment_key(segment_id, segment_start, segment_end)
@@ -73,15 +81,24 @@ def assign_video_identities(
 
         segments = state.setdefault("segments", {})
         existing = segments.get(segment_key)
-        mapping = _reuse_existing_mapping(existing, summaries)
+        aliases = _normalized_aliases(state.get("aliases", {}))
+        mapping = _match_existing_segment(existing, summaries, aliases)
 
-        previous = _find_previous_segment(
+        neighbors = _find_neighbor_segments(
             segments,
             current_key=segment_key,
             segment_start=segment_start,
+            segment_end=segment_end,
         )
-        if previous:
-            _stitch_previous_tracks(mapping, summaries, previous)
+        for _gap, neighbor_before, neighbor in neighbors:
+            _stitch_neighbor_tracks(
+                mapping,
+                summaries,
+                neighbor,
+                neighbor_before=neighbor_before,
+                state=state,
+                aliases=aliases,
+            )
 
         next_track_id = max(1, int(state.get("nextTrackId", 1)))
         reserved_ids = {
@@ -100,6 +117,10 @@ def assign_video_identities(
             reserved_ids.add(next_track_id)
             next_track_id += 1
 
+        mapping = {
+            local_id: _resolve_alias(global_id, aliases)
+            for local_id, global_id in mapping.items()
+        }
         state["nextTrackId"] = next_track_id
         segments[segment_key] = _segment_record(
             segment_start,
@@ -107,6 +128,12 @@ def assign_video_identities(
             summaries,
             mapping,
         )
+        _apply_aliases_to_segments(segments, aliases)
+        state["aliases"] = {
+            str(old_id): _resolve_alias(new_id, aliases)
+            for old_id, new_id in aliases.items()
+            if old_id != _resolve_alias(new_id, aliases)
+        }
         _write_state(registry_path, state)
 
     for frame_track in tracks:
@@ -119,7 +146,12 @@ def assign_video_identities(
         for local_id, summary in summaries.items()
         if summary["className"] == "person"
     }
-    return IdentityAssignment(frozenset(mapping.values()), person_ids)
+    effective_aliases = {
+        old_id: _resolve_alias(new_id, aliases)
+        for old_id, new_id in aliases.items()
+        if old_id != _resolve_alias(new_id, aliases)
+    }
+    return IdentityAssignment(frozenset(mapping.values()), person_ids, effective_aliases)
 
 
 def assign_fallback_identities(
@@ -154,10 +186,13 @@ def assign_fallback_identities(
         for track in frame_track.tracks
         if track.get("className") == "person"
     }
-    return IdentityAssignment(frozenset(mapping.values()), person_ids)
+    return IdentityAssignment(frozenset(mapping.values()), person_ids, {})
 
 
-def _summarize_tracks(tracks: list) -> dict[int, dict]:
+def _summarize_tracks(
+    tracks: list,
+    track_embeddings: dict[int, list[float]],
+) -> dict[int, dict]:
     summaries: dict[int, dict] = {}
     for frame_track in tracks:
         for track in frame_track.tracks:
@@ -169,75 +204,327 @@ def _summarize_tracks(tracks: list) -> dict[int, dict]:
                     "className": str(track.get("className", "unknown")),
                     "firstBBox": bbox,
                     "lastBBox": bbox,
+                    "observationCount": 0,
                 },
             )
             summary["lastBBox"] = bbox
+            summary["observationCount"] += 1
+    for local_id, summary in summaries.items():
+        embedding = track_embeddings.get(local_id)
+        if summary["className"] == "person" and _valid_embedding(embedding):
+            summary["embedding"] = embedding
     return summaries
 
 
-def _reuse_existing_mapping(existing: dict | None, summaries: dict[int, dict]) -> dict[int, int]:
+def _match_existing_segment(
+    existing: dict | None,
+    summaries: dict[int, dict],
+    aliases: dict[int, int],
+) -> dict[int, int]:
     if not existing:
         return {}
     stored = existing.get("localToGlobal", {}) or {}
+    stored_tracks = existing.get("tracks", {}) or {}
     mapping: dict[int, int] = {}
     used_global_ids: set[int] = set()
-    for local_id in summaries:
+
+    # A rerun of the same segment should keep its persisted local-to-global
+    # mapping whenever the class and any available appearance evidence agree.
+    # Matching by position first can silently swap two nearby people even when
+    # the tracker emitted the same local IDs as the previous run.
+    for local_id, summary in summaries.items():
         global_id = stored.get(str(local_id), stored.get(local_id))
         if global_id is None:
             continue
-        normalized_global_id = int(global_id)
-        if normalized_global_id <= 0 or normalized_global_id in used_global_ids:
+        canonical = _resolve_alias(int(global_id), aliases)
+        previous_summary = stored_tracks.get(str(canonical), {})
+        if canonical <= 0 or canonical in used_global_ids:
             continue
-        mapping[local_id] = normalized_global_id
-        used_global_ids.add(normalized_global_id)
+        if not _stored_mapping_is_compatible(summary, previous_summary):
+            continue
+        mapping[local_id] = canonical
+        used_global_ids.add(canonical)
+
+    unmatched = {
+        local_id: summary
+        for local_id, summary in summaries.items()
+        if local_id not in mapping
+    }
+    mapping.update(
+        _greedy_record_matches(
+            unmatched,
+            existing,
+            aliases,
+            same_segment=True,
+            unavailable_global_ids=used_global_ids,
+        )
+    )
     return mapping
 
 
-def _find_previous_segment(
+def _stored_mapping_is_compatible(current: dict, stored: dict) -> bool:
+    if current.get("className") != stored.get("className"):
+        return False
+    if current.get("className") != "person":
+        return True
+    similarity = _cosine_similarity(current.get("embedding"), stored.get("embedding"))
+    return similarity is None or similarity > _PERSON_REID_CONFLICT_THRESHOLD
+
+
+def _find_neighbor_segments(
     segments: dict,
     *,
     current_key: str,
     segment_start: float,
-) -> dict | None:
-    candidates: list[tuple[float, dict]] = []
+    segment_end: float,
+) -> list[tuple[float, bool, dict]]:
+    candidates: list[tuple[float, bool, dict]] = []
     for key, record in segments.items():
         if key == current_key:
             continue
         try:
-            previous_end = float(record["end"])
+            other_start = float(record["start"])
+            other_end = float(record["end"])
         except (KeyError, TypeError, ValueError):
             continue
-        gap = segment_start - previous_end
-        if -0.05 <= gap <= _MAX_STITCH_GAP_SECONDS:
-            candidates.append((abs(gap), record))
-    return min(candidates, key=lambda item: item[0])[1] if candidates else None
+        if other_end <= segment_start + 0.05:
+            gap = max(0.0, segment_start - other_end)
+            neighbor_before = True
+        elif other_start >= segment_end - 0.05:
+            gap = max(0.0, other_start - segment_end)
+            neighbor_before = False
+        else:
+            continue
+        if gap <= PERSON_REID_MAX_GAP_SECONDS:
+            candidates.append((gap, neighbor_before, record))
+    return sorted(candidates, key=lambda item: item[0])
 
 
-def _stitch_previous_tracks(
+def _stitch_neighbor_tracks(
     mapping: dict[int, int],
     summaries: dict[int, dict],
-    previous: dict,
+    neighbor: dict,
+    *,
+    neighbor_before: bool,
+    state: dict,
+    aliases: dict[int, int],
 ) -> None:
-    previous_tracks = previous.get("tracks", {}) or {}
-    candidates: list[tuple[float, int, int]] = []
-    for local_id, summary in summaries.items():
-        if local_id in mapping:
+    matches = _greedy_record_matches(
+        summaries,
+        neighbor,
+        aliases,
+        same_segment=False,
+        neighbor_before=neighbor_before,
+    )
+    claimed_globals: dict[int, int] = {
+        _resolve_alias(global_id, aliases): local_id
+        for local_id, global_id in mapping.items()
+    }
+    for local_id, neighbor_global_id in matches.items():
+        neighbor_global_id = _resolve_alias(neighbor_global_id, aliases)
+        existing_local = claimed_globals.get(neighbor_global_id)
+        if existing_local is not None and existing_local != local_id:
             continue
-        for global_id_raw, previous_summary in previous_tracks.items():
-            if summary["className"] != previous_summary.get("className"):
-                continue
-            iou = _compute_iou(summary["firstBBox"], previous_summary.get("lastBBox", []))
-            if iou >= _MIN_STITCH_IOU:
-                candidates.append((iou, local_id, int(global_id_raw)))
+        current_global_id = mapping.get(local_id)
+        if current_global_id is None:
+            mapping[local_id] = neighbor_global_id
+            claimed_globals[neighbor_global_id] = local_id
+            continue
+        current_global_id = _resolve_alias(current_global_id, aliases)
+        if current_global_id == neighbor_global_id:
+            continue
+        if not _can_alias(state, current_global_id, neighbor_global_id):
+            continue
+        canonical = min(current_global_id, neighbor_global_id)
+        replaced = max(current_global_id, neighbor_global_id)
+        aliases[replaced] = canonical
+        mapping[local_id] = canonical
+        claimed_globals.pop(replaced, None)
+        claimed_globals[canonical] = local_id
 
-    used_local: set[int] = set(mapping)
-    used_global: set[int] = set(mapping.values())
-    for _iou, local_id, global_id in sorted(candidates, reverse=True):
-        if local_id in used_local or global_id in used_global:
+
+def _greedy_record_matches(
+    summaries: dict[int, dict],
+    record: dict,
+    aliases: dict[int, int],
+    *,
+    same_segment: bool,
+    neighbor_before: bool = True,
+    unavailable_global_ids: set[int] | None = None,
+) -> dict[int, int]:
+    candidates: list[tuple[float, int, int]] = []
+    unavailable = unavailable_global_ids or set()
+    for local_id, summary in summaries.items():
+        for global_id_raw, stored_summary in (record.get("tracks", {}) or {}).items():
+            if summary.get("className") != stored_summary.get("className"):
+                continue
+            global_id = _resolve_alias(int(global_id_raw), aliases)
+            if global_id in unavailable:
+                continue
+            score = _identity_match_score(
+                summary,
+                stored_summary,
+                same_segment=same_segment,
+                neighbor_before=neighbor_before,
+            )
+            if score is not None:
+                candidates.append((score, local_id, global_id))
+
+    mapping: dict[int, int] = {}
+    used_global_ids: set[int] = set()
+    for _score, local_id, global_id in sorted(candidates, reverse=True):
+        if local_id in mapping or global_id in used_global_ids:
             continue
         mapping[local_id] = global_id
-        used_local.add(local_id)
-        used_global.add(global_id)
+        used_global_ids.add(global_id)
+    return mapping
+
+
+def _identity_match_score(
+    current: dict,
+    stored: dict,
+    *,
+    same_segment: bool,
+    neighbor_before: bool,
+) -> float | None:
+    if same_segment:
+        current_bbox = current.get("firstBBox", [])
+        stored_bbox = stored.get("firstBBox", [])
+    elif neighbor_before:
+        current_bbox = current.get("firstBBox", [])
+        stored_bbox = stored.get("lastBBox", [])
+    else:
+        current_bbox = current.get("lastBBox", [])
+        stored_bbox = stored.get("firstBBox", [])
+    iou = _compute_iou(current_bbox, stored_bbox)
+    if current.get("className") == "person":
+        similarity = _cosine_similarity(current.get("embedding"), stored.get("embedding"))
+        if similarity is not None:
+            if similarity >= PERSON_REID_MATCH_THRESHOLD:
+                return 2.0 + similarity + min(iou, 1.0) * 0.05
+            # When both person embeddings are available, a clear appearance
+            # conflict must not be overridden by positional overlap.
+            if similarity <= _PERSON_REID_CONFLICT_THRESHOLD:
+                return None
+    minimum_iou = 0.35 if same_segment else _MIN_STITCH_IOU
+    if iou >= minimum_iou:
+        return 1.0 + iou
+    return None
+
+
+def _valid_embedding(value: object) -> bool:
+    return isinstance(value, list) and len(value) > 0 and all(
+        isinstance(item, (int, float)) for item in value
+    )
+
+
+def _cosine_similarity(left: object, right: object) -> float | None:
+    if not _valid_embedding(left) or not _valid_embedding(right):
+        return None
+    if len(left) != len(right):
+        return None
+    dot = sum(float(a) * float(b) for a, b in zip(left, right))
+    left_norm = sum(float(value) ** 2 for value in left) ** 0.5
+    right_norm = sum(float(value) ** 2 for value in right) ** 0.5
+    if left_norm <= 1e-9 or right_norm <= 1e-9:
+        return None
+    return dot / (left_norm * right_norm)
+
+
+def _normalized_aliases(raw: object) -> dict[int, int]:
+    if not isinstance(raw, dict):
+        return {}
+    aliases: dict[int, int] = {}
+    for old_id, new_id in raw.items():
+        try:
+            old_value = int(old_id)
+            new_value = int(new_id)
+        except (TypeError, ValueError):
+            continue
+        if old_value > 0 and new_value > 0 and old_value != new_value:
+            aliases[old_value] = new_value
+    return aliases
+
+
+def _resolve_alias(global_id: int, aliases: dict[int, int]) -> int:
+    current = int(global_id)
+    visited: set[int] = set()
+    while current in aliases and current not in visited:
+        visited.add(current)
+        current = int(aliases[current])
+    return current
+
+
+def _can_alias(state: dict, left: int, right: int) -> bool:
+    for record in (state.get("segments", {}) or {}).values():
+        values = {
+            int(value)
+            for value in (record.get("localToGlobal", {}) or {}).values()
+        }
+        if left in values and right in values:
+            return False
+
+    left_class, left_embedding = _identity_appearance(state, left)
+    right_class, right_embedding = _identity_appearance(state, right)
+    if left_class is None or right_class is None or left_class != right_class:
+        return False
+    if left_class == "person":
+        similarity = _cosine_similarity(left_embedding, right_embedding)
+        if similarity is None or similarity < PERSON_REID_MATCH_THRESHOLD:
+            return False
+    return True
+
+
+def _identity_appearance(state: dict, global_id: int) -> tuple[str | None, list[float] | None]:
+    aliases = _normalized_aliases(state.get("aliases", {}))
+    classes: set[str] = set()
+    embeddings: list[list[float]] = []
+    for record in (state.get("segments", {}) or {}).values():
+        for raw_id, summary in (record.get("tracks", {}) or {}).items():
+            try:
+                candidate_id = _resolve_alias(int(raw_id), aliases)
+            except (TypeError, ValueError):
+                continue
+            if candidate_id != global_id or not isinstance(summary, dict):
+                continue
+            class_name = str(summary.get("className", "")).strip()
+            if class_name:
+                classes.add(class_name)
+            embedding = summary.get("embedding")
+            if _valid_embedding(embedding):
+                embeddings.append([float(value) for value in embedding])
+
+    class_name = next(iter(classes)) if len(classes) == 1 else None
+    return class_name, _mean_embedding(embeddings)
+
+
+def _mean_embedding(embeddings: list[list[float]]) -> list[float] | None:
+    if not embeddings:
+        return None
+    dimension = len(embeddings[0])
+    compatible = [embedding for embedding in embeddings if len(embedding) == dimension]
+    if not compatible:
+        return None
+    return [
+        sum(embedding[index] for embedding in compatible) / len(compatible)
+        for index in range(dimension)
+    ]
+
+
+def _apply_aliases_to_segments(segments: dict, aliases: dict[int, int]) -> None:
+    for record in segments.values():
+        local_to_global = record.get("localToGlobal", {}) or {}
+        record["localToGlobal"] = {
+            str(local_id): _resolve_alias(int(global_id), aliases)
+            for local_id, global_id in local_to_global.items()
+        }
+        normalized_tracks: dict[str, dict] = {}
+        for global_id, summary in (record.get("tracks", {}) or {}).items():
+            canonical = str(_resolve_alias(int(global_id), aliases))
+            existing = normalized_tracks.get(canonical)
+            if existing is None or int(summary.get("observationCount", 0)) > int(existing.get("observationCount", 0)):
+                normalized_tracks[canonical] = summary
+        record["tracks"] = normalized_tracks
 
 
 def _segment_record(
@@ -298,11 +585,46 @@ def _new_state(video_id: str, fingerprint: dict) -> dict:
 def _load_state(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("version") == _SCHEMA_VERSION:
-            return data
     except (OSError, json.JSONDecodeError):
-        pass
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if data.get("version") == _SCHEMA_VERSION:
+        return data
+    if data.get("version") == 1:
+        migrated = _migrate_v1_state(data)
+        if migrated:
+            logger.info("Migrated video identity registry schema v1 to v2: %s", path)
+            return migrated
     return {}
+
+
+def _migrate_v1_state(data: dict) -> dict:
+    """Upgrade a valid v1 registry in memory without changing assigned IDs."""
+    segments = data.get("segments")
+    fingerprint = data.get("videoFingerprint")
+    if not isinstance(segments, dict) or not isinstance(fingerprint, dict):
+        return {}
+
+    for record in segments.values():
+        if not isinstance(record, dict):
+            return {}
+        tracks = record.get("tracks", {})
+        if not isinstance(tracks, dict):
+            return {}
+        for summary in tracks.values():
+            if not isinstance(summary, dict):
+                return {}
+            try:
+                observation_count = int(summary.get("observationCount", 1))
+            except (TypeError, ValueError):
+                observation_count = 1
+            summary["observationCount"] = max(1, observation_count)
+
+    data["version"] = _SCHEMA_VERSION
+    data.setdefault("aliases", {})
+    fingerprint["identitySchema"] = _SCHEMA_VERSION
+    return data
 
 
 def _write_state(path: Path, state: dict) -> None:

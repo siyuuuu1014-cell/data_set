@@ -2,8 +2,18 @@
 
 import JSZip from 'jszip'
 import { callLlm } from '@/services/llm'
-import type { SegmentAnnotation, VideoAnnotation } from './types'
-import { visualEventsFor } from './visual-events'
+import type {
+  CameraAnnotation,
+  EventAnnotation,
+  FrameAnnotation,
+  ObjectAnnotation,
+  PersonAnnotation,
+  SceneAnnotation,
+  SegmentAnnotation,
+  VideoAnnotation,
+} from './types'
+import { frameDisplayEntities } from './frame-annotations'
+import { deriveGroundedVisualEvent, visualEventsFor } from './visual-events'
 
 const MAX_DESCRIPTION_LENGTH = 300
 const MAX_SUMMARY_CHUNK_LENGTH = 18000
@@ -12,6 +22,115 @@ const MAX_SEGMENT_EVIDENCE_LENGTH = 520
 export interface VideoDescriptionResult {
   description: string
   source: 'llm' | 'fallback'
+}
+
+/**
+ * Normalize exported ontology values without rewriting free text or identifiers.
+ * Persisted annotations may predate newer required fields, so the export boundary
+ * must not assume that every runtime value still satisfies the current TS type.
+ */
+function normalizeExportValue(value: unknown): string {
+  const text = typeof value === 'string'
+    ? value
+    : value === null || value === undefined
+      ? ''
+      : String(value)
+  return text
+    .normalize('NFKC')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\u2018\u2019']/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_')
+    .toLowerCase()
+}
+
+function normalizeExportLabel(value: unknown): string {
+  return normalizeExportValue(value) || 'unknown'
+}
+
+function normalizeExportList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(normalizeExportValue)
+    .filter(Boolean)
+}
+
+function isOcrObject(object: SegmentAnnotation['objects'][number]): boolean {
+  return '_textContent' in object || normalizeExportLabel(object.category) === 'text'
+}
+
+function exportScene(scene: SceneAnnotation) {
+  return {
+    tags: normalizeExportList(scene?.tags),
+    place: {
+      type: normalizeExportLabel(scene?.place?.type),
+      indoor: typeof scene?.place?.indoor === 'boolean' ? scene.place.indoor : false,
+      weather: scene?.place?.weather == null
+        ? null
+        : normalizeExportLabel(scene.place.weather),
+      lighting: normalizeExportLabel(scene?.place?.lighting),
+      timeOfDay: normalizeExportLabel(scene?.place?.timeOfDay),
+    },
+  }
+}
+
+function exportCamera(camera: CameraAnnotation) {
+  return {
+    shot: normalizeExportLabel(camera?.shot),
+    angle: normalizeExportLabel(camera?.angle),
+    movement: normalizeExportList(camera?.movement),
+    lens: normalizeExportLabel(camera?.lens),
+    stabilization: normalizeExportLabel(camera?.stabilization),
+  }
+}
+
+function exportPersons(persons: PersonAnnotation[] | null | undefined) {
+  return (Array.isArray(persons) ? persons : []).map(person => ({
+    trackId: person.trackId,
+    personId: person.personId,
+    gender: normalizeExportLabel(person.gender),
+    ageGroup: normalizeExportLabel(person.ageGroup),
+    hair: {
+      color: normalizeExportLabel(person.hair?.color),
+      style: normalizeExportLabel(person.hair?.style),
+    },
+    expression: normalizeExportLabel(person.expression),
+    pose: normalizeExportLabel(person.pose),
+    action: normalizeExportList(person.action),
+    facing: normalizeExportLabel(person.facing),
+    occlusion: person.occlusion,
+    clothing: (Array.isArray(person.clothing) ? person.clothing : []).map(item => ({
+      type: normalizeExportLabel(item.type),
+      color: normalizeExportLabel(item.color),
+      attributes: normalizeExportList(item.attributes),
+      brand: item.brand,
+    })),
+    bbox: person.bbox,
+    depth: person.depth,
+    keypoints: Array.isArray(person.keypoints) ? person.keypoints : [],
+  }))
+}
+
+function exportObjects(objects: ObjectAnnotation[] | null | undefined) {
+  return (Array.isArray(objects) ? objects : []).filter(object => !isOcrObject(object)).map(object => ({
+    trackId: object.trackId,
+    name: normalizeExportLabel(object.name),
+    category: normalizeExportLabel(object.category),
+    color: normalizeExportLabel(object.color),
+    brand: object.brand,
+    bbox: object.bbox,
+    depth: object.depth,
+  }))
+}
+
+function exportEvents(events: EventAnnotation[] | null | undefined) {
+  return (Array.isArray(events) ? events : []).map(event => ({
+    type: normalizeExportLabel(event.type),
+    ...(event.description ? { description: event.description } : {}),
+    confidence: event.confidence,
+  }))
 }
 
 function compactValue(rawValue: string, maxLength = 48): string {
@@ -66,7 +185,9 @@ export function generateVideoDescription(segments: SegmentAnnotation[]): string 
     const place = segment.scene?.place?.type
     const sceneLabels = new Set<string>()
     if (place && place !== 'unknown') sceneLabels.add(place.replace(/_/g, ' '))
-    for (const tag of segment.scene?.tags || []) sceneLabels.add(tag.replace(/_/g, ' '))
+    for (const tag of segment.scene?.tags || []) {
+      if (typeof tag === 'string') sceneLabels.add(tag.replace(/_/g, ' '))
+    }
     places.push(...sceneLabels)
 
     for (const person of segment.persons || []) {
@@ -75,7 +196,9 @@ export function generateVideoDescription(segments: SegmentAnnotation[]): string 
         person.ageGroup !== 'unknown' ? person.ageGroup : '',
       ].filter(Boolean).join(' ')
       if (identity) people.push(identity)
-      actions.push(...(person.action || []).filter(Boolean))
+      actions.push(...(person.action || []).filter(
+        (action): action is string => typeof action === 'string' && Boolean(action),
+      ))
     }
 
     for (const object of segment.objects || []) {
@@ -86,7 +209,10 @@ export function generateVideoDescription(segments: SegmentAnnotation[]): string 
     for (const event of visualEventsFor(segment)) {
       if (!event.type) continue
       if (event.type.startsWith('[Speech]')) hasSpeech = true
-      else eventDescriptions.push(event.description || event.type)
+      else {
+        const description = typeof event.description === 'string' ? event.description : event.type
+        if (typeof description === 'string') eventDescriptions.push(description)
+      }
     }
   }
 
@@ -178,7 +304,7 @@ function segmentEvidence(segment: SegmentAnnotation): string {
   if (onScreenText.length) facts.push(`OCR=${onScreenText.join(' / ')}`)
 
   const legacySpeech = (segment.events || [])
-    .filter(event => event.type.startsWith('[Speech]'))
+    .filter(event => typeof event.type === 'string' && event.type.startsWith('[Speech]'))
     .map(event => event.type.replace(/^\[Speech\]\s*/, '').trim())
     .filter(Boolean)
     .join(' ')
@@ -333,52 +459,41 @@ export function exportCustomJson(annotations: VideoAnnotation[]): string {
   for (const ann of annotations) {
     output.push({
       video: ann.video,
-      annotations: ann.annotations.map(seg => {
-        const legacySpeech = (seg.events || [])
-          .filter(event => event.type.startsWith('[Speech]'))
-          .map(event => event.type.replace(/^\[Speech\]\s*/, '').trim())
-          .filter(Boolean)
-          .join('\n')
-        const speechTranscript = seg.speechTranscript || legacySpeech
-        return {
-          segmentId: seg.segmentId,
-          start: seg.start,
-          end: seg.end,
-          ...(speechTranscript ? { speechTranscript } : {}),
-          scene: seg.scene,
-          camera: seg.camera,
-          persons: seg.persons.map(p => ({
-            trackId: p.trackId,
-            personId: p.personId,
-            gender: p.gender,
-            ageGroup: p.ageGroup,
-            hair: p.hair,
-            expression: p.expression,
-            pose: p.pose,
-            action: p.action,
-            facing: p.facing,
-            occlusion: p.occlusion,
-            clothing: p.clothing,
-            bbox: p.bbox,
-            depth: p.depth,
-            keypoints: p.keypoints,
-          })),
-          objects: seg.objects.map(o => ({
-            trackId: o.trackId,
-            name: o.name,
-            category: o.category,
-            color: o.color,
-            brand: o.brand,
-            bbox: o.bbox,
-            depth: o.depth,
-            ...('_textContent' in o && o._textContent ? { textContent: o._textContent } : {}),
-          })),
-          events: visualEventsFor(seg),
-        }
-      }),
+      annotations: ann.annotations.map(seg => ({
+        segmentId: seg.segmentId,
+        start: seg.start,
+        end: seg.end,
+        scene: exportScene(seg.scene),
+        camera: exportCamera(seg.camera),
+        persons: exportPersons(seg.persons),
+        objects: exportObjects(seg.objects),
+        events: exportEvents(visualEventsFor(seg)),
+      })),
     })
   }
   return JSON.stringify(output, null, 2)
+}
+
+/**
+ * Export only the selected sampled frame. Segment-wide speech, OCR, frame
+ * collections, and inherited visual events are intentionally excluded.
+ */
+export function exportCurrentFrameJson(
+  annotation: SegmentAnnotation,
+  frame: FrameAnnotation,
+): string {
+  const entities = frameDisplayEntities(annotation, frame)
+  const visibleObjects = entities.objects.filter(object => !isOcrObject(object))
+  const groundedEvent = deriveGroundedVisualEvent(entities.persons, visibleObjects)
+  return JSON.stringify({
+    frameIndex: frame.frameIndex,
+    timestamp: frame.timestamp,
+    scene: exportScene(annotation.scene),
+    camera: exportCamera(annotation.camera),
+    persons: exportPersons(entities.persons),
+    objects: exportObjects(visibleObjects),
+    events: exportEvents(groundedEvent ? [groundedEvent] : []),
+  }, null, 2)
 }
 
 /** Generate YOLO format — returns a map of filename → label content. */

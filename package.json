@@ -10,7 +10,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:node": "node --import tsx --test tests/video-annotation/upload-stream.test.ts tests/video-annotation/model-result.test.ts tests/video-annotation/annotation-options.test.ts",
+    "test:node": "node --import tsx --test tests/video-annotation/upload-stream.test.ts tests/video-annotation/model-result.test.ts tests/video-annotation/annotation-options.test.ts tests/video-annotation/remote-semantic-config.test.ts tests/video-annotation/video-delete.test.ts tests/video-annotation/frame-annotations.test.ts tests/video-annotation/annotation-migrations.test.ts tests/video-annotation/segment-split.test.ts",
     "test:worker": "node scripts/run-worker-tests.mjs",
     "test": "npm run test:node && npm run test:worker && npm run typecheck"
   },

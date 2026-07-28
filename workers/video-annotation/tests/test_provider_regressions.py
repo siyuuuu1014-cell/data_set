@@ -579,6 +579,84 @@ class RapidOcrProviderTests(unittest.TestCase):
 
 
 class RecognitionMergeTests(unittest.TestCase):
+    def test_merge_preserves_per_frame_spatial_observations(self) -> None:
+        tracks = [
+            FrameTrack(0, [{
+                "trackId": 4, "className": "person", "bbox": [1, 2, 30, 40],
+                "detectionConfidence": 0.9, "trackingConfidence": 0.8,
+            }]),
+            FrameTrack(1, [{
+                "trackId": 4, "className": "person", "bbox": [5, 6, 30, 40],
+                "detectionConfidence": 0.88, "trackingConfidence": 0.8,
+            }]),
+        ]
+        result = merge_results(
+            tracks=tracks,
+            fine_objects=[],
+            semantic=None,
+            depth_result=SimpleNamespace(objects_depths=[]),
+            segment_start=10.0,
+            tracking_fps=2.0,
+            video_fps=24.0,
+            video_width=640,
+            video_height=360,
+        )
+
+        self.assertEqual([frame["frameIndex"] for frame in result["frames"]], [240, 252])
+        self.assertEqual([frame["timestamp"] for frame in result["frames"]], [10.0, 10.5])
+        self.assertEqual(result["frames"][1]["observations"][0]["bbox"]["x"], 5)
+        self.assertEqual(result["frames"][0]["imageWidth"], 640)
+
+    def test_ocr_box_is_attached_only_to_its_nearest_sampled_frame(self) -> None:
+        tracks = [FrameTrack(0, []), FrameTrack(1, [])]
+        result = merge_results(
+            tracks=tracks,
+            fine_objects=[],
+            semantic=None,
+            depth_result=SimpleNamespace(objects_depths=[]),
+            ocr_texts=[{
+                "text": "subtitle", "bbox": {"x": 10, "y": 20, "width": 100, "height": 20},
+                "confidence": 0.95, "_timestamp": 10.5,
+            }],
+            segment_start=10.0,
+            tracking_fps=2.0,
+            video_fps=24.0,
+        )
+
+        self.assertEqual(result["frames"][0]["observations"], [])
+        self.assertEqual(result["frames"][1]["observations"][0]["className"], "subtitle")
+        self.assertEqual(result["frames"][1]["observations"][0]["entityType"], "object")
+        self.assertEqual(result["frames"][1]["observations"][0]["trackId"], 1_000_000)
+
+    def test_ocr_track_id_cannot_collide_with_a_detector_track(self) -> None:
+        tracks = [FrameTrack(0, [{
+            "trackId": 1_000_000,
+            "className": "bird",
+            "bbox": [10, 20, 30, 40],
+            "detectionConfidence": 0.9,
+            "trackingConfidence": 0.8,
+        }])]
+        result = merge_results(
+            tracks=tracks,
+            fine_objects=[],
+            semantic=None,
+            depth_result=SimpleNamespace(objects_depths=[]),
+            ocr_texts=[{
+                "text": "subtitle",
+                "bbox": {"x": 100, "y": 200, "width": 200, "height": 40},
+                "confidence": 0.97,
+            }],
+        )
+
+        self.assertEqual(
+            {obj["trackId"] for obj in result["objects"]},
+            {1_000_000, 1_000_001},
+        )
+        self.assertEqual(
+            {obs["trackId"] for obs in result["frames"][0]["observations"]},
+            {1_000_000, 1_000_001},
+        )
+
     def test_ocr_bbox_and_unscored_speech_remain_backward_compatible(self) -> None:
         recognition = {
             "ocr": {"status": "completed", "count": 1},

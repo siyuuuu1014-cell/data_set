@@ -4,13 +4,13 @@ import { useState, useEffect, useCallback } from 'react'
 
 export interface UndoToastItem {
   id: number
-  trackId: number
+  itemKey: string
   message: string
 }
 
 interface Props {
   toasts: UndoToastItem[]
-  onUndo: (trackId: number) => void
+  onUndo: (itemKey: string) => void
   onDismiss: (id: number) => void
 }
 
@@ -19,7 +19,7 @@ const ANIMATION_DURATION = 300
 
 function ToastEntry({ toast, onUndo, onDismiss }: {
   toast: UndoToastItem
-  onUndo: (trackId: number) => void
+  onUndo: (itemKey: string) => void
   onDismiss: (id: number) => void
 }) {
   const [exiting, setExiting] = useState(false)
@@ -45,7 +45,7 @@ function ToastEntry({ toast, onUndo, onDismiss }: {
     >
       <span className="text-sm text-gv-text">{toast.message}</span>
       <button
-        onClick={() => onUndo(toast.trackId)}
+        onClick={() => onUndo(toast.itemKey)}
         className="text-sm font-medium text-gv-pink hover:text-gv-pink-dark transition-colors px-2 py-0.5 rounded hover:bg-gv-pink/5"
       >
         撤销

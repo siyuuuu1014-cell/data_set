@@ -7,6 +7,31 @@ export interface BBox {
   height: number
 }
 
+export type SpatialEntityType = 'person' | 'object'
+export type FrameObservationSource = 'model' | 'manual' | 'interpolated'
+
+/** A spatial observation belongs to one decoded video frame, not a segment. */
+export interface FrameObservation {
+  trackId: number
+  entityType: SpatialEntityType
+  className: string
+  bbox: BBox
+  confidence?: number
+  source: FrameObservationSource
+}
+
+/**
+ * Timestamp is the playback source of truth. frameIndex is retained for stable
+ * addressing/caching and is derived from the video's nominal FPS for CFR video.
+ */
+export interface FrameAnnotation {
+  frameIndex: number
+  timestamp: number
+  imageWidth: number
+  imageHeight: number
+  observations: FrameObservation[]
+}
+
 // ── Semantic attributes ────────────────────────────────────
 
 export interface HairInfo {
@@ -50,6 +75,8 @@ export interface PersonAnnotation {
   depth: number | null
 
   keypoints: unknown[]  // reserved, always [] in Phase 1
+  _className?: string
+  _detectionConfidence?: number
 }
 
 export interface ObjectAnnotation {
@@ -63,6 +90,8 @@ export interface ObjectAnnotation {
   depth: number | null
   _textContent?: string
   _detectionConfidence?: number
+  /** Preserves a video identity when a person track is manually converted to an object. */
+  _convertedPersonId?: string
 }
 
 export interface EventAnnotation {
@@ -99,6 +128,7 @@ export interface ProviderExecutionResult {
   status: ProviderExecutionStatus
   reason?: string
   error?: string
+  source?: 'local_qwen' | 'remote_api'
 }
 
 export interface SceneAnnotation {
@@ -124,11 +154,14 @@ export interface SegmentAnnotation {
   persons: PersonAnnotation[]
   objects: ObjectAnnotation[]
   events: EventAnnotation[]
+  /** Optional for backward compatibility with annotations created before frame editing. */
+  frames?: FrameAnnotation[]
   speechTranscript?: string
   _recognition?: SegmentRecognitionStatus
   _pipeline_errors?: string[]
   _provider_statuses?: Record<string, ProviderExecutionResult>
   _pipeline_status?: 'completed' | 'partial_completed'
+  _identity_aliases?: Record<string, string>
   _humanEdited?: boolean
 }
 

@@ -3,7 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { CANVAS_MAX_W, CANVAS_MAX_H, CANVAS_MIN_BOX_SIZE } from '@/services/video-annotation/constants'
 import { drawRect, getClassColor } from '@/services/video-annotation/canvas-utils'
-import type { PersonAnnotation, ObjectAnnotation, BBox } from '@/services/video-annotation/types'
+import type { PersonAnnotation, ObjectAnnotation, BBox, SpatialEntityType } from '@/services/video-annotation/types'
 
 type CanvasMode = 'view' | 'draw'
 
@@ -16,12 +16,14 @@ interface Props {
   imgWidth: number
   imgHeight: number
   mode: CanvasMode
-  hiddenTrackIds: Set<number>
+  drawEnabled?: boolean
+  hiddenTrackKeys: Set<string>
   onModeChange: (mode: CanvasMode) => void
-  onDrawBox: (box: BBox) => void
-  onSelectTrack: (trackId: number) => void
-  onResizeBox: (trackId: number, newBox: BBox) => void
+  onDrawBox: (box: BBox, imageWidth: number, imageHeight: number) => void
+  onSelectTrack: (trackId: number, entityType: SpatialEntityType) => void
+  onResizeBox: (trackId: number, entityType: SpatialEntityType, newBox: BBox, imageWidth: number, imageHeight: number) => void
   selectedTrackId: number | null
+  selectedEntityType: SpatialEntityType | null
 }
 
 const HANDLE_SIZE = 8
@@ -29,7 +31,7 @@ const HANDLE_HIT = 10
 
 export function AnnotationCanvas({
   imageUrl, persons, objects, imgWidth, imgHeight,
-  mode, hiddenTrackIds, onModeChange, onDrawBox, onSelectTrack, onResizeBox, selectedTrackId,
+  mode, drawEnabled = true, hiddenTrackKeys, onModeChange, onDrawBox, onSelectTrack, onResizeBox, selectedTrackId, selectedEntityType,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef(0)
@@ -39,6 +41,7 @@ export function AnnotationCanvas({
   const dragRef = useRef<{
     type: 'draw' | 'move' | 'resize'
     trackId?: number
+    entityType?: SpatialEntityType
     startX: number
     startY: number
     startBox?: BBox
@@ -46,8 +49,10 @@ export function AnnotationCanvas({
   } | null>(null)
   const previewRef = useRef<BBox | null>(null)
 
-  const actualW = imgWidth || 1920
-  const actualH = imgHeight || 1080
+  // The decoded JPEG dimensions include FFmpeg's rotation handling. Prefer
+  // them over raw container metadata so vertical videos stay aligned.
+  const actualW = loadedImage?.image.naturalWidth || imgWidth || 1920
+  const actualH = loadedImage?.image.naturalHeight || imgHeight || 1080
 
   const scaleRef = useRef(1)
 
@@ -55,12 +60,12 @@ export function AnnotationCanvas({
 
   const getSelectedBox = useCallback(() => {
     if (selectedTrackId == null) return null
-    const p = persons.find(x => x.trackId === selectedTrackId)
+    const p = selectedEntityType === 'person' ? persons.find(x => x.trackId === selectedTrackId) : undefined
     if (p) return { bbox: p.bbox, trackId: p.trackId }
-    const o = objects.find(x => x.trackId === selectedTrackId)
+    const o = selectedEntityType === 'object' ? objects.find(x => x.trackId === selectedTrackId) : undefined
     if (o && o.bbox) return { bbox: o.bbox, trackId: o.trackId }
     return null
-  }, [persons, objects, selectedTrackId])
+  }, [persons, objects, selectedTrackId, selectedEntityType])
 
   const hitHandle = useCallback((mx: number, my: number, selBbox: BBox): ResizeHandle | null => {
     const s = scaleRef.current
@@ -78,20 +83,21 @@ export function AnnotationCanvas({
     return null
   }, [])
 
-  const findTrackAt = useCallback((mx: number, my: number): number | null => {
+  const findTrackAt = useCallback((mx: number, my: number): { trackId: number; entityType: SpatialEntityType } | null => {
     const s = scaleRef.current
     const cx = mx / s, cy = my / s
-    for (const p of [...persons].reverse()) {
-      if (hiddenTrackIds.has(p.trackId)) continue
-      if (cx >= p.bbox.x && cx <= p.bbox.x + p.bbox.width && cy >= p.bbox.y && cy <= p.bbox.y + p.bbox.height) return p.trackId
-    }
+    // Objects are painted after persons, so hit-test them first (top-most wins).
     for (const o of [...objects].reverse()) {
-      if (hiddenTrackIds.has(o.trackId)) continue
+      if (hiddenTrackKeys.has(`object:${o.trackId}`)) continue
       if (!o.bbox) continue
-      if (cx >= o.bbox.x && cx <= o.bbox.x + o.bbox.width && cy >= o.bbox.y && cy <= o.bbox.y + o.bbox.height) return o.trackId
+      if (cx >= o.bbox.x && cx <= o.bbox.x + o.bbox.width && cy >= o.bbox.y && cy <= o.bbox.y + o.bbox.height) return { trackId: o.trackId, entityType: 'object' }
+    }
+    for (const p of [...persons].reverse()) {
+      if (hiddenTrackKeys.has(`person:${p.trackId}`)) continue
+      if (cx >= p.bbox.x && cx <= p.bbox.x + p.bbox.width && cy >= p.bbox.y && cy <= p.bbox.y + p.bbox.height) return { trackId: p.trackId, entityType: 'person' }
     }
     return null
-  }, [persons, objects, hiddenTrackIds])
+  }, [persons, objects, hiddenTrackKeys])
 
   const getCursorStyle = (h: ResizeHandle | null): string => {
     if (!h) return 'move'
@@ -136,9 +142,9 @@ export function AnnotationCanvas({
     const dragType = dragRef.current?.type
 
     persons.forEach(p => {
-      if (hiddenTrackIds.has(p.trackId)) return
-      if (isDragging && p.trackId === dragTrackId && dragType !== 'draw') return
-      const isSel = p.trackId === selectedTrackId
+      if (hiddenTrackKeys.has(`person:${p.trackId}`)) return
+      if (isDragging && p.trackId === dragTrackId && dragRef.current?.entityType === 'person' && dragType !== 'draw') return
+      const isSel = p.trackId === selectedTrackId && selectedEntityType === 'person'
       ctx.globalAlpha = isDragging ? 0.4 : isSel ? 1 : 0.7
       drawRect(ctx, p.bbox.x * dynamicScale, p.bbox.y * dynamicScale, p.bbox.width * dynamicScale, p.bbox.height * dynamicScale,
         isSel ? '#FF6CCE' : getClassColor('person'),
@@ -147,10 +153,10 @@ export function AnnotationCanvas({
       ctx.globalAlpha = 1
     })
     objects.forEach(o => {
-      if (hiddenTrackIds.has(o.trackId)) return
+      if (hiddenTrackKeys.has(`object:${o.trackId}`)) return
       if (!o.bbox) return
-      if (isDragging && o.trackId === dragTrackId && dragType !== 'draw') return
-      const isSel = o.trackId === selectedTrackId
+      if (isDragging && o.trackId === dragTrackId && dragRef.current?.entityType === 'object' && dragType !== 'draw') return
+      const isSel = o.trackId === selectedTrackId && selectedEntityType === 'object'
       ctx.globalAlpha = isDragging ? 0.4 : isSel ? 1 : 0.7
       drawRect(ctx, o.bbox.x * dynamicScale, o.bbox.y * dynamicScale, o.bbox.width * dynamicScale, o.bbox.height * dynamicScale,
         isSel ? '#CCED68' : getClassColor(o.category),
@@ -185,7 +191,7 @@ export function AnnotationCanvas({
         }
       }
     }
-  }, [imageUrl, loadedImage, persons, objects, hiddenTrackIds, selectedTrackId, actualW, actualH, mode, getSelectedBox])
+  }, [imageUrl, loadedImage, persons, objects, hiddenTrackKeys, selectedTrackId, selectedEntityType, actualW, actualH, mode, getSelectedBox])
 
   // Load images outside render. The stale-load guard prevents a slow previous
   // frame from replacing the image after the selected segment changes.
@@ -240,12 +246,15 @@ export function AnnotationCanvas({
     const s = scaleRef.current
 
     if (dr.type === 'draw') {
-      const x1 = Math.min(dr.startX, x), y1 = Math.min(dr.startY, y)
-      previewRef.current = { x: x1 / s, y: y1 / s, width: Math.abs(x - dr.startX) / s, height: Math.abs(y - dr.startY) / s }
+      const boundedX = Math.max(0, Math.min(x, actualW * s))
+      const boundedY = Math.max(0, Math.min(y, actualH * s))
+      const x1 = Math.min(dr.startX, boundedX), y1 = Math.min(dr.startY, boundedY)
+      previewRef.current = { x: x1 / s, y: y1 / s, width: Math.abs(boundedX - dr.startX) / s, height: Math.abs(boundedY - dr.startY) / s }
     } else if (dr.type === 'move') {
       const dx = (x - dr.startX) / s, dy = (y - dr.startY) / s
       previewRef.current = {
-        x: Math.round(dr.startBox!.x + dx), y: Math.round(dr.startBox!.y + dy),
+        x: Math.round(Math.max(0, Math.min(actualW - dr.startBox!.width, dr.startBox!.x + dx))),
+        y: Math.round(Math.max(0, Math.min(actualH - dr.startBox!.height, dr.startBox!.y + dy))),
         width: dr.startBox!.width, height: dr.startBox!.height,
       }
     } else if (dr.type === 'resize') {
@@ -279,9 +288,9 @@ export function AnnotationCanvas({
 
     const pv = previewRef.current
     if (dr.type === 'draw' && pv && pv.width > CANVAS_MIN_BOX_SIZE && pv.height > CANVAS_MIN_BOX_SIZE) {
-      onDrawBox({ x: Math.round(pv.x), y: Math.round(pv.y), width: Math.round(pv.width), height: Math.round(pv.height) })
+      onDrawBox({ x: Math.round(pv.x), y: Math.round(pv.y), width: Math.round(pv.width), height: Math.round(pv.height) }, actualW, actualH)
     } else if ((dr.type === 'move' || dr.type === 'resize') && pv) {
-      onResizeBox(dr.trackId!, { x: pv.x, y: pv.y, width: pv.width, height: pv.height })
+      onResizeBox(dr.trackId!, dr.entityType!, { x: pv.x, y: pv.y, width: pv.width, height: pv.height }, actualW, actualH)
     }
 
     dragRef.current = null
@@ -290,7 +299,7 @@ export function AnnotationCanvas({
     // Trigger one final React re-render
     cancelAnimationFrame(rafRef.current)
     setTimeout(redraw, 0)
-  }, [onDrawBox, onResizeBox, redraw])
+  }, [onDrawBox, onResizeBox, redraw, actualW, actualH])
 
   useEffect(() => {
     windowMoveRef.current = handleWindowMove
@@ -308,6 +317,7 @@ export function AnnotationCanvas({
     const s = scaleRef.current
 
     if (mode === 'draw') {
+      if (!drawEnabled) return
       dragRef.current = { type: 'draw', startX: x, startY: y }
       previewRef.current = { x: x / s, y: y / s, width: 0, height: 0 }
       setCursor('crosshair')
@@ -320,7 +330,7 @@ export function AnnotationCanvas({
     if (sel) {
       const handle = hitHandle(x, y, sel.bbox)
       if (handle) {
-        dragRef.current = { type: 'resize', trackId: sel.trackId, startX: x, startY: y, startBox: { ...sel.bbox }, handle }
+        dragRef.current = { type: 'resize', trackId: sel.trackId, entityType: selectedEntityType!, startX: x, startY: y, startBox: { ...sel.bbox }, handle }
         previewRef.current = { ...sel.bbox }
         setCursor(getCursorStyle(handle))
         window.addEventListener('mousemove', windowMoveRef.current as EventListener)
@@ -329,7 +339,7 @@ export function AnnotationCanvas({
       }
       const cx = x / s, cy = y / s
       if (cx >= sel.bbox.x && cx <= sel.bbox.x + sel.bbox.width && cy >= sel.bbox.y && cy <= sel.bbox.y + sel.bbox.height) {
-        dragRef.current = { type: 'move', trackId: sel.trackId, startX: x, startY: y, startBox: { ...sel.bbox } }
+        dragRef.current = { type: 'move', trackId: sel.trackId, entityType: selectedEntityType!, startX: x, startY: y, startBox: { ...sel.bbox } }
         previewRef.current = { ...sel.bbox }
         setCursor('move')
         window.addEventListener('mousemove', windowMoveRef.current as EventListener)
@@ -338,9 +348,9 @@ export function AnnotationCanvas({
       }
     }
 
-    const tid = findTrackAt(x, y)
-    if (tid !== null) onSelectTrack(tid)
-  }, [mode, getSelectedBox, hitHandle, findTrackAt, onSelectTrack, windowMoveRef, windowUpRef])
+    const hit = findTrackAt(x, y)
+    if (hit !== null) onSelectTrack(hit.trackId, hit.entityType)
+  }, [mode, drawEnabled, getSelectedBox, hitHandle, findTrackAt, onSelectTrack, selectedEntityType])
 
   // Keyboard delete handled by parent page (avoid double confirm)
 
@@ -359,7 +369,7 @@ export function AnnotationCanvas({
           <span className="text-gv-text-dim">Draw</span>
         </label>
         {mode === 'draw'
-          ? <span className="text-xs text-gv-pink">Drag to draw</span>
+          ? <span className="text-xs text-gv-pink">{drawEnabled ? 'Drag to draw' : 'Choose Person or Object first'}</span>
           : <span className="text-xs text-gv-text-muted">{selectedTrackId != null ? 'Drag to move, edges to resize' : 'Click to select'}</span>}
         <span className="flex-1" />
         <span className="text-xs text-gv-text-muted">{persons.length + objects.length} tracks</span>

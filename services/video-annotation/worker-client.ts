@@ -7,6 +7,7 @@ import type {
   WorkerJobStatus,
   WorkerHealth,
 } from './types'
+import type { VideoSemanticConfig } from './remote-semantic-config'
 
 const workerUrl = process.env.VIDEO_ANNOTATION_WORKER_URL || WORKER_URL
 
@@ -15,12 +16,12 @@ function adminHeaders(): HeadersInit {
   return token ? { 'X-Nuwa-Worker-Admin': token } : {}
 }
 
-async function workerJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function workerJson<T>(path: string, init?: RequestInit, timeoutMs = 10000): Promise<T> {
   const res = await fetch(`${workerUrl}${path}`, {
     ...init,
     headers: { ...adminHeaders(), ...init?.headers },
     cache: 'no-store',
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   if (!res.ok) {
     const payload = await res.json().catch(() => null) as { detail?: string } | null
@@ -91,4 +92,12 @@ export function authorizeHuggingFaceToken(token: string): Promise<{ authenticate
 
 export function prepareEnhancedDeployment(): Promise<DeploymentStatus['enhancedSetup']> {
   return workerJson<DeploymentStatus['enhancedSetup']>('/deployment/prepare', { method: 'POST' })
+}
+
+export function testWorkerRemoteSemantic(config: VideoSemanticConfig): Promise<{ status: 'ok'; model: string }> {
+  return workerJson<{ status: 'ok'; model: string }>('/semantic/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }, 130000)
 }

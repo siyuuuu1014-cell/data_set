@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyCompletedModelResult } from '../../services/video-annotation/model-result'
+import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '../../services/video-annotation/model-result'
 import type {
   SegmentAnnotation,
   SegmentState,
+  VideoTaskItem,
 } from '../../services/video-annotation/types'
 
 function annotation(
@@ -101,4 +102,74 @@ test('a clean rerun clears stale model errors', () => {
   assert.equal(segment.status, 'completed')
   assert.equal(segment.error, undefined)
   assert.equal(segment.lastCompletedMode, 'standard')
+})
+
+test('identity aliases reconcile model and human annotations across a video', () => {
+  const first = annotation()
+  first.persons = [{
+    trackId: 8,
+    personId: 'video-1:person:8',
+    gender: 'unknown',
+    ageGroup: 'unknown',
+    hair: { color: 'unknown', style: 'unknown' },
+    expression: 'unknown',
+    pose: 'unknown',
+    action: [],
+    facing: 'unknown',
+    occlusion: 0,
+    clothing: [],
+    bbox: { x: 0, y: 0, width: 10, height: 20 },
+    depth: null,
+    keypoints: [],
+  }]
+  const reviewed = structuredClone(first)
+  const video: VideoTaskItem = {
+    videoId: 'video-1',
+    fileName: 'source.mp4',
+    filePath: 'source.mp4',
+    duration: 2,
+    fps: 24,
+    width: 100,
+    height: 100,
+    status: 'completed',
+    uploadProgress: 100,
+    segments: [{
+      segmentId: 1,
+      start: 0,
+      end: 1,
+      status: 'completed',
+      modelAnnotation: first,
+      humanAnnotation: reviewed,
+    }],
+  }
+
+  applyIdentityAliasesToVideo(video, {
+    'video-1:person:8': 'video-1:person:4',
+    'video-1:person:4': 'video-1:person:2',
+  })
+
+  assert.equal(video.segments[0].modelAnnotation?.persons[0].personId, 'video-1:person:2')
+  assert.equal(video.segments[0].humanAnnotation?.persons[0].personId, 'video-1:person:2')
+})
+
+test('identity aliases are consumed as transport metadata instead of persisted annotation data', () => {
+  const result = annotation()
+  result._identity_aliases = {
+    'video-1:person:8': 'video-1:person:2',
+  }
+  const segment: SegmentState = {
+    segmentId: 1,
+    start: 0,
+    end: 1,
+    status: 'processing',
+    modelAnnotation: null,
+    humanAnnotation: null,
+  }
+
+  applyCompletedModelResult(segment, result)
+
+  assert.equal(segment.modelAnnotation?._identity_aliases, undefined)
+  assert.deepEqual(result._identity_aliases, {
+    'video-1:person:8': 'video-1:person:2',
+  })
 })

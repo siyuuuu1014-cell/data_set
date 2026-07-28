@@ -76,6 +76,8 @@ export default function VideoAnnotationProjectPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({})
   const [uploadError, setUploadError] = useState('')
+  const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState('')
 
   const loadProject = useCallback(async () => {
     try {
@@ -154,6 +156,35 @@ export default function VideoAnnotationProjectPage() {
     setUploading(false)
   }, [project, uploading, annotateId, t])
 
+  const handleDeleteVideo = useCallback(async (video: VideoTaskItem) => {
+    if (!project || deletingVideoId) return
+    if (!window.confirm(t('video.delete_video_confirm', video.fileName))) return
+
+    setDeletingVideoId(video.videoId)
+    setDeleteError('')
+    try {
+      const response = await fetch(
+        `/api/video-annotation/annotate-sets/${encodeURIComponent(annotateId)}/videos/${encodeURIComponent(video.videoId)}`,
+        { method: 'DELETE' },
+      )
+      const payload = await response.json() as {
+        data?: AnnotateSet
+        error?: { code?: string; message?: string }
+      }
+      if (!response.ok || !payload.data) {
+        setDeleteError(payload.error?.code === 'VIDEO_BUSY'
+          ? t('video.delete_video_busy')
+          : t('video.delete_video_failed'))
+        return
+      }
+      setProject(payload.data)
+    } catch {
+      setDeleteError(t('video.delete_video_failed'))
+    } finally {
+      setDeletingVideoId(null)
+    }
+  }, [project, deletingVideoId, annotateId, t])
+
   if (loading) {
     return <div className="flex-1 flex items-center justify-center text-sm text-gv-text-dim">{t('app.loading')}</div>
   }
@@ -201,6 +232,10 @@ export default function VideoAnnotationProjectPage() {
           <div className="mb-5 rounded-lg border border-gv-pink/30 bg-gv-pink/5 px-4 py-3 text-sm text-gv-pink-dark">{uploadError}</div>
         )}
 
+        {deleteError && (
+          <div className="mb-5 rounded-lg border border-gv-pink/30 bg-gv-pink/5 px-4 py-3 text-sm text-gv-pink-dark">{deleteError}</div>
+        )}
+
         {uploading && (
           <div className="card p-5 mb-6">
             <div className="flex items-center gap-3 mb-3">
@@ -233,28 +268,45 @@ export default function VideoAnnotationProjectPage() {
             {(project.videos || []).map((video, index) => {
               const progress = videoProgress(video)
               return (
-                <Link
+                <article
                   key={video.videoId}
-                  href={`/annotations/${annotateId}/videos/${video.videoId}`}
-                  className="card group overflow-hidden hover:border-gv-pink/40 hover:-translate-y-1 transition-all duration-300"
+                  className="card group relative overflow-hidden hover:border-gv-pink/40 hover:-translate-y-1 transition-all duration-300"
                   style={{ animation: `fade-in 0.4s ease-out ${index * 0.05}s both` }}
                 >
-                  <VideoThumbnail video={video} />
-                  <div className="p-4">
-                    <h2 className="font-semibold text-gv-text group-hover:text-gv-pink transition-colors truncate" title={video.fileName}>{video.fileName}</h2>
-                    <p className="text-xs text-gv-text-dim mt-1.5">
-                      {formatDuration(video.duration)} · {video.width || '--'}×{video.height || '--'}
-                    </p>
-                    <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-gv-border/50">
-                      <span className="text-xs text-gv-text-muted">
-                        {progress.total > 0
-                          ? t('video.video_progress', progress.completed, progress.total)
-                          : t('video.not_split')}
-                      </span>
-                      <span className="text-xs font-medium text-gv-pink">{t('video.manage_video')} →</span>
+                  <Link href={`/annotations/${annotateId}/videos/${video.videoId}`} className="block">
+                    <VideoThumbnail video={video} />
+                    <div className="p-4">
+                      <h2 className="font-semibold text-gv-text group-hover:text-gv-pink transition-colors truncate pr-8" title={video.fileName}>{video.fileName}</h2>
+                      <p className="text-xs text-gv-text-dim mt-1.5">
+                        {formatDuration(video.duration)} · {video.width || '--'}×{video.height || '--'}
+                      </p>
+                      <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t border-gv-border/50">
+                        <span className="text-xs text-gv-text-muted">
+                          {progress.total > 0
+                            ? t('video.video_progress', progress.completed, progress.total)
+                            : t('video.not_split')}
+                        </span>
+                        <span className="text-xs font-medium text-gv-pink">{t('video.manage_video')} →</span>
+                      </div>
                     </div>
-                  </div>
-                </Link>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => { void handleDeleteVideo(video) }}
+                    disabled={deletingVideoId !== null}
+                    title={deletingVideoId === video.videoId ? t('video.deleting_video') : t('video.delete_video')}
+                    aria-label={deletingVideoId === video.videoId ? t('video.deleting_video') : t('video.delete_video')}
+                    className="absolute top-2 right-2 z-10 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gv-border/70 bg-gv-surface/90 text-gv-text-muted shadow-sm backdrop-blur-sm transition-colors hover:border-gv-pink/50 hover:text-gv-pink disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {deletingVideoId === video.videoId ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    ) : (
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+                      </svg>
+                    )}
+                  </button>
+                </article>
               )
             })}
           </div>

@@ -6,6 +6,27 @@ import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
+const LATIN1_MOJIBAKE_MARKERS = /[\u0080-\u009f]|[ÂÃäåæçéïð]/
+
+/** Repair the legacy UTF-8-filename-as-Latin-1 Busboy failure mode. */
+export function repairLegacyMultipartFilename(fileName: string): string {
+  if (!LATIN1_MOJIBAKE_MARKERS.test(fileName)) return fileName
+
+  const codePoints = Array.from(fileName, character => character.codePointAt(0) ?? -1)
+  if (codePoints.some(value => value < 0 || value > 0xff)) return fileName
+
+  try {
+    const bytes = Uint8Array.from(codePoints)
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    const roundTrip = new TextEncoder().encode(decoded)
+    if (roundTrip.length !== bytes.length) return fileName
+    if (!roundTrip.every((value, index) => value === bytes[index])) return fileName
+    return decoded || fileName
+  } catch {
+    return fileName
+  }
+}
+
 export type UploadErrorCode =
   | 'VALIDATION'
   | 'VIDEO_FORMAT_UNSUPPORTED'
@@ -139,6 +160,10 @@ export async function receiveMultipartVideoUpload(
     try {
       parser = Busboy({
         headers,
+        // Browsers encode non-ASCII multipart filenames as UTF-8 bytes. Busboy
+        // otherwise interprets unlabelled header parameters as Latin-1, which
+        // turns Chinese and other Unicode filenames into mojibake.
+        defParamCharset: 'utf8',
         limits: {
           files: 1,
           fields: 8,

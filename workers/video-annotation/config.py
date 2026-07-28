@@ -64,6 +64,12 @@ TASKS_DIR = DATA_ROOT / "tasks"
 MODEL_MANIFEST_FILE = Path(
     os.environ.get("NUWA_MODEL_MANIFEST", DATA_ROOT / "models-manifest.json")
 ).expanduser().resolve()
+VIDEO_SEMANTIC_CONFIG_FILE = Path(
+    os.environ.get(
+        "NUWA_VIDEO_SEMANTIC_CONFIG",
+        PROJECT_ROOT / "configs" / "video-semantic-config.json",
+    )
+).expanduser().resolve()
 
 for directory in [UPLOADS_DIR, CACHE_DIR, EXPORTS_DIR, TEMP_DIR, TASKS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
@@ -122,6 +128,11 @@ PROVIDER_ENABLED = {
 # ── Inference defaults ────────────────────────────────
 
 DEFAULT_SAMPLE_FPS = _env_float("SAMPLE_FPS", 0.5)
+DEFAULT_TRACKING_SAMPLE_FPS = min(
+    10.0,
+    max(0.5, _env_float("TRACKING_SAMPLE_FPS", 3.0)),
+)
+TRACKING_FRAME_BATCH_SIZE = max(1, _env_int("TRACKING_FRAME_BATCH_SIZE", 4))
 DEFAULT_MAX_FRAMES = _env_int("MAX_FRAMES", 8)
 DEFAULT_MAX_NEW_TOKENS = _env_int("MAX_NEW_TOKENS", 900)
 DEFAULT_MAX_PIXELS = _env_int("MAX_PIXELS", 256 * 256)
@@ -175,3 +186,26 @@ DEFAULT_TRACK_MATCH_THRESHOLD = min(
     max(0.0, _env_float("TRACK_MATCH_THRESHOLD", 0.8)),
 )
 DEFAULT_TRACK_BUFFER = max(1, _env_int("TRACK_BUFFER", 30))
+
+# Lightweight person ReID. The public ONNX model is cached by
+# huggingface_hub and runs through OpenCV DNN on CPU, so it does not compete
+# with Qwen or LocateAnything for GPU memory.
+PERSON_REID_ENABLED = _env_bool("NUWA_PERSON_REID", True)
+PERSON_REID_MODEL_PATH = os.environ.get("PERSON_REID_MODEL_PATH", "").strip()
+PERSON_REID_REPO = os.environ.get("PERSON_REID_REPO", "opencv/opencv_zoo").strip()
+PERSON_REID_FILENAME = os.environ.get(
+    "PERSON_REID_FILENAME",
+    "models/person_reid_youtureid/person_reid_youtu_2021nov.onnx",
+).strip()
+PERSON_REID_REVISION = os.environ.get(
+    "PERSON_REID_REVISION",
+    "d4938dfc9d4ec5d098bfa33e98b3f3345a236586",
+).strip()
+PERSON_REID_MATCH_THRESHOLD = min(
+    1.0,
+    max(0.0, _env_float("PERSON_REID_MATCH_THRESHOLD", 0.82)),
+)
+PERSON_REID_MAX_GAP_SECONDS = max(
+    2.5,
+    _env_float("PERSON_REID_MAX_GAP_SECONDS", 30.0),
+)

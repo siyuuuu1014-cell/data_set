@@ -21,12 +21,12 @@ The project is intended primarily for trusted local or internal use. Synthetic p
 
 ### Video Annotation
 
-- **Batch video upload** with persistent, file-backed annotation jobs
+- **Batch video upload** with UTF-8 filenames, persistent file-backed jobs, and per-video deletion
 - **Scene-aware processing** before model inference
-- **Optional local providers** — YOLO11, LocateAnything, Qwen3-VL, RapidOCR, Whisper, and Depth Anything
+- **Optional local providers** — YOLO11, LocateAnything, Qwen3-VL, RapidOCR, Whisper, and Depth Anything; the Qwen semantic stage can also use a separate remote multimodal API
 - **ByteTrack tracking** with Kalman prediction, two-stage confidence association, and a configurable legacy IoU fallback
 - **Human review** with a canvas editor, scene navigation, and timeline
-- **Custom JSON, COCO, and YOLO ZIP export** with labels and keyframe images
+- **Custom JSON, COCO, and YOLO ZIP export** with labels and keyframe images; Custom JSON retains sampled-frame observations
 
 ## Architecture
 
@@ -114,6 +114,8 @@ Upload videos
 
 Each model provider is optional. A job can only use providers whose dependencies and model weights are available in the worker environment.
 
+After automatic scene detection and before annotation begins, the segment review page supports **Manual Split**. Select a draft segment, position the video with playback, scrubbing, frame-step buttons, or the timestamp input, preview the two resulting ranges, and split at the FPS-snapped boundary. The first release intentionally disables this operation after any segment in that video has model or human results, so it never clears completed review work.
+
 ## Tech Stack
 
 | Area | Technology |
@@ -145,6 +147,12 @@ Open [http://localhost:3000](http://localhost:3000).
 ### Configure LLM (Optional)
 
 Open **Settings** and configure an OpenAI- or Anthropic-compatible provider, model, endpoint, and API key. Deterministic generators do not require an external model.
+
+### Configure Video Semantics (Optional)
+
+The **Video Annotation · Semantic Model** section in Settings is isolated from the Synthetic Data LLM configuration. It defaults to **Local Qwen**, so an external API is not required and existing installations keep their current behavior. Only after a user selects and saves **Remote API** does the Worker stop loading local Qwen and send up to three chronological compressed keyframes to the configured OpenAI- or Anthropic-compatible multimodal model. YOLO, ByteTrack, OCR, Whisper, Depth, LocateAnything, merging, review, and exports remain unchanged.
+
+The vision connection test sends one tiny test image only when the user explicitly clicks it and does not save or enable Remote mode; the user must still click **Save Configuration**. Automated tests never contact an external API. Remote mode transmits video keyframes to a third party, so confirm data permissions, service terms, and cost before enabling it.
 
 ### Create a Dataset
 
@@ -234,9 +242,14 @@ Video annotations can also be exported as custom JSON, COCO JSON, or a YOLO ZIP 
 | `/api/data/fk-values` | Load stored rows for foreign-key generation |
 | `/api/restore/tables` | Discover server-side Parquet tables for restoration |
 | `/api/video-annotation/annotate-sets/*` | Create, restore, poll, update, and delete annotation sets |
+| `/api/video-annotation/annotate-sets/{id}/videos/{videoId}` | Permanently remove one idle video, its segments/annotations, upload directory, and identity cache |
 | `/api/video-annotation/upload` | Upload source videos |
-| `/api/video-annotation/files/*` | Stream videos and extract timestamped frames |
+| `/api/video-annotation/files/*` | Stream videos and extract timestamped or frame-indexed images with collision-free caching |
+| `/api/video-annotation/annotate-sets/{id}/frames` | Persist a single segment's frame-level spatial edits |
+| `/api/video-annotation/annotate-sets/{id}/segments/split` | Atomically split one untouched draft segment at an FPS-snapped timestamp |
 | `/api/video-annotation/segments/*` | Detect scenes and submit segment annotation jobs |
+| `/api/video-annotation/semantic/config` | Load and save isolated Local/Remote video-semantic settings without returning the API key |
+| `/api/video-annotation/semantic/test` | Explicitly test the remote multimodal request and semantic JSON response through the Worker |
 | `/api/video-annotation/worker/health` | Check worker health |
 
 The FastAPI worker exposes health, status, and processing endpoints used by the Next.js server. Its default address is `http://127.0.0.1:8765`.
@@ -260,10 +273,15 @@ The FastAPI worker exposes health, status, and processing endpoints used by the 
 | `LOCATE_ADAPTIVE_MAX_CATEGORIES` / `LOCATE_ADAPTIVE_GENERATION_MODE` / `LOCATE_ADAPTIVE_MAX_NEW_TOKENS` | Bounds for adaptive precision jobs; defaults are `18`, `fast`, and `256` |
 | `QWEN_LOCAL_MODEL` | Local Qwen model identifier |
 | `QWEN_LOCAL_MODEL_PATH` | Local Qwen model directory; takes precedence over `QWEN_LOCAL_MODEL` |
+| `NUWA_VIDEO_SEMANTIC_CONFIG` | Video-semantic configuration path; defaults to `configs/video-semantic-config.json` |
 | `DEPTH_MODEL` | Depth Anything model identifier or local path |
 | `NUWA_PROVIDER_*` | Enable or disable an individual video model provider |
 | `NUWA_TRACKER_BACKEND` | Tracking backend: `bytetrack` by default, or `iou` for the legacy fallback |
 | `TRACK_LOW_THRESHOLD` / `TRACK_HIGH_THRESHOLD` / `TRACK_MATCH_THRESHOLD` / `TRACK_BUFFER` | ByteTrack confidence, association, and lost-track settings |
+| `TRACKING_SAMPLE_FPS` / `TRACKING_FRAME_BATCH_SIZE` | Detection/tracking sampling rate and bounded decode batch size; defaults are `3` FPS and `4` frames |
+| `NUWA_PERSON_REID` | Enable lightweight CPU person appearance matching; defaults to `true` |
+| `PERSON_REID_MODEL_PATH` | Optional local YoutuReID ONNX path; when empty, the pinned model is reused from Hugging Face cache or downloaded once |
+| `PERSON_REID_MATCH_THRESHOLD` / `PERSON_REID_MAX_GAP_SECONDS` | Conservative appearance threshold and maximum cross-segment search gap; defaults are `0.82` and `30` seconds |
 | `NUWA_WORKER_PYTHON` | Explicit Python interpreter used by all worker scripts |
 | `NUWA_TORCH_INDEX_URL` / `NUWA_TORCH_VERSION` / `NUWA_TORCHVISION_VERSION` | Optional setup-time GPU wheel source and exact PyTorch versions |
 | `HF_TOKEN` | Optional Hugging Face access token |
@@ -291,7 +309,7 @@ When changing the worker bind host or port, set `VIDEO_ANNOTATION_WORKER_URL` in
 | `./scripts/start-video-worker.ps1` | Start the video worker |
 | `./scripts/start-all.ps1` | Start the worker and Next.js development server |
 
-`npm test` is the unified non-inference regression entry point. It covers the streaming upload sink, interrupted/oversized upload cleanup, preservation of human annotations across model reruns, provider status rules, ByteTrack two-stage association, tracking identity, OCR, semantic parsing, and result merging. A full browser/API test that executes real models remains separate because it requires media fixtures and configured model providers.
+`npm test` is the unified non-inference regression entry point. It covers the streaming upload sink, UTF-8 filenames, interrupted/oversized upload cleanup, safe per-video removal, preservation of human annotations across model reruns, provider status rules, ByteTrack two-stage association, cross-segment ReID/identity reconciliation, OCR, semantic parsing, remote OpenAI/Anthropic image request shapes, and result merging. A full browser/API test that executes real models or a real remote API remains separate because it requires media fixtures and user configuration.
 
 ## Project Structure
 
@@ -340,10 +358,17 @@ nuwa/
 ## Track and Person Identity
 
 - `trackId` remains numeric and identifies a video-scoped track. The segment-local tracker enforces one-to-one association inside each frame, then a persistent per-video registry remaps local IDs before depth, merge, review, and export.
-- Re-annotating the same segment reuses its stored mapping. Temporally adjacent boundary tracks are continued only when class and bounding-box overlap provide a high-confidence one-to-one match; ambiguous tracks receive new IDs to avoid merging different people.
+- Detection/tracking now samples independently at `3 FPS` by default and decodes frames in batches of four. The pipeline assigns absolute frame indexes from each batch position and rejects incomplete detector batches instead of trusting provider-owned indexes. The three semantic keyframes used by Qwen/Remote API remain separate, so identity quality no longer depends on the old `0.5 FPS` semantic option and memory remains bounded.
+- Spatial boxes are stored in `SegmentAnnotation.frames[]` with frame index, timestamp, image dimensions, entity type, track ID, confidence, source, and bbox. Legacy segment-level `persons` and `objects` remain semantic/compatibility summaries, so existing tasks still open and export.
+- The review player, extracted image, and canvas share one selected sampled frame. Frame stepping uses the video's FPS or stored sample timestamps instead of a hard-coded 30 FPS. Every Draw operation requires an explicit Person/Object choice, and Object also requires a manual label; select, move, resize, undo, and delete are scoped by frame, entity type, and track ID. Delete removes the current-frame box and removes its summary only when no frame still observes that entity.
+- A selected box can be converted in either direction between Person and Object. **Convert This Frame** is the safe default; **Convert Entire Track** requires confirmation and updates matching video-level identity observations across annotated segments in one locked save. Person-to-Object conversion requires a manual object label, while bbox, track ID, timestamps, and unaffected semantic attributes are preserved.
+- Object-label correction is frame-scoped by default. **Save This Frame Label** changes only the selected sampled-frame observation; it does not rewrite the segment summary, neighbouring frames, the whole Track, or the segment Event. Current-frame JSON prefers that reviewed frame label and recomputes its own visual Event. **Save Entire Track** and **Apply Label to Matching Objects** remain explicit, confirmed broader operations for genuinely track-wide or fragmented-track corrections; the latter can consult preserved model labels without hard-coding any class name. OCR labels are excluded from those bulk operations.
+- The review header now reports **Current frame: N objects · Segment: M tracks**. `N` is the simultaneous non-OCR count in the selected sampled frame, while `M` is the number of non-OCR Track summaries observed anywhere in the segment; the values are not expected to match when objects enter or leave the shot. Historical records that combined an ordinary object and `_textContent` on one low Track ID are migrated idempotently: a unique adjacent high-IoU ordinary Track may reclaim the box, while OCR is restored to the reserved million-ID namespace from the preserved model result. Ambiguous candidates are never merged automatically.
+- A pinned lightweight YoutuReID ONNX model (106,878,407 bytes, about 102 MiB) extracts up to three representative person crops per track on CPU. Nearby segments are linked by conservative one-to-one appearance similarity or boundary IoU. A same-segment rerun keeps its compatible persisted mapping before positional matching; clearly contradictory person embeddings veto the positional fallback while inconclusive scores can still use strong IoU evidence. Out-of-order alias reconciliation additionally requires compatible historical person appearance and still rejects identities that co-occurred.
+- ReID is an identity aid, not a required annotation provider. Missing weights or inference errors fall back to boundary IoU without marking the segment degraded, and it does not consume the GPU memory used by Qwen or LocateAnything.
 - `personId` is assigned from the video-scoped tracking identity (`<videoId>:person:<trackId>`). Qwen semantic attributes are no longer hashed to create identity because different people can share gender, age, hair, and clothing descriptions.
-- Identity registry files live under `data/video-annotations/cache/video-identities/`. Keep this cache with the task data when stable IDs must survive Worker restarts. Existing saved annotations are not rewritten automatically; re-annotate a segment to generate IDs under the new policy.
-- This conservative policy does not claim cross-shot biometric ReID. A person returning after a hard cut or long gap can receive a new identity, which is safer than silently combining two different people.
+- Identity registry files live under `data/video-annotations/cache/video-identities/`. Keep this cache with the task data when stable IDs must survive Worker restarts. Legacy schema-v1 registries are migrated to v2 in memory on their next identity assignment without changing `nextTrackId`, segment mappings, or existing global IDs; the atomic registry write then persists the migration. Existing annotations are not re-inferred automatically, so appearance embeddings are added only as their segments are rerun. When later evidence safely merges two IDs, the API propagates the canonical `personId` through saved model and human annotations without changing any other reviewed fields.
+- Appearance-only ReID cannot guarantee identity after major clothing changes, severe occlusion, or gaps beyond the configured window. Ambiguous matches intentionally remain split; manual merge/split and identity confidence remain planned review features.
 
 Run the focused Worker regression tests with the same Python interpreter used by the Worker:
 
@@ -366,9 +391,9 @@ python -m unittest discover -s tests -v
 - Ordinary **Annotate**, **Re-run Segment**, **Re-run All**, and failed-segment retries explicitly skip LocateAnything for each Worker job; all other providers, OCR, speech, tracking, review, and export behavior remain unchanged. In the segment review toolbar, **Precise Locate** enables LocateAnything for that selected segment only. It is accepted only when enhanced mode is active and its model is ready, so an unavailable provider cannot be silently reported as a precision run.
 - Segment task state records whether the current or last completed run was standard or precise. This execution metadata is used by the page only and does not change the annotation or export JSON schema. A re-run still updates only `modelAnnotation` and preserves the human-reviewed copy.
 - New pipeline results include `_provider_statuses`. If an enabled core visual provider (YOLO, tracker, LocateAnything, or Qwen) fails or cannot produce its required input, the usable result is retained but the segment, video, and annotation set are reported as `partial_completed`; Qwen inference and invalid-response errors are no longer converted into empty successful results. Explicitly disabled providers do not degrade a job, and a tracker skipped because detection found no objects is treated as a valid empty result. The review page exposes degraded states and permits targeted re-annotation. Historical completed results containing a known core-provider error are normalized to the same state when read.
-- Speech recognition is stored in the top-level `speechTranscript` field and is not treated as a visual event. The UI and Custom JSON exporter migrate historical `[Speech] ...` entries at read/export time, while OCR remains represented by localized text objects.
+- Speech recognition is stored internally in the top-level `speechTranscript` field and is not treated as a visual event. The UI migrates historical `[Speech] ...` entries when reading annotations, while OCR remains represented internally by localized text objects. Both remain available for review and video-summary evidence but are intentionally omitted from Custom JSON exports.
 - Visual events contain a fixed `type` and a short `description` of what is visibly happening. Qwen is asked for these fields before long person/object arrays so truncated output is less likely to omit them. If the semantic event is absent or rejected for an unsupported object claim, Nuwa derives one `visual_activity` summary only from localized people, their recognized actions, and localized non-text objects.
-- **Edit JSON** preserves OCR text objects, displays `speechTranscript` separately, and keeps historical free-form visual events selectable. Runtime-only `_recognition`, `_pipeline_errors`, `_provider_statuses`, and `_pipeline_status` remain in internal task storage for diagnostics but are hidden from editable and exported annotation JSON. Existing saved annotations with an empty event list receive the same grounded visual fallback in review and Custom JSON export; re-run a segment only when fresh model recognition is required.
+- **Edit Segment JSON (Internal)** preserves OCR text objects, displays `speechTranscript` separately, and keeps historical free-form visual events selectable. Runtime-only `_recognition`, `_pipeline_errors`, `_provider_statuses`, and `_pipeline_status` remain in internal task storage for diagnostics but are hidden from editable and exported annotation JSON; transient `_identity_aliases` are consumed by the API and are not persisted. Existing saved annotations with an empty event list receive the same grounded visual fallback in review and Custom JSON export; re-run a segment only when fresh model recognition is required.
 - Human review selectors for scene, camera, person, clothing, object, and event labels include a **Custom…** option. Selecting it opens a text input and stores the supplied string without changing the existing annotation schema. Boolean fields remain constrained, while occlusion accepts any numeric value from 0 to 1.
 - OCR lines and the speech transcript are directly editable in the Segment Text & Speech panel. Saving creates a human annotation, updates both the OCR text and its object name, migrates legacy speech events to `speechTranscript`, and preserves the correction even when a false OCR/speech result is cleared. Clearing an OCR line removes that false text object; clearing the transcript removes the human-visible transcript.
 - Re-running a segment updates `modelAnnotation` without deleting its `humanAnnotation`. The reviewed copy remains authoritative in the UI, while the new model output and diagnostics remain available separately.
@@ -377,9 +402,13 @@ python -m unittest discover -s tests -v
 
 - The `video.description` field in Custom JSON is a single video-level sentence generated from the chronological semantics of every available annotation segment: scene, grounded people/objects, visual events, OCR, and speech context. Nuwa uses the shared OpenAI- or Anthropic-compatible LLM configured in **Settings**; long videos are summarized in chronological chunks and reduced to one final sentence.
 - Video-description generation does not re-run the video Worker or download another vision model. If the shared LLM is unconfigured or unavailable, export still completes with the previous deterministic local summary and the page reports that fallback.
-- Segment exports keep `speechTranscript` separate from visual-only `events`; each visual event may include its concise frame/segment `description`.
+- Custom JSON normalizes exported ontology values to lowercase `snake_case`, including scene, camera, person, clothing, object, and event-type labels. Free-text descriptions, brands, paths, and IDs are preserved.
+- The Custom JSON serializer tolerates sparse legacy or manually edited annotations: missing scalar ontology labels export as `unknown`, missing optional weather remains `null`, and empty/missing list entries are omitted instead of aborting the download.
+- Custom JSON omits `speechTranscript`, OCR text objects, and `frames`; these fields remain in internal annotation storage and the review UI. **Export Current Frame JSON** uses a separate frame-only serializer containing `frameIndex`, `timestamp`, normalized segment scene/camera context, only the people/objects visible in that sampled frame, and a visual event recomputed from those entities. It never inherits another frame's objects, the segment speech/OCR, the complete `frames` collection, or a stale segment event.
 - **Export Current Segment JSON** downloads only the currently selected segment while its outer `video.description` still summarizes the whole video. **Export All Annotations** keeps the existing JSON, YOLO ZIP, and COCO export flow.
-- Nuwa's persistent annotation unit is a scene segment (`S1`, `S2`, ...), which may combine observations from multiple sampled frames. The single-item export therefore exports one selected segment annotation, not an annotation for every encoded video frame.
+- Scene semantics remain segment-scoped (`S1`, `S2`, ...), while spatial boxes are persisted per sampled tracking frame. Existing annotations without `frames` remain readable; editing the displayed legacy box creates an explicit frame record. Nuwa does not claim inference for unsampled encoded frames.
+- **Edit Segment JSON (Internal)** is explicitly labeled as segment-wide storage and may contain all sampled frames, OCR, and speech. It is not the current-frame export.
+- New OCR objects use a reserved Track ID namespace starting at `1000000` and scan all detector IDs before allocation, preventing OCR text from inheriting or overwriting a visual-object track.
 
 ## Failed Segment Recovery
 
@@ -391,7 +420,7 @@ python -m unittest discover -s tests -v
 
 - Nuwa remains password-free for trusted local use. When serving it on a shared network, set both `NUWA_AUTH_USER` and `NUWA_AUTH_PASSWORD` to enable HTTP Basic authentication. Nuwa does not provide per-user authorization.
 - State-changing API requests reject cross-site browser origins.
-- LLM API keys are stored in a local JSON file. Protect the host filesystem and do not commit runtime configuration.
+- Synthetic Data and Video Semantic API keys are stored in separate Git-ignored local JSON files and never overwrite each other; APIs return only `hasApiKey`. Protect the host filesystem and do not commit runtime configuration.
 - The worker scripts do not contain an access token. The shared Settings page can validate and persist a token in the configured Hugging Face cache; authorization alone never starts a model download. Remote deployments should instead prefer a secret manager and HTTPS.
 - Custom and LLM-generated values run through a restricted, side-effect-free expression interpreter. It supports the documented row/reference/random/Math/Date helpers but does not permit statements, assignments, global access, or dynamic code execution.
 - LLM requests allow public HTTP(S) providers and loopback services such as Ollama. Private-network endpoints must be explicitly listed in `NUWA_LLM_ALLOWED_PRIVATE_HOSTS`.
@@ -405,13 +434,14 @@ python -m unittest discover -s tests -v
 - **LocateAnything compatibility repair (validated 2026-07-26):** Nuwa pins Transformers `4.57.1`, PEFT `0.19.1`, Decord `0.6.0`, and LMDB `1.7.5`, uses an isolated Worker environment, selects SDPA instead of the unsupported eager attention path, checks dependencies before reporting readiness, and exposes degraded completion. A real 0–8 second `S1` run completed with YOLO, tracking, LocateAnything, Qwen, OCR, speech, and depth; `_provider_statuses.locate_anything` and `_pipeline_status` were both `completed`.
 - On the validated 8GB Windows GPU, LocateAnything's SDPA/hybrid path can still take minutes and approach the VRAM limit. It is therefore opt-in per segment rather than part of ordinary annotation. Adaptive category selection and a bounded fast-first path reduce expected precision-job work, but no new real-model speed claim is made for that path; `LOCATE_CATEGORY_MODE=full` remains available when completeness is more important than latency.
 - The inspected historical `ign` task was produced while LocateAnything was failing in all 62 segments. Reading the task now exposes those results as `partial_completed`, but saved model annotations are not regenerated automatically; re-annotate the selected affected segments after restarting the Worker.
-- Detection quality is still limited by `yolo11n`, fixed `0.5 FPS` sampling, and a `0.65` confidence threshold. Qwen is deliberately conservative, and unlocalized Qwen-only objects are discarded. Small, brief, occluded, or non-COCO targets can therefore still be missed even after LocateAnything compatibility is restored.
-- Very short scene segments can produce no detection frame at the current fixed sample rate. Adaptive sampling, a mandatory midpoint-frame fallback, short-segment handling, balanced Qwen evidence, and YOLO model/threshold benchmarking remain planned work; see `PROJECT_STATUS_AND_ISSUES.md` P1-6.
+- Detection quality is still limited by `yolo11n` and a `0.65` confidence threshold. Tracking now samples at `3 FPS`, independently from the three semantic keyframes, but small, brief, occluded, or non-COCO targets can still be missed because Qwen remains conservative and unlocalized Qwen-only objects are discarded.
+- Extremely short scene segments can still produce no detection frame. Adaptive midpoint fallback, short-segment handling, balanced Qwen evidence, and YOLO model/threshold benchmarking remain planned work; see `PROJECT_STATUS_AND_ISSUES.md` P1-6.
 - Transformers, LocateAnything's direct remote-code dependencies, and the validated Windows CUDA PyTorch build are exact-versioned; several other Python dependencies still use bounded compatible ranges rather than a complete transitive lock file.
 - Gated Hugging Face models require one-time authorization from the shared Settings page or an externally managed `HF_TOKEN`. Model preparation is an explicit action and reports the cache/local model path before downloading.
-- Video uploads are parsed directly from the multipart request stream, written through a bounded temporary file, and hashed incrementally; interrupted, invalid, and oversized requests clean up their temporary upload directory. The automated suite verifies bounded-stream behavior with small fixtures, while a deployment-scale 2GB memory stress test is still recommended.
-- The default tracker now uses Ultralytics ByteTrack with Kalman prediction and high/low-confidence association. Low-confidence detections may maintain a confirmed track but cannot create a new exported track. `NUWA_TRACKER_BACKEND=iou` restores the deterministic legacy implementation. This remains within-segment motion tracking and does not replace production cross-shot ReID.
-- `npm test` provides a unified Node/Worker/typecheck regression entry point, but there is not yet a complete real-model browser end-to-end or general data-migration test suite.
+- Video uploads are parsed directly from the multipart request stream with UTF-8 filename parameters, written through a bounded temporary file, and hashed incrementally; interrupted, invalid, and oversized requests clean up their temporary upload directory. The automated suite verifies bounded-stream behavior with small fixtures, while a deployment-scale 2GB memory stress test is still recommended.
+- A project video can be permanently deleted from its card after confirmation. The operation removes the task entry, source/thumbnail directory, and video identity cache; videos with an active segment annotation job are rejected until that job finishes. There is no recycle bin or undo.
+- The default tracker uses Ultralytics ByteTrack with Kalman prediction and high/low-confidence association, followed by lightweight cross-segment appearance matching. This is not biometric identity verification; direct permanent aliasing now requires compatible historical embeddings, but visually similar people can still be confused and conservative thresholds can still split one person into multiple IDs.
+- `npm test` provides a unified Node/Worker/typecheck regression entry point and includes identity-registry migration plus frame-level entity separation, box clamping/upsert, and Worker frame preservation. There is not yet a complete real-model browser end-to-end or general migration framework for unrelated future schemas.
 - There is no conventional database, multi-user collaboration, per-user authorization, or general migration system.
 
 ## License

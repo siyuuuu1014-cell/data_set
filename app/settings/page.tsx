@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useState, useEffect } from 'react'
 import type { ApiFormat } from '@/services/types'
 import { VideoDeploymentSettings } from '@/components/video-annotation/VideoDeploymentSettings'
+import { VideoSemanticApiSettings } from '@/components/video-annotation/VideoSemanticApiSettings'
 
 const PROVIDERS = [
   { name: 'DeepSeek (Anthropic)', baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', apiFormat: 'anthropic' as ApiFormat },
@@ -243,6 +244,7 @@ export default function SettingsPage() {
             </div>
           </section>
 
+          <VideoSemanticApiSettings />
           <VideoDeploymentSettings />
         </div>
       </main>

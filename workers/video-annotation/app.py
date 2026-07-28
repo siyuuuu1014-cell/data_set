@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import WORKER_HOST, WORKER_PORT, DEVICE
 from logging_utils import setup_logging
 from providers.registry import loaded_provider_ids, provider_statuses, set_deployment_mode
+from providers.semantic.remote_api import RemoteApiSemantic
 from services.hf_auth import (
     authorize_with_token,
     deployment_summary,
@@ -129,6 +131,20 @@ async def authorize_huggingface(payload: dict, request: Request):
     except Exception as error:
         logger.warning("Hugging Face authorization failed: %s", error.__class__.__name__)
         raise HTTPException(status_code=401, detail="Hugging Face token validation failed") from error
+
+
+@app.post("/semantic/test")
+async def test_remote_semantic(payload: dict, request: Request):
+    """Run a minimal vision request only when the user explicitly tests it."""
+    _require_admin(request)
+    provider = RemoteApiSemantic(payload)
+    try:
+        return await asyncio.to_thread(provider.test_connection)
+    except Exception as error:
+        logger.warning("Remote semantic connection test failed: %s", error)
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    finally:
+        provider.unload()
 
 
 # ── Jobs ──────────────────────────────────────────────

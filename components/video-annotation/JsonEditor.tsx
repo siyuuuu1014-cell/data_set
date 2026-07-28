@@ -23,6 +23,7 @@ export function JsonEditor({ annotation, onSave }: Props) {
     delete topClean._recognition
     delete topClean._provider_statuses
     delete topClean._pipeline_status
+    delete topClean._identity_aliases
     delete topClean._humanEdited
     const legacySpeech = (annotation.events || [])
       .filter(event => event.type.startsWith('[Speech]'))
@@ -56,13 +57,17 @@ export function JsonEditor({ annotation, onSave }: Props) {
         onClick={() => setExpanded(true)}
         className="text-xs text-gv-text-muted hover:text-gv-pink underline mt-2"
       >
-        Edit JSON
+        Edit Segment JSON (Internal)
       </button>
     )
   }
 
   return (
     <div className="mt-3">
+      <p className="mb-2 text-xs text-gv-text-muted">
+        Segment-level internal data may include all sampled frames, OCR, and speech.
+        Use Export Current Frame JSON for a frame-only file.
+      </p>
       <textarea
         value={text}
         onChange={e => { setText(e.target.value); setError('') }}

@@ -21,12 +21,12 @@
 
 ### 视频标注
 
-- **批量视频上传**，并以本地文件持久化标注任务
+- **批量视频上传**，支持 UTF-8 文件名、文件化持久任务和项目内单视频删除
 - **场景感知处理**，在模型推理前完成视频分段
-- **可选本地模型提供者** — YOLO11、LocateAnything、Qwen3-VL、RapidOCR、Whisper 和 Depth Anything
+- **可选本地模型提供者** — YOLO11、LocateAnything、Qwen3-VL、RapidOCR、Whisper 和 Depth Anything；Qwen 语义阶段也可单独切换到远程多模态 API
 - **ByteTrack 跟踪**，包含 Kalman 预测、高低置信度两阶段关联，并保留可配置的旧 IoU 回退
 - **人工审核**，包含画布编辑器、场景导航和时间轴
-- **自定义 JSON、COCO 和 YOLO ZIP 导出**，包含标签和关键帧图像
+- **自定义 JSON、COCO 和 YOLO ZIP 导出**，包含标签和关键帧图像；自定义 JSON 会保留采样帧观察结果
 
 ## 整体架构
 
@@ -114,6 +114,8 @@ Python 视频 Worker（可选，默认 127.0.0.1:8765）
 
 每个模型提供者都是可选的。任务只能使用 Worker 环境中依赖和模型权重均已就绪的提供者。
 
+自动场景检测完成且尚未开始标注时，片段审核页支持 **Manual Split**。选择一个草稿片段后，可通过播放、拖动进度条、前后帧按钮或时间输入定位切点，预览左右两个新范围，再按视频 FPS 吸附后的边界进行分割。第一阶段会在该视频任一片段已经产生模型或人工结果后禁用此操作，因此不会清空已完成的审核内容。
+
 ## 技术栈
 
 | 范畴 | 技术 |
@@ -145,6 +147,12 @@ npm run dev
 ### 配置 LLM（可选）
 
 打开应用中的 **Settings**，配置兼容 OpenAI 或 Anthropic 的服务提供者、模型、接口地址和 API Key。确定性生成器不依赖外部模型。
+
+### 配置视频语义模型（可选）
+
+Settings 中的“视频标注 · 语义模型”与合成数据 LLM 配置相互独立，默认保持 **本地 Qwen**，因此没有外部 API 也可继续按原方式运行。主动切换为 **Remote API** 并保存后，Worker 才会停止加载本地 Qwen，并把最多三张按时间排序的压缩关键帧发送给指定的 OpenAI/Anthropic 兼容多模态模型。YOLO、ByteTrack、OCR、Whisper、Depth、LocateAnything、合并、人工审核和导出均不受影响。
+
+远程视觉连接测试只会在用户点击“测试视觉连接”时发送一张很小的测试图片，且不会保存配置或启用 Remote 模式，用户仍需明确点击“保存配置”；自动化测试不会访问外部 API。远程模式会向第三方传输视频关键帧，启用前应确认数据权限、服务条款和费用。
 
 ### 创建数据集
 
@@ -234,9 +242,14 @@ JSON · CSV · Excel (XLSX) · XML · SQL INSERT · Parquet
 | `/api/data/fk-values` | 为外键生成加载已保存的数据行 |
 | `/api/restore/tables` | 发现服务端可恢复的 Parquet 数据表 |
 | `/api/video-annotation/annotate-sets/*` | 创建、恢复、轮询、更新和删除标注集 |
+| `/api/video-annotation/annotate-sets/{id}/videos/{videoId}` | 永久删除一个空闲视频及其片段/标注、上传目录和身份缓存 |
 | `/api/video-annotation/upload` | 上传源视频 |
-| `/api/video-annotation/files/*` | 读取视频并提取指定时间点的视频帧 |
+| `/api/video-annotation/files/*` | 读取视频并按时间戳或帧索引提取图像，相邻帧缓存键互不冲突 |
+| `/api/video-annotation/annotate-sets/{id}/frames` | 持久化单个片段的帧级空间编辑 |
+| `/api/video-annotation/annotate-sets/{id}/segments/split` | 在按 FPS 吸附的时间点原子分割一个未标注草稿片段 |
 | `/api/video-annotation/segments/*` | 检测场景并提交片段标注任务 |
+| `/api/video-annotation/semantic/config` | 读取和保存独立的视频语义 Local/Remote 配置，不返回 API Key |
+| `/api/video-annotation/semantic/test` | 通过 Worker 显式测试远程多模态请求与语义 JSON 响应 |
 | `/api/video-annotation/worker/health` | 检查 Worker 健康状态 |
 
 FastAPI Worker 提供健康检查、任务状态和处理接口，由 Next.js 服务端调用。默认地址为 `http://127.0.0.1:8765`。
@@ -260,10 +273,15 @@ FastAPI Worker 提供健康检查、任务状态和处理接口，由 Next.js �
 | `LOCATE_ADAPTIVE_MAX_CATEGORIES` / `LOCATE_ADAPTIVE_GENERATION_MODE` / `LOCATE_ADAPTIVE_MAX_NEW_TOKENS` | 自适应精细定位的边界，默认分别为 `18`、`fast` 和 `256` |
 | `QWEN_LOCAL_MODEL` | 本地 Qwen 模型标识 |
 | `QWEN_LOCAL_MODEL_PATH` | 本地 Qwen 模型目录，优先于 `QWEN_LOCAL_MODEL` |
+| `NUWA_VIDEO_SEMANTIC_CONFIG` | 视频语义配置文件路径；默认使用 `configs/video-semantic-config.json` |
 | `DEPTH_MODEL` | Depth Anything 模型标识或本地路径 |
 | `NUWA_PROVIDER_*` | 启用或禁用单个视频模型提供者 |
 | `NUWA_TRACKER_BACKEND` | 跟踪后端，默认 `bytetrack`，可设为 `iou` 使用旧回退 |
 | `TRACK_LOW_THRESHOLD` / `TRACK_HIGH_THRESHOLD` / `TRACK_MATCH_THRESHOLD` / `TRACK_BUFFER` | ByteTrack 置信度、关联和丢失轨迹保留参数 |
+| `TRACKING_SAMPLE_FPS` / `TRACKING_FRAME_BATCH_SIZE` | 检测/跟踪采样率与有界解码批大小，默认分别为 `3` FPS 和 `4` 帧 |
+| `NUWA_PERSON_REID` | 是否启用轻量 CPU 人物外观匹配，默认为 `true` |
+| `PERSON_REID_MODEL_PATH` | 可选的本地 YoutuReID ONNX 路径；留空时复用 Hugging Face 缓存，不存在才下载一次 |
+| `PERSON_REID_MATCH_THRESHOLD` / `PERSON_REID_MAX_GAP_SECONDS` | 保守的外观相似度阈值与跨片段最大搜索间隔，默认分别为 `0.82` 和 `30` 秒 |
 | `NUWA_WORKER_PYTHON` | 所有 Worker 脚本统一使用的 Python 解释器 |
 | `NUWA_TORCH_INDEX_URL` / `NUWA_TORCH_VERSION` / `NUWA_TORCHVISION_VERSION` | 可选的安装期 GPU wheel 来源与精确 PyTorch 版本 |
 | `HF_TOKEN` | 可选的 Hugging Face 访问令牌 |
@@ -291,7 +309,7 @@ FastAPI Worker 提供健康检查、任务状态和处理接口，由 Next.js �
 | `./scripts/start-video-worker.ps1` | 启动视频 Worker |
 | `./scripts/start-all.ps1` | 同时启动 Worker 和 Next.js 开发服务器 |
 
-`npm test` 是不执行真实模型推理的统一回归入口，覆盖流式上传、超限/中断清理、模型重跑保留人工标注、Provider 状态、ByteTrack 两阶段关联、轨迹身份、OCR、语义解析和结果合并。调用真实模型的完整浏览器/API 流程仍需独立媒体夹具和已配置 Provider。
+`npm test` 是不执行真实模型推理的统一回归入口，覆盖流式上传、UTF-8 文件名、超限/中断清理、安全单视频删除、模型重跑保留人工标注、Provider 状态、ByteTrack 两阶段关联、跨片段 ReID/身份协调、OCR、语义解析、远程 OpenAI/Anthropic 图片请求结构和结果合并。调用真实模型或真实远程 API 的完整浏览器/API 流程仍需独立媒体夹具和用户配置。
 
 ## 项目结构
 
@@ -340,10 +358,17 @@ nuwa/
 ## 轨迹与人物身份
 
 - `trackId` 保持数字类型，用于表示视频范围内的轨迹。片段内 tracker 先保证同一帧的一对一关联，再由持久化的视频级注册表完成局部 ID 重映射，之后才进入深度、结果合并、审核和导出。
-- 同一片段重新标注时会复用已保存的映射。只有时间相邻、类别一致且边界框重叠达到高置信度的一对一轨迹才会跨片段延续；无法确认时分配新 ID，避免把两个不同人物错误合并。
+- 检测/跟踪现在默认独立按 `3 FPS` 采样，并以每批四帧的方式解码；Pipeline 根据批内位置统一写入绝对帧序号，并拒绝结果数量不完整的检测批次，不再信任 Provider 自行维护的索引。Qwen/Remote API 使用的三张语义关键帧保持独立，因此身份质量不再受旧 `0.5 FPS` 语义选项限制，同时内存占用仍有边界。
+- 空间框现在保存在 `SegmentAnnotation.frames[]` 中，每项包含帧索引、时间戳、图像尺寸、实体类型、Track ID、置信度、来源和 bbox。原有片段级 `persons`/`objects` 继续作为语义与兼容摘要，因此已有任务仍能打开和导出。
+- 审核页的播放器、提取帧和 Canvas 由同一个采样帧驱动；帧步进使用视频 FPS 或已保存的采样时间戳，不再写死 30 FPS。每次进入 Draw 都必须明确选择 Person 或 Object，选择 Object 后还必须手动填写标签；选择、移动、缩放、撤销和删除均按“帧 + 实体类型 + Track ID”隔离。删除默认只移除当前帧的框，所有帧都不再观察到该实体时才移除兼容摘要。
+- 选中框后可以在 Person 与 Object 之间双向转换。`Convert This Frame` 是默认的低风险操作；`Convert Entire Track` 需要二次确认，并在一次带锁保存中更新该视频已标注片段里匹配的视频级身份观察。Person→Object 必须手动填写物体标签，转换会保留 bbox、Track ID、时间戳和未受影响的语义属性。
+- 物体标签纠错现在默认限定到当前帧。`Save This Frame Label` 只修改当前选中采样帧的 observation，不改片段摘要、相邻帧、整条 Track 或片段 Event；当前帧 JSON 会优先采用该人工帧标签并单独重算视觉 Event。`Save Entire Track` 与 `Apply Label to Matching Objects` 仅作为需要确认的显式扩大范围操作，分别用于确实需要整轨修正和 Track 断裂的情况；后者可以读取保留的原始模型标签，但不会硬编码任何类别。批量操作继续排除 OCR 标签。
+- 审核页现在明确显示 **Current frame: N objects · Segment: M tracks**。`N` 是当前采样帧同时出现的非 OCR 对象数，`M` 是整个片段任意时刻出现过的非 OCR Track 摘要数；对象进入或离开画面时，两者本来就不一定相等。对于历史数据中“同一个低位 Track ID 同时携带普通物体与 `_textContent`”的污染，读取任务时会执行幂等迁移：只有相邻时间、边界框高 IoU 且候选唯一时才把普通框恢复到已有 Track，OCR 则从保留的模型结果恢复到百万 ID 命名空间；候选不明确时绝不自动合并。
+- 固定 revision 的轻量 YoutuReID ONNX 模型（106,878,407 字节，约 102 MiB）在 CPU 上为每条人物轨迹提取最多三张代表性裁剪。相邻片段通过保守的一对一外观相似度或边界 IoU 延续；同片段重跑会先保留兼容的已存映射，人物 embedding 明确冲突时否决位置回退，证据不充分时仍允许强 IoU 维持召回。乱序身份别名还必须具有兼容的历史人物外观，并继续拒绝曾共同出现的身份。
+- ReID 只是身份辅助，不是必需标注 Provider。权重缺失或推理异常时会回退到边界 IoU，不会把片段标成降级完成，也不会占用 Qwen 或 LocateAnything 使用的 GPU 显存。
 - `personId` 由视频级轨迹身份生成（`<videoId>:person:<trackId>`）。Qwen 的性别、年龄、头发和服装等语义属性不再用于哈希人物身份，因为不同人物可能具有相同描述。
-- 身份注册表位于 `data/video-annotations/cache/video-identities/`。如果需要 Worker 重启后仍保持稳定 ID，应将该缓存与任务数据一起保留。现有已保存标注不会被自动改写；重新标注片段后才会使用新规则生成 ID。
-- 该策略是保守的轨迹身份关联，不宣称具备跨镜头生物特征 ReID。人物在硬切镜头或长时间离开后再次出现时可能获得新身份，这比静默合并两个不同人物更安全。
+- 身份注册表位于 `data/video-annotations/cache/video-identities/`。如果需要 Worker 重启后仍保持稳定 ID，应将该缓存与任务数据一起保留。旧 schema v1 注册表会在下一次身份分配时先在内存中迁移为 v2，保留 `nextTrackId`、片段映射和已有全局 ID，再通过原子写入持久化。现有标注不会自动重新推理，外观 embedding 只会在对应片段重跑后补充。当后续证据安全合并两个 ID 时，API 会把规范 `personId` 同步到该视频已保存的模型与人工标注，但不会改动其他人工审核字段。
+- 仅靠外观的 ReID 无法保证人物换装、严重遮挡或超出配置时间窗口后的身份一致。模糊匹配会保守地保持分裂；人工合并/拆分与身份置信度仍是后续审核能力。
 
 请使用与 Worker 相同的 Python 解释器运行重点回归测试：
 
@@ -366,9 +391,9 @@ python -m unittest discover -s tests -v
 - 普通“标注”“重新运行片段”“全部重新运行”和失败片段重试都会在每个 Worker 任务中显式跳过 LocateAnything；其他 Provider、OCR、语音、跟踪、审核和导出行为保持不变。片段审核工具栏新增“精细定位”，只为当前选中的片段启用 LocateAnything。后端仅在完整增强模式已启用且模型已就绪时接受该请求，避免界面显示精细定位、实际却静默跳过。
 - 片段任务状态会记录当前或最近一次完成的是标准标注还是精细定位；这只是页面运行信息，不改变标注或导出 JSON 结构。重新运行仍只更新 `modelAnnotation`，不会覆盖人工审核副本。
 - 新 pipeline 结果包含 `_provider_statuses`。启用的核心视觉 Provider（YOLO、tracker、LocateAnything 或 Qwen）失败或缺少必需输入时会保留其他可用结果，但片段、视频和标注项目均显示为 `partial_completed`；Qwen 推理异常和无效响应不再被转换为空结果并错误显示成功。主动禁用的 Provider 不会导致降级，检测阶段确实没有目标而使 tracker 跳过则视为正常空结果。审核页会提示降级状态并允许定向重标；包含已知核心 Provider 错误的历史 `completed` 结果，在读取时也会归一化为该状态。
-- 语音识别结果保存在顶层 `speechTranscript` 字段中，不再作为视觉 Event。页面和 Custom JSON 导出会在读取/导出时兼容迁移历史 `[Speech] ...` 条目；OCR 仍保存为带定位框的文字对象。
+- 语音识别结果在内部保存在顶层 `speechTranscript` 字段中，不再作为视觉 Event。页面读取标注时会兼容迁移历史 `[Speech] ...` 条目；OCR 仍在内部保存为带定位框的文字对象。两者继续用于人工审核和视频总结证据，但不再写入 Custom JSON 导出。
 - 视觉 Event 由固定 `type` 和一句简短的 `description` 组成，只概括画面中可见的活动。Qwen 会在较长的人物/物体数组之前输出这两个字段，降低输出截断导致 Event 缺失的概率；若语义 Event 缺失或因未定位物体声明被过滤，系统只根据已定位人物、已识别动作和已定位非文字物体生成一条 `visual_activity` 兜底概括。
-- “Edit JSON”会保留 OCR 文字对象、单独展示 `speechTranscript`，历史自由文本视觉 Event 也能在下拉框中显示。仅用于运行诊断的 `_recognition`、`_pipeline_errors`、`_provider_statuses` 和 `_pipeline_status` 继续保存在内部任务数据中，但不会出现在可编辑或导出的标注 JSON 中。已有 `events: []` 的历史标注会在审核页和 Custom JSON 导出时使用同一套基于已定位证据的视觉兜底；只有需要重新执行模型识别时才需要重跑片段。
+- “Edit Segment JSON (Internal)”会保留 OCR 文字对象、单独展示 `speechTranscript`，历史自由文本视觉 Event 也能在下拉框中显示。仅用于运行诊断的 `_recognition`、`_pipeline_errors`、`_provider_statuses` 和 `_pipeline_status` 继续保存在内部任务数据中，但不会出现在可编辑或导出的标注 JSON 中；一次性的 `_identity_aliases` 会由 API 消费且不持久化。已有 `events: []` 的历史标注会在审核页和 Custom JSON 导出时使用同一套基于已定位证据的视觉兜底；只有需要重新执行模型识别时才需要重跑片段。
 - 场景、相机、人物、服装、物体和 Event 的人工审核选项均提供“自定义…”入口；选择后可直接输入任意标签字符串，不改变现有标注字段结构。布尔字段仍保持固定选项，遮挡比例可输入 0–1 范围内的任意数值。
 - “片段文字与语音”区域中的每条 OCR 和语音转写都可以直接修改并保存为人工标注。OCR 修正会同步更新文字对象名称，历史语音 Event 会迁移到 `speechTranscript`；清空错误 OCR 后保存会删除该文字对象，清空语音输入则会清除人工转写，并且人工清除结果不会再次回退显示原模型误识。
 - 重新运行片段只更新 `modelAnnotation`，不再删除已有 `humanAnnotation`。审核页面继续优先显示人工确认版本，同时单独保留新的模型输出和诊断信息。
@@ -378,9 +403,13 @@ python -m unittest discover -s tests -v
 
 - Custom JSON 中的 `video.description` 现在按时间顺序读取全部可用片段的场景、已定位人物/物体、视觉事件、OCR 与语音上下文，由 **Settings** 中配置的通用 OpenAI/Anthropic 兼容 LLM 生成一句视频级总结；长视频会先按时间线分块概括，再归并为最终一句话。
 - 生成视频描述不会重新运行视频 Worker，也不会下载额外视觉模型。未配置通用 LLM 或调用失败时，导出仍会使用原有的本地确定性概括并在页面提示已回退。
-- 单片段导出会把 `speechTranscript` 与仅包含画面信息的 `events` 分开；每条视觉 Event 可包含一句简短的帧/片段 `description`。
+- Custom JSON 会把场景、镜头、人物、服装、物体和 Event 类型等本体标签值统一为小写 `snake_case`；自然语言描述、品牌、路径和 ID 保持原值。
+- Custom JSON 序列化器兼容字段不完整的历史或人工编辑标注：缺失的单值本体标签导出为 `unknown`，缺失的可选天气保持 `null`，空缺的数组项会被忽略，不再中断文件下载。
+- Custom JSON 不再输出 `speechTranscript`、OCR 文字对象和 `frames`；这些数据仍保留在内部标注和审核页面中。“Export Current Frame JSON”使用独立的单帧序列化器，只包含 `frameIndex`、`timestamp`、规范化后的片段场景/镜头上下文、该采样帧真正可见的人物/物体，以及根据这些实体重新生成的视觉 Event；不会继承其他帧物体、片段语音/OCR、完整 `frames` 集合或旧片段 Event。
 - “导出当前片段 JSON”只下载当前选中的片段，但外层 `video.description` 仍概括整个视频；“导出全部标注”继续保留原有 JSON、YOLO ZIP 和 COCO 导出流程。
-- 女娲当前持久化的标注单位是场景片段（`S1`、`S2`……），一个片段可以合并多个采样帧的观察结果。因此单项导出对应一个选中的片段标注，而不是视频编码层面的每一帧。
+- 场景语义仍以片段（`S1`、`S2`……）为单位，空间框则按检测/跟踪采样帧保存。没有 `frames` 的历史标注仍可读取；编辑当前显示的旧框时会建立明确的帧记录。系统不会声称对未采样的全部编码帧执行过推理。
+- “Edit Segment JSON (Internal)”明确表示整片段内部数据，其中可能包含全部采样帧、OCR 和语音，不等同于当前帧导出。
+- 新 OCR 对象使用从 `1000000` 开始的保留 Track ID 命名空间，并在分配前扫描所有检测 ID，避免 OCR 文字继承或覆盖视觉物体 Track。
 
 ## 失败片段恢复
 
@@ -392,7 +421,7 @@ python -m unittest discover -s tests -v
 
 - 女娲在可信本机环境中仍可免密码使用。在共享网络上提供服务时，同时设置 `NUWA_AUTH_USER` 和 `NUWA_AUTH_PASSWORD` 即可启用 HTTP Basic 身份认证；项目不提供按用户划分的权限控制。
 - 会修改状态的 API 请求会拒绝跨站浏览器来源。
-- LLM API Key 保存在本地 JSON 文件中。请保护宿主机文件系统，不要提交运行时配置。
+- 合成数据和视频语义的 API Key 分别保存在被 Git 忽略的本地 JSON 配置中，两个业务不会互相覆盖；接口只返回 `hasApiKey`。请保护宿主机文件系统，不要提交运行时配置。
 - Worker 脚本不包含访问令牌。共享设置页面可以在配置的 Hugging Face 缓存中校验并持久化 Token，单独授权不会启动模型下载；远程部署仍应优先使用 Secret Manager 和 HTTPS，并轮换任何曾被写入仓库或共享副本的旧令牌。
 - 自定义和 LLM 生成的值由受限、无副作用的表达式解释器执行。它保留已记录的行/引用/随机数/Math/Date 辅助能力，但不允许语句、赋值、全局访问或动态代码执行。
 - LLM 请求允许公共 HTTP(S) 服务以及 Ollama 等回环服务；内网端点必须显式加入 `NUWA_LLM_ALLOWED_PRIVATE_HOSTS`。
@@ -406,13 +435,14 @@ python -m unittest discover -s tests -v
 - **LocateAnything 兼容性修复（2026-07-26 已完成真实验证）：** Nuwa 已固定 Transformers `4.57.1`、PEFT `0.19.1`、Decord `0.6.0` 和 LMDB `1.7.5`，使用隔离 Worker 环境，选择 SDPA 而非不受支持的 eager 注意力路径，在报告就绪前检查依赖，并显示降级完成状态。真实运行了 0–8 秒的 `S1`，YOLO、跟踪、LocateAnything、Qwen、OCR、语音和深度阶段全部完成，`_provider_statuses.locate_anything` 与 `_pipeline_status` 均为 `completed`。
 - 在已验证的 8GB Windows GPU 上，LocateAnything 的 SDPA/hybrid 路径仍可能耗时数分钟并接近显存上限，因此它改为按片段主动启用，而不再进入普通标注。自适应类别和有边界的 fast-first 路径用于减少精细任务的预期工作量，但本次没有对该路径给出新的真实模型速度结论；需要优先完整性时仍可设置 `LOCATE_CATEGORY_MODE=full`。
 - 已检查的历史 `ign` 任务是在 LocateAnything 对 62 个片段全部失败期间生成的。现在读取任务会把这些结果显示为 `partial_completed`，但不会自动重写模型标注；重启 Worker 后需对选中的受影响片段执行重新标注。
-- 检测质量仍受 `yolo11n`、固定 `0.5 FPS` 采样和 `0.65` 置信度阈值限制。Qwen 继续采用保守策略，没有定位证据的 Qwen 单独物体会被丢弃；因此即使恢复 LocateAnything 兼容性，较小、短暂、遮挡或非 COCO 目标仍可能漏识。
-- 极短场景片段在当前固定采样率下可能得不到检测帧。自适应采样、强制中点帧兜底、短片段治理、Qwen 候选证据平衡以及 YOLO 模型/阈值基准测试仍属待办，详见 `PROJECT_STATUS_AND_ISSUES.md` 的 P1-6。
+- 检测质量仍受 `yolo11n` 和 `0.65` 置信度阈值限制。跟踪已改为独立的 `3 FPS` 采样，但 Qwen 继续采用保守策略，没有定位证据的 Qwen 单独物体会被丢弃；较小、短暂、遮挡或非 COCO 目标仍可能漏识。
+- 极短场景片段仍可能得不到检测帧。自适应中点帧兜底、短片段治理、Qwen 候选证据平衡以及 YOLO 模型/阈值基准测试仍属待办，详见 `PROJECT_STATUS_AND_ISSUES.md` 的 P1-6。
 - Transformers、LocateAnything 远程代码的直接依赖以及已验证的 Windows CUDA PyTorch 构建使用精确版本；其余部分 Python 依赖仍采用有上下界的兼容范围，而非完整的传递依赖锁文件。
 - 受限 Hugging Face 模型需要在共享设置页面完成一次授权，或由部署环境通过 `HF_TOKEN` 提供凭据；模型准备是独立的显式操作，并会在下载前报告缓存/本地模型路径。
-- 视频上传现在直接解析 multipart 请求流，通过有上限的临时文件增量写盘并计算哈希；中断、无效或超限请求会清理临时上传目录。自动化测试已用小型流验证内存有界的处理方式，生产部署仍建议补做一次 2GB 规模的内存压力测试。
-- 默认 Tracker 现使用 Ultralytics ByteTrack，包含 Kalman 预测和高低置信度两阶段关联；低置信度框只能维持已确认轨迹，不能单独创建导出轨迹。设置 `NUWA_TRACKER_BACKEND=iou` 可恢复确定性的旧实现。它仍属于片段内运动跟踪，不能替代生产级跨镜头 ReID。
-- `npm test` 已提供统一的 Node/Worker/类型检查回归入口，但尚无调用真实模型的完整浏览器端到端测试及通用数据迁移测试套件。
+- 视频上传现在按 UTF-8 解析 multipart 文件名参数，直接读取请求流，通过有上限的临时文件增量写盘并计算哈希；中断、无效或超限请求会清理临时上传目录。自动化测试已用小型流验证内存有界的处理方式，生产部署仍建议补做一次 2GB 规模的内存压力测试。
+- 项目视频卡片提供永久删除操作，确认后会移除任务记录、源视频/缩略图目录和视频身份缓存；仍有片段标注任务运行的视频会被拒绝删除，需等待任务结束。当前没有回收站或撤销功能。
+- 默认 Tracker 使用 Ultralytics ByteTrack 的 Kalman 预测和高低置信度两阶段关联，之后再执行轻量跨片段外观匹配。这不是生物特征身份认证：永久身份别名现在要求兼容的历史 embedding，但外观十分相似的人物仍可能混淆，保守阈值也仍可能把同一人物拆成多个 ID。
+- `npm test` 已提供统一的 Node/Worker/类型检查回归入口，并覆盖身份注册表迁移、帧级人物/物体隔离、框边界约束/更新以及 Worker 帧数据保留；目前仍缺少调用真实模型的完整浏览器端到端测试，以及面向其他未来 schema 的通用迁移框架。
 - 当前没有传统数据库、多人协作、按用户划分的权限控制或通用迁移系统。
 
 ## License

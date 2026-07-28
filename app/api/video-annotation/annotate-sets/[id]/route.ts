@@ -7,7 +7,9 @@ import { withDerivedAnnotationStatuses } from '@/services/video-annotation/statu
 import { isUnsafePathError } from '@/services/server-paths'
 import { getTaskDir, getTaskPath } from '@/services/video-annotation/server-paths'
 import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
-import { applyCompletedModelResult } from '@/services/video-annotation/model-result'
+import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/services/video-annotation/model-result'
+import { repairLegacyMultipartFilename } from '@/services/video-annotation/upload-stream'
+import { repairLegacyOcrObjectCollisions } from '@/services/video-annotation/annotation-migrations'
 
 // GET /api/video-annotation/annotate-sets/[id]
 // Always polls Worker for processing segments and syncs results.
@@ -27,7 +29,29 @@ export async function GET(
 
       let modified = false
       for (const vid of (task.videos || [])) {
+        const repairedFileName = repairLegacyMultipartFilename(vid.fileName)
+        if (repairedFileName !== vid.fileName) {
+          vid.fileName = repairedFileName
+          modified = true
+        }
         for (const seg of (vid.segments || [])) {
+          if (seg.modelAnnotation) {
+            const migratedModel = repairLegacyOcrObjectCollisions(seg.modelAnnotation)
+            if (migratedModel.changed) {
+              seg.modelAnnotation = migratedModel.annotation
+              modified = true
+            }
+          }
+          if (seg.humanAnnotation) {
+            const migratedHuman = repairLegacyOcrObjectCollisions(
+              seg.humanAnnotation,
+              seg.modelAnnotation,
+            )
+            if (migratedHuman.changed) {
+              seg.humanAnnotation = migratedHuman.annotation
+              modified = true
+            }
+          }
           if (seg.status !== 'processing') continue
 
           const jobId = (seg as unknown as Record<string, unknown>).workerJobId as string | undefined
@@ -44,6 +68,7 @@ export async function GET(
             const s = seg as any
             if (wStatus.status === 'completed' && wStatus.result) {
               applyCompletedModelResult(s, wStatus.result as SegmentAnnotation)
+              applyIdentityAliasesToVideo(vid, wStatus.result._identity_aliases)
               modified = true
             } else if (wStatus.status === 'failed') {
               s.status = 'failed'

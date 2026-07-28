@@ -7,6 +7,8 @@ import re
 
 logger = logging.getLogger(__name__)
 
+_OCR_TRACK_ID_BASE = 1_000_000
+
 
 def merge_results(
     tracks: list,              # list of FrameTrack from ByteTrack
@@ -19,6 +21,9 @@ def merge_results(
     video_width: int = 1920,
     video_height: int = 1080,
     person_ids: dict[int, str] | None = None,
+    segment_start: float = 0.0,
+    tracking_fps: float = 1.0,
+    video_fps: float = 0.0,
 ) -> dict:
     """Merge all pipeline outputs into a unified SegmentAnnotation dict.
 
@@ -33,6 +38,7 @@ def merge_results(
     transcript = transcript or {}
     recognition_status = recognition_status or {}
     person_ids = person_ids or {}
+    spatial_object_timestamps: dict[int, float] = {}
     # Collect unique tracks across all frames (trackId → { className, bbox, confidence })
     track_map: dict[int, dict] = {}
     for ft in tracks:
@@ -112,6 +118,7 @@ def merge_results(
             "depth": _get_depth_for_track(depth_result, best_tid),
         }
         objects.append(obj_entry)
+        spatial_object_timestamps[int(obj_entry["trackId"])] = float(segment_start)
         if best_tid is not None:
             matched_track_ids.add(best_tid)
 
@@ -216,9 +223,13 @@ def merge_results(
             events = [grounded_event]
 
     # ── Append OCR-detected text objects ───────────────
-    existing_track_ids = [o.get("trackId", 0) for o in objects]
+    # OCR regions live in a reserved high-ID namespace and scan every raw
+    # detector track as well as merged summaries. This prevents OCR text from
+    # inheriting or overwriting an object track that was filtered or deduped.
+    existing_track_ids = [int(track_id) for track_id in track_map]
+    existing_track_ids.extend(o.get("trackId", 0) for o in objects)
     existing_track_ids.extend(p.get("trackId", 0) for p in persons)
-    ocr_start_id = max(existing_track_ids, default=200) + 1
+    ocr_start_id = max(_OCR_TRACK_ID_BASE, max(existing_track_ids, default=0) + 1)
     for otr in ocr_texts:
         text = otr.get("text", "")
         if not text:
@@ -248,6 +259,9 @@ def merge_results(
         if isinstance(confidence, (int, float)):
             text_entry["_detectionConfidence"] = float(confidence)
         objects.append(text_entry)
+        spatial_object_timestamps[int(text_entry["trackId"])] = float(
+            otr.get("_timestamp", segment_start)
+        )
         ocr_start_id += 1
 
     # Speech is recognition output, not a visual event. Older saved results
@@ -255,12 +269,93 @@ def merge_results(
     # legacy fallback without producing them for new annotations.
     speech_transcript = str(transcript.get("text", "")).strip()
 
+    # Preserve the spatial result for every sampled tracking frame. The legacy
+    # persons/objects arrays above remain as segment summaries so old clients
+    # and export formats continue to work.
+    safe_tracking_fps = max(float(tracking_fps or 0), 0.001)
+    safe_video_fps = max(float(video_fps or 0), safe_tracking_fps)
+    person_track_ids = {int(person["trackId"]) for person in persons}
+    objects_by_track_id = {int(obj["trackId"]): obj for obj in objects}
+    frames: list[dict] = []
+    for ft in tracks:
+        timestamp = float(segment_start) + (float(ft.frame_index) / safe_tracking_fps)
+        observations: list[dict] = []
+        for track in ft.tracks:
+            track_id = int(track["trackId"])
+            if track_id in dedup_ids:
+                continue
+            class_name = str(track.get("className") or "unknown")
+            entity_type = "person" if track_id in person_track_ids else "object"
+            if entity_type == "object" and track_id in objects_by_track_id:
+                class_name = str(objects_by_track_id[track_id].get("name") or class_name)
+            bbox = track.get("bbox") or [0, 0, 0, 0]
+            observations.append({
+                "trackId": track_id,
+                "entityType": entity_type,
+                "className": class_name,
+                "bbox": {
+                    "x": int(bbox[0]),
+                    "y": int(bbox[1]),
+                    "width": int(bbox[2]),
+                    "height": int(bbox[3]),
+                },
+                "confidence": float(track.get("detectionConfidence", 0)),
+                "source": "model",
+            })
+        frames.append({
+            "frameIndex": max(0, int(round(timestamp * safe_video_fps))),
+            "timestamp": timestamp,
+            "imageWidth": int(video_width),
+            "imageHeight": int(video_height),
+            "observations": observations,
+        })
+
+    # LocateAnything runs on the first semantic keyframe and OCR retains the
+    # timestamp of the keyframe that supplied its best deduplicated result.
+    # Attach those localized boxes to the nearest sampled frame instead of
+    # dropping them from the frame editor or pretending they exist everywhere.
+    for obj in objects:
+        bbox = obj.get("bbox")
+        track_id = int(obj.get("trackId", 0))
+        source_timestamp = spatial_object_timestamps.get(track_id)
+        if bbox is None or source_timestamp is None:
+            continue
+        if any(
+            observation.get("entityType") == "object"
+            and int(observation.get("trackId", -1)) == track_id
+            for frame in frames
+            for observation in frame["observations"]
+        ):
+            continue
+        if frames:
+            target_frame = min(frames, key=lambda frame: abs(frame["timestamp"] - source_timestamp))
+        else:
+            target_frame = {
+                "frameIndex": max(0, int(round(source_timestamp * safe_video_fps))),
+                "timestamp": source_timestamp,
+                "imageWidth": int(video_width),
+                "imageHeight": int(video_height),
+                "observations": [],
+            }
+            frames.append(target_frame)
+        target_frame["observations"].append({
+            "trackId": track_id,
+            "entityType": "object",
+            "className": str(obj.get("name") or "object"),
+            "bbox": dict(bbox),
+            "confidence": float(obj.get("_detectionConfidence", 0)),
+            "source": "model",
+        })
+
+    frames.sort(key=lambda frame: (frame["timestamp"], frame["frameIndex"]))
+
     return {
         "scene": scene,
         "camera": camera,
         "persons": persons,
         "objects": objects,
         "events": events,
+        "frames": frames,
         "speechTranscript": speech_transcript,
         "_recognition": recognition_status,
     }

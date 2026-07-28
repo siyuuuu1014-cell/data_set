@@ -75,10 +75,12 @@ def extract_keyframe(
     timestamp: float,
     output_dir: str | None = None,
     duration: float = 0.0,
+    fallback_timestamp: float | None = None,
 ) -> str:
     """Extract a single keyframe at a specific timestamp.
 
-    Clamps timestamp < duration. Falls back to mid-frame on failure.
+    Clamps timestamps below ``duration`` and retries at ``fallback_timestamp``
+    (or the full-video midpoint for direct callers) on an FFmpeg failure.
     """
     if output_dir is None:
         output_dir = tempfile.mkdtemp(prefix="keyframe_")
@@ -92,24 +94,31 @@ def extract_keyframe(
     else:
         t = timestamp
 
-    cmd = [
-        FFMPEG_PATH,
-        "-ss", str(t),
-        "-i", video_path,
-        "-vframes", "1",
-        "-q:v", "2",
-        out_path,
-        "-y",
-    ]
-    try:
+    def _run_at(seek_timestamp: float) -> None:
+        cmd = [
+            FFMPEG_PATH,
+            "-ss", str(seek_timestamp),
+            "-i", video_path,
+            "-vframes", "1",
+            "-q:v", "2",
+            out_path,
+            "-y",
+        ]
         subprocess.run(cmd, capture_output=True, check=True, timeout=30, encoding="utf-8")
+
+    try:
+        _run_at(t)
     except subprocess.CalledProcessError:
-        if duration > 0:
-            mid = duration / 2
-            cmd[1] = str(mid)
-            subprocess.run(cmd, capture_output=True, check=True, timeout=30, encoding="utf-8")
-        else:
+        fallback = fallback_timestamp
+        if fallback is None and duration > 0:
+            fallback = duration / 2
+        if fallback is None:
             raise
+        if duration > 0:
+            fallback = max(0.0, min(float(fallback), duration - 0.1))
+        else:
+            fallback = max(0.0, float(fallback))
+        _run_at(fallback)
     return out_path
 
 
@@ -129,9 +138,16 @@ def extract_segment_keyframes(
         output_dir = tempfile.mkdtemp(prefix="keyframes_")
 
     paths: list[str] = []
+    segment_midpoint = start + (end - start) / 2
     for i in range(num_keyframes):
         t = start + (end - start) * (i / max(num_keyframes - 1, 1))
-        kf_path = extract_keyframe(video_path, t, output_dir, duration=duration)
+        kf_path = extract_keyframe(
+            video_path,
+            t,
+            output_dir,
+            duration=duration,
+            fallback_timestamp=segment_midpoint,
+        )
         paths.append(kf_path)
 
     return paths

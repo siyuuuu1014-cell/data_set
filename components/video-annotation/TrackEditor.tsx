@@ -1,6 +1,7 @@
 'use client'
 
 import type { PersonAnnotation, ObjectAnnotation } from '@/services/video-annotation/types'
+import type { ObjectLabelRenameScope } from '@/services/video-annotation/frame-annotations'
 import {
   GENDERS, AGE_GROUPS, POSES, FACING, EXPRESSIONS,
   HAIR_COLORS, HAIR_STYLES, CLOTHING_TYPES, CLOTHING_COLORS,
@@ -12,12 +13,13 @@ interface Props {
   person: PersonAnnotation | null
   object: ObjectAnnotation | null
   onChange: (updated: PersonAnnotation | ObjectAnnotation) => void
-  onSave: () => void
+  onSave: (scope: ObjectLabelRenameScope) => void
   dirty: boolean
   detectionConfidence?: number
+  frameLabel?: string
 }
 
-export function TrackEditor({ person, object, onChange, onSave, dirty, detectionConfidence }: Props) {
+export function TrackEditor({ person, object, onChange, onSave, dirty, detectionConfidence, frameLabel }: Props) {
   if (!person && !object) return null
 
   if (person) {
@@ -103,7 +105,7 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
           {detectionConfidence != null && <> | Conf: {(detectionConfidence * 100).toFixed(0)}%</>}
         </p>
         <button
-          onClick={onSave}
+          onClick={() => onSave('track')}
           disabled={!dirty}
           className={`rounded px-4 py-1.5 text-sm font-medium transition-colors ${dirty ? 'btn-primary' : 'bg-gv-border text-gv-text-muted cursor-not-allowed'}`}
         >
@@ -115,6 +117,8 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
 
   // Object editor
   if (object) {
+    const normalizedName = object.name.trim()
+    const frameLabelChanged = normalizedName !== (frameLabel || '').trim()
     return (
       <div className="space-y-3">
         <Field label="Name">
@@ -138,10 +142,33 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
           {object.depth != null && <> | Depth: {object.depth.toFixed(2)}</>}
           {detectionConfidence != null && <> | Conf: {(detectionConfidence * 100).toFixed(0)}%</>}
         </p>
-        <button onClick={onSave} disabled={!dirty}
-          className={`rounded px-4 py-1.5 text-sm font-medium transition-colors ${dirty ? 'btn-primary' : 'bg-gv-border text-gv-text-muted cursor-not-allowed'}`}>
-          Save Changes
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => onSave('frame')} disabled={!frameLabelChanged || !normalizedName}
+            className={`rounded px-4 py-1.5 text-sm font-medium transition-colors ${frameLabelChanged && normalizedName ? 'btn-primary' : 'bg-gv-border text-gv-text-muted cursor-not-allowed'}`}>
+            Save This Frame Label
+          </button>
+          <button
+            onClick={() => {
+              if (confirm('Save this label and the edited attributes to the entire Track across all sampled frames?')) {
+                onSave('track')
+              }
+            }}
+            disabled={!dirty || !normalizedName}
+            className="rounded border border-gv-border bg-gv-bg px-4 py-1.5 text-sm font-medium text-gv-text-dim hover:bg-gv-pink/10 disabled:cursor-not-allowed disabled:opacity-40">
+            Save Entire Track
+          </button>
+          <button
+            onClick={() => {
+              if (confirm('Apply this object label to every matching label in the current segment? Other attributes remain limited to this track.')) {
+                onSave('matching_segment')
+              }
+            }}
+            disabled={!normalizedName}
+            className="rounded border border-gv-gold/50 bg-gv-gold/10 px-4 py-1.5 text-sm font-medium text-gv-gold-dark hover:bg-gv-gold/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Apply Label to Matching Objects
+          </button>
+        </div>
       </div>
     )
   }

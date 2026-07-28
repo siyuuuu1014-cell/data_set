@@ -9,6 +9,7 @@ import test from 'node:test'
 import {
   persistUploadStream,
   receiveMultipartVideoUpload,
+  repairLegacyMultipartFilename,
   UploadStreamError,
 } from '../../services/video-annotation/upload-stream'
 
@@ -51,6 +52,37 @@ test('multipart upload streams to disk and computes SHA-256', async () => {
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('multipart upload preserves a UTF-8 Chinese filename', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'nuwa-upload-test-'))
+  const directory = path.join(root, 'video-unicode')
+
+  try {
+    const result = await receiveMultipartVideoUpload(
+      multipartRequest('中文测试视频.mp4', new Uint8Array([1, 2, 3])),
+      {
+        directory,
+        maxFileSize: 1024,
+        allowedExtensions: ALLOWED_EXTENSIONS,
+      },
+    )
+
+    assert.equal(result.fileName, '中文测试视频.mp4')
+    assert.deepEqual(await readdir(directory), ['source.mp4'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('legacy UTF-8-as-Latin-1 filenames are repaired conservatively', () => {
+  const original = '快看！这里有野生人类_哔哩哔哩_bilibili.mp4'
+  const mojibake = Buffer.from(original, 'utf8').toString('latin1')
+
+  assert.equal(repairLegacyMultipartFilename(mojibake), original)
+  assert.equal(repairLegacyMultipartFilename('clip.mp4'), 'clip.mp4')
+  assert.equal(repairLegacyMultipartFilename('café.mp4'), 'café.mp4')
+  assert.equal(repairLegacyMultipartFilename('合法中文.mp4'), '合法中文.mp4')
 })
 
 test('oversized uploads leave no temporary file or upload directory', async () => {

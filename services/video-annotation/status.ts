@@ -84,3 +84,41 @@ export function withDerivedAnnotationStatuses(set: AnnotateSet): AnnotateSet {
   const normalized = { ...set, videos }
   return { ...normalized, status: deriveAnnotateSetStatus(normalized) }
 }
+
+export type VideoRemovalErrorCode = 'VIDEO_NOT_FOUND' | 'VIDEO_BUSY'
+
+export class VideoRemovalError extends Error {
+  constructor(
+    public readonly code: VideoRemovalErrorCode,
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'VideoRemovalError'
+  }
+}
+
+/** Remove one non-processing video while preserving every other project item. */
+export function removeVideoFromAnnotationSet(
+  task: AnnotateSet,
+  videoId: string,
+): AnnotateSet {
+  const videos = task.videos || []
+  const selected = videos.find(video => video.videoId === videoId)
+  if (!selected) {
+    throw new VideoRemovalError('VIDEO_NOT_FOUND', 404, 'Video not found in this project')
+  }
+  if ((selected.segments || []).some(segment => segment.status === 'processing')) {
+    throw new VideoRemovalError(
+      'VIDEO_BUSY',
+      409,
+      'Video is still being annotated; wait for the active job to finish before deleting it',
+    )
+  }
+
+  return withDerivedAnnotationStatuses({
+    ...task,
+    videos: videos.filter(video => video.videoId !== videoId),
+    updatedAt: new Date().toISOString(),
+  })
+}

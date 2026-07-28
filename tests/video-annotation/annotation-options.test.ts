@@ -45,6 +45,8 @@ test('standard annotation explicitly disables LocateAnything for the job', () =>
   })
 
   assert.deepEqual(options.providers, { locate_anything: false })
+  assert.equal(options.tracking_fps, 3)
+  assert.equal(options.sample_fps, 0.5)
 })
 
 test('precision annotation enables LocateAnything only for the selected job', () => {

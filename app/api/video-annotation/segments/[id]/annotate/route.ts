@@ -5,7 +5,7 @@ import { submitJob, getJobStatus, workerDeployment } from '@/services/video-anno
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskPath, getUploadDir, getUploadFile } from '@/services/video-annotation/server-paths'
 import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
-import { applyCompletedModelResult } from '@/services/video-annotation/model-result'
+import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/services/video-annotation/model-result'
 import {
   buildAnnotationOptions,
   precisionAvailabilityError,
@@ -161,6 +161,7 @@ export async function GET(
           const seg = vid.segments?.find((s: any) => s.segmentId === parseInt(segmentId))
           if (seg?.workerJobId === jobId) {
             applyCompletedModelResult(seg, status.result)
+            applyIdentityAliasesToVideo(vid, status.result._identity_aliases)
             await writeFile(taskPath, JSON.stringify(task, null, 2))
           }
         }

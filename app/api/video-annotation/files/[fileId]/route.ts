@@ -36,8 +36,24 @@ export async function GET(
   // ── Frame extraction mode ──────────────────────────
   const url = new URL(req.url)
   const frameTime = url.searchParams.get('t')
-  if (frameTime !== null) {
-    return extractFrame(filePath, parseFloat(frameTime), videoDir)
+  const frameIndex = url.searchParams.get('frame')
+  const requestedFps = Number(url.searchParams.get('fps'))
+  if (frameTime !== null || frameIndex !== null) {
+    const parsedFrameIndex = frameIndex === null ? null : Number.parseInt(frameIndex, 10)
+    const parsedTime = frameTime !== null
+      ? Number(frameTime)
+      : (parsedFrameIndex ?? 0) / requestedFps
+    if (
+      !Number.isFinite(parsedTime) || parsedTime < 0
+      || (frameIndex !== null && (!Number.isInteger(parsedFrameIndex) || parsedFrameIndex! < 0))
+      || (frameTime === null && (!Number.isFinite(requestedFps) || requestedFps <= 0))
+    ) {
+      return Response.json({ error: { code: 'VALIDATION', message: 'Invalid frame position' } }, { status: 400 })
+    }
+    const cacheKey = parsedFrameIndex === null
+      ? `t_${Math.round(parsedTime * 1000)}`
+      : `i_${parsedFrameIndex}_t_${Math.round(parsedTime * 1000)}`
+    return extractFrame(filePath, parsedTime, videoDir, cacheKey)
   }
 
   // ── Video serving mode ─────────────────────────────
@@ -95,13 +111,15 @@ export async function GET(
 
 // ── Frame extraction ────────────────────────────────
 
-async function extractFrame(videoPath: string, timeSec: number, cacheDir: string): Promise<Response> {
+async function extractFrame(videoPath: string, timeSec: number, cacheDir: string, cacheKey: string): Promise<Response> {
   const { execFile } = await import('child_process')
   const { promisify } = await import('util')
   const execFileAsync = promisify(execFile)
 
   const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg'
-  const framePath = resolveWithin(cacheDir, `frame_${timeSec.toFixed(1)}.jpg`)
+  // Millisecond/frame-index keys avoid the old 0.1-second collision where
+  // multiple neighbouring frames returned the same cached JPEG.
+  const framePath = resolveWithin(cacheDir, `frame_${cacheKey}.jpg`)
 
   // Extract frame if not cached
   if (!existsSync(framePath)) {

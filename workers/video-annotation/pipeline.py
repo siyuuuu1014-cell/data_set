@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 import time
 import unicodedata
 from contextlib import contextmanager
@@ -15,16 +16,19 @@ from typing import Any
 import numpy as np
 
 from config import (
-    DEFAULT_SAMPLE_FPS,
+    DEFAULT_TRACKING_SAMPLE_FPS,
     DEFAULT_TRACK_LOW_THRESHOLD,
     LOCATE_ADAPTIVE_GENERATION_MODE,
     LOCATE_ADAPTIVE_MAX_CATEGORIES,
     LOCATE_ADAPTIVE_MAX_NEW_TOKENS,
     LOCATE_CATEGORY_MODE,
+    PERSON_REID_ENABLED,
+    TRACKING_FRAME_BATCH_SIZE,
     TRACKER_BACKEND,
 )
 from providers.depth.base import DepthResult
 from providers.registry import create_provider, is_provider_enabled, mark_loaded
+from providers.semantic.remote_api import RemoteApiSemantic, semantic_inference_mode
 from services.frame_sampling import (
     extract_frames,
     extract_segment_keyframes,
@@ -220,6 +224,34 @@ def _detector_confidence_for_tracking(
     return None
 
 
+def _semantic_provider_enabled(options: dict[str, Any], remote_mode: bool) -> bool:
+    """Respect per-job semantic opt-outs without tying remote mode to Qwen install state."""
+    selected = options.get("providers")
+    if isinstance(selected, dict) and "qwen_vl" in selected:
+        return bool(selected["qwen_vl"])
+    if isinstance(selected, (list, tuple, set)):
+        return "qwen_vl" in selected
+    return True if remote_mode else is_provider_enabled("qwen_vl", options)
+
+
+def _extend_detection_batch(
+    detections: list,
+    batch_detections: list,
+    *,
+    offset: int,
+    expected_count: int,
+) -> None:
+    """Append one provider batch with caller-owned absolute frame indexes."""
+    if len(batch_detections) != expected_count:
+        raise RuntimeError(
+            "Detector returned "
+            f"{len(batch_detections)} frame results for a {expected_count}-frame batch"
+        )
+    for local_index, frame_detection in enumerate(batch_detections):
+        frame_detection.frame_index = offset + local_index
+    detections.extend(batch_detections)
+
+
 @contextmanager
 def _loaded_provider(provider_id: str):
     """Load one optional provider and always release its resources."""
@@ -287,14 +319,19 @@ def run_annotation_pipeline(
         SegmentAnnotation dict matching the JSON schema.
     """
     opts = options or {}
-    sample_fps = opts.get("sample_fps", DEFAULT_SAMPLE_FPS)
+    tracking_fps = opts.get(
+        "tracking_fps",
+        opts.get("sample_fps", DEFAULT_TRACKING_SAMPLE_FPS),
+    )
     explicit_categories = opts.get("categories")
 
     errors: list[str] = []
+    remote_semantic = semantic_inference_mode() == "remote"
     visual_provider_enabled = {
         provider_id: is_provider_enabled(provider_id, opts)
-        for provider_id in ("yolo", "tracker", "locate_anything", "qwen_vl")
+        for provider_id in ("yolo", "tracker", "locate_anything")
     }
+    visual_provider_enabled["qwen_vl"] = _semantic_provider_enabled(opts, remote_semantic)
     provider_results: dict[str, dict[str, Any]] = {
         provider_id: {
             "status": "pending" if enabled else "disabled",
@@ -310,31 +347,48 @@ def run_annotation_pipeline(
 
     # ── Phase 1: YOLO11 per-frame detection ────────────
     _report(progress_cb, "YOLO11 detection", 5)
-    frames: list = []
+    tracking_frames_dir = tempfile.TemporaryDirectory(prefix="nuwa_tracking_")
+    keyframes_dir = tempfile.TemporaryDirectory(prefix="nuwa_keyframes_")
+    frames_paths: list[str] = []
     detections = []
     tracks: list = []
     person_ids: dict[int, str] = {}
+    identity_aliases: dict[int, int] = {}
+    track_embeddings: dict[int, list[float]] = {}
     try:
-        frames_paths = extract_frames(video_path, segment_start, segment_end, fps=sample_fps)
-        frames = load_frames(frames_paths)
-        logger.info("Extracted %d frames @ %.1f fps", len(frames), sample_fps)
+        frames_paths = extract_frames(
+            video_path,
+            segment_start,
+            segment_end,
+            fps=tracking_fps,
+            output_dir=tracking_frames_dir.name,
+        )
+        logger.info("Extracted %d tracking frames @ %.1f fps", len(frames_paths), tracking_fps)
     except Exception as e:
         errors.append(f"Frame extraction failed: {e}")
         logger.warning("Frame extraction failed (will skip detection): %s", e)
 
     if not visual_provider_enabled["yolo"]:
         provider_results["yolo"] = {"status": "disabled"}
-    elif not frames:
+    elif not frames_paths:
         provider_results["yolo"] = {"status": "skipped", "reason": "no_detection_frames"}
     else:
         try:
             with _loaded_provider("yolo") as detector:
-                detections = detector.detect_frames(
-                    frames,
-                    conf=_detector_confidence_for_tracking(
-                        visual_provider_enabled,
-                    ),
-                )
+                for offset in range(0, len(frames_paths), TRACKING_FRAME_BATCH_SIZE):
+                    batch_paths = frames_paths[offset:offset + TRACKING_FRAME_BATCH_SIZE]
+                    batch_detections = detector.detect_frames(
+                        load_frames(batch_paths),
+                        conf=_detector_confidence_for_tracking(
+                            visual_provider_enabled,
+                        ),
+                    )
+                    _extend_detection_batch(
+                        detections,
+                        batch_detections,
+                        offset=offset,
+                        expected_count=len(batch_paths),
+                    )
                 logger.info("YOLO11: %d frames detected", len(detections))
             provider_results["yolo"] = {"status": "completed"}
         except Exception as e:
@@ -359,6 +413,23 @@ def run_annotation_pipeline(
             provider_results["tracker"] = {"status": "failed", "error": str(e)}
             logger.warning("ByteTrack failed (will skip): %s", e)
 
+    # ReID is a lightweight, CPU-only identity aid. Failure deliberately falls
+    # back to boundary IoU and never degrades the annotation pipeline.
+    if PERSON_REID_ENABLED and tracks and frames_paths:
+        _report(progress_cb, "Person ReID", 35)
+        try:
+            from providers.reid.youtu_reid import YoutuPersonReID
+
+            reid_provider = YoutuPersonReID()
+            reid_provider.load()
+            try:
+                track_embeddings = reid_provider.embed_track_paths(frames_paths, tracks)
+            finally:
+                reid_provider.unload()
+            logger.info("Person ReID: %d track embeddings", len(track_embeddings))
+        except Exception as e:
+            logger.warning("Person ReID unavailable; using boundary matching only: %s", e)
+
     # Convert segment-local tracker IDs to video-scoped IDs before any
     # downstream provider consumes them. Registry failures use a deterministic
     # segment namespace so duplicate IDs are never reintroduced.
@@ -373,6 +444,7 @@ def run_annotation_pipeline(
                 segment_id=segment_id,
                 segment_start=segment_start,
                 segment_end=segment_end,
+                track_embeddings=track_embeddings,
             )
         except Exception as e:
             logger.warning("Video identity registry unavailable; using deterministic IDs: %s", e)
@@ -385,18 +457,27 @@ def run_annotation_pipeline(
                 segment_start=segment_start,
             )
         person_ids = identity_assignment.person_ids
+        identity_aliases = identity_assignment.aliases
 
     # Extract keyframes once (shared by phases 3-7)
     keyframe_paths: list[str] = []
     try:
-        keyframe_paths = extract_segment_keyframes(video_path, segment_start, segment_end, duration=segment_end)
+        keyframe_paths = extract_segment_keyframes(
+            video_path,
+            segment_start,
+            segment_end,
+            output_dir=keyframes_dir.name,
+            duration=segment_end,
+        )
     except Exception as e:
         errors.append(f"Keyframe extraction failed: {e}")
         logger.warning("Keyframe extraction failed (will skip visual phases): %s", e)
 
-    # Phase 3: Qwen3-VL semantic attributes. Semantic candidates also keep the
+    # Phase 3: local Qwen or the independently configured remote multimodal API.
+    # Semantic candidates also keep the
     # following open-vocabulary grounding query bounded.
-    _report(progress_cb, "Qwen3-VL semantic", 45)
+    semantic_label = "Remote semantic API" if remote_semantic else "Qwen3-VL semantic"
+    _report(progress_cb, semantic_label, 45)
     semantic: Any = None
     if not visual_provider_enabled["qwen_vl"]:
         provider_results["qwen_vl"] = {"status": "disabled"}
@@ -404,27 +485,46 @@ def run_annotation_pipeline(
         provider_results["qwen_vl"] = {"status": "skipped", "reason": "no_keyframe"}
     else:
         try:
-            with _loaded_provider("qwen_vl") as semantic_provider:
-                semantic = semantic_provider.annotate_semantic(
-                    video_path=video_path,
-                    frame_paths=keyframe_paths,
-                    start=segment_start,
-                    end=segment_end,
-                    ontology=opts.get("ontology", {}),
-                    prompt_template=opts.get("prompt_template", ""),
-                    examples=opts.get("examples"),
-                )
-                logger.info("Qwen3-VL: semantic complete")
-            provider_results["qwen_vl"] = {"status": "completed"}
+            if remote_semantic:
+                semantic_provider = RemoteApiSemantic()
+                semantic_provider.load()
+                try:
+                    semantic = semantic_provider.annotate_semantic(
+                        video_path=video_path,
+                        frame_paths=keyframe_paths,
+                        start=segment_start,
+                        end=segment_end,
+                        ontology=opts.get("ontology", {}),
+                        prompt_template=opts.get("prompt_template", ""),
+                        examples=opts.get("examples"),
+                    )
+                finally:
+                    semantic_provider.unload()
+            else:
+                with _loaded_provider("qwen_vl") as semantic_provider:
+                    semantic = semantic_provider.annotate_semantic(
+                        video_path=video_path,
+                        frame_paths=keyframe_paths,
+                        start=segment_start,
+                        end=segment_end,
+                        ontology=opts.get("ontology", {}),
+                        prompt_template=opts.get("prompt_template", ""),
+                        examples=opts.get("examples"),
+                    )
+            logger.info("%s: semantic complete", semantic_label)
+            provider_results["qwen_vl"] = {
+                "status": "completed",
+                "source": "remote_api" if remote_semantic else "local_qwen",
+            }
         except ImportError as e:
-            message = f"Qwen3-VL not installed: {e}"
-            errors.append(f"Qwen3-VL semantic failed: {message}")
+            message = f"{semantic_label} not available: {e}"
+            errors.append(f"{semantic_label} failed: {message}")
             provider_results["qwen_vl"] = {"status": "failed", "error": message}
-            logger.warning("Qwen3-VL not installed — skipping")
+            logger.warning("%s not available — skipping", semantic_label)
         except Exception as e:
-            errors.append(f"Qwen3-VL semantic failed: {e}")
+            errors.append(f"{semantic_label} failed: {e}")
             provider_results["qwen_vl"] = {"status": "failed", "error": str(e)}
-            logger.warning("Qwen3-VL failed (will skip): %s", e)
+            logger.warning("%s failed (will skip): %s", semantic_label, e)
 
     # Phase 4: LocateAnything-3B fine-grained
     _report(progress_cb, "LocateAnything grounding", 60)
@@ -509,7 +609,10 @@ def run_annotation_pipeline(
             with _loaded_provider("trocr") as ocr:
                 for frame_index, keyframe_path in enumerate(keyframe_paths):
                     try:
-                        frame_results.extend(ocr.extract_text(keyframe_path))
+                        keyframe_time = segment_start + (segment_end - segment_start) * (
+                            frame_index / max(len(keyframe_paths) - 1, 1)
+                        )
+                        frame_results.extend({**item, "_timestamp": keyframe_time} for item in ocr.extract_text(keyframe_path))
                         successful_frames += 1
                     except Exception as frame_error:
                         frame_errors.append(f"keyframe {frame_index + 1}: {frame_error}")
@@ -607,10 +710,15 @@ def run_annotation_pipeline(
     # ── Phase 6: Merge ─────────────────────────────────
     _report(progress_cb, "Merging results", 90)
 
-    # Get video dimensions from first frame
+    # Get video dimensions without retaining all tracking frames in memory.
     video_w, video_h = 1920, 1080
-    if frames and len(frames) > 0:
-        video_h, video_w = frames[0].shape[:2]
+    video_fps = 0.0
+    try:
+        metadata = get_video_metadata(video_path)
+        video_w, video_h = metadata.width or video_w, metadata.height or video_h
+        video_fps = metadata.fps
+    except Exception:
+        pass
 
     merged = merge_results(
         tracks=tracks,
@@ -623,6 +731,9 @@ def run_annotation_pipeline(
         video_width=video_w,
         video_height=video_h,
         person_ids=person_ids,
+        segment_start=segment_start,
+        tracking_fps=tracking_fps,
+        video_fps=video_fps,
     )
 
     if errors:
@@ -633,11 +744,19 @@ def run_annotation_pipeline(
     )
     merged["_provider_statuses"] = provider_results
     merged["_pipeline_status"] = "partial_completed" if degraded_providers else "completed"
+    if identity_aliases:
+        normalized_video_id = str(opts.get("video_id") or "").strip()
+        merged["_identity_aliases"] = {
+            f"{normalized_video_id}:person:{old_id}": f"{normalized_video_id}:person:{canonical_id}"
+            for old_id, canonical_id in identity_aliases.items()
+        }
 
     elapsed = time.perf_counter() - t0
     logger.info("Pipeline complete in %.1fs", elapsed)
     _report(progress_cb, "Complete", 100)
 
+    tracking_frames_dir.cleanup()
+    keyframes_dir.cleanup()
     return merged
 
 

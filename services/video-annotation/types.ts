@@ -242,6 +242,23 @@ export interface VideoTaskItem {
   uploadProgress: number  // 0-100
   /** Monotonic video-scoped sequence for identities created by human Draw. */
   nextManualPersonId?: number
+  /** Human identity decisions reapplied after every model rerun. */
+  identityReview?: VideoIdentityReview
+  /** Bounded, recoverable snapshots for destructive timeline edits. */
+  timelineHistory?: SegmentTimelineSnapshot[]
+}
+
+export interface VideoIdentityReview {
+  aliases: Record<string, string>
+  segmentOverrides: Record<string, string>
+  lockedPersonIds: string[]
+}
+
+export interface SegmentTimelineSnapshot {
+  id: string
+  createdAt: string
+  operation: string
+  segments: SegmentState[]
 }
 
 // ── Segment state ──────────────────────────────────────────
@@ -271,6 +288,7 @@ export interface SegmentState {
   lastCompletedMode?: AnnotationExecutionMode
   /** Monotonic segment-scoped sequence for manually created tracks. */
   nextManualTrackId?: number
+  reviewStatus?: ReviewStatus
 }
 
 // ── Annotate set ───────────────────────────────────────────

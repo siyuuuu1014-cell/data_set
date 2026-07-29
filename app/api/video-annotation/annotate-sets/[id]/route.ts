@@ -11,6 +11,7 @@ import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/servic
 import { repairLegacyMultipartFilename } from '@/services/video-annotation/upload-stream'
 import { repairLegacyOcrObjectCollisions } from '@/services/video-annotation/annotation-migrations'
 import { assignMissingManualPersonIds } from '@/services/video-annotation/manual-track'
+import { applyManualIdentityReview } from '@/services/video-annotation/identity-review'
 
 // GET /api/video-annotation/annotate-sets/[id]
 // Always polls Worker for processing segments and syncs results.
@@ -93,6 +94,9 @@ export async function GET(
         }
       }
       if (assignMissingManualPersonIds(task)) modified = true
+      for (const video of task.videos || []) {
+        if (applyManualIdentityReview(video)) modified = true
+      }
 
       const normalizedTask = withDerivedAnnotationStatuses(task)
       const statusChanged = normalizedTask.status !== task.status || normalizedTask.videos.some((video, index) => video.status !== task.videos[index]?.status)

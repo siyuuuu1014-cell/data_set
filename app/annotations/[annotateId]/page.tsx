@@ -8,6 +8,7 @@ import { WorkspaceHeader } from '@/components/WorkspaceHeader'
 import { VideoBatchUploader } from '@/components/video-annotation/VideoBatchUploader'
 import { useLang } from '@/services/i18n'
 import type { AnnotateSet, VideoTaskItem } from '@/services/video-annotation/types'
+import { deriveQualityIssues, qualitySummary, type QualityIssueKind } from '@/services/video-annotation/quality-center'
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '--:--'
@@ -78,6 +79,8 @@ export default function VideoAnnotationProjectPage() {
   const [uploadError, setUploadError] = useState('')
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState('')
+  const [qualityOpen, setQualityOpen] = useState(true)
+  const [qualityFilter, setQualityFilter] = useState<QualityIssueKind | 'all'>('all')
 
   const loadProject = useCallback(async () => {
     try {
@@ -104,6 +107,9 @@ export default function VideoAnnotationProjectPage() {
       segments: videos.reduce((total, video) => total + (video.segments?.length || 0), 0),
     }
   }, [project])
+  const qualityIssues = useMemo(() => project ? deriveQualityIssues(project) : [], [project])
+  const quality = useMemo(() => qualitySummary(qualityIssues), [qualityIssues])
+  const visibleQualityIssues = qualityFilter === 'all' ? qualityIssues : qualityIssues.filter(issue => issue.kind === qualityFilter)
 
   const handleUpload = useCallback(async (files: File[]) => {
     if (!project || files.length === 0 || uploading) return
@@ -234,6 +240,41 @@ export default function VideoAnnotationProjectPage() {
 
         {deleteError && (
           <div className="mb-5 rounded-lg border border-gv-pink/30 bg-gv-pink/5 px-4 py-3 text-sm text-gv-pink-dark">{deleteError}</div>
+        )}
+
+        {(project.videos?.length || 0) > 0 && (
+          <section className="card mb-6 overflow-hidden">
+            <button type="button" onClick={() => setQualityOpen(current => !current)} className="flex w-full items-center gap-4 p-4 text-left hover:bg-gv-pink/5">
+              <div className="flex-1">
+                <h2 className="font-semibold text-gv-text">Quality Center</h2>
+                <p className="mt-1 text-xs text-gv-text-muted">Review failures, degraded output, unknown attributes, identity gaps, and unreviewed segments.</p>
+              </div>
+              <span className="rounded bg-red-50 px-2 py-1 text-xs text-red-700">{quality.critical} critical</span>
+              <span className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">{quality.warning} warnings</span>
+              <span className="rounded bg-gv-bg-deep px-2 py-1 text-xs text-gv-text-muted">{quality.unreviewed} unreviewed</span>
+              <span className="text-gv-text-muted">{qualityOpen ? '▾' : '▸'}</span>
+            </button>
+            {qualityOpen && (
+              <div className="border-t border-gv-border/60 p-4">
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {(['all', 'failed', 'degraded', 'unreviewed', 'unknown_fields', 'empty_entities', 'identity', 'recognition'] as const).map(kind => (
+                    <button key={kind} type="button" onClick={() => setQualityFilter(kind)} className={`rounded-full border px-2.5 py-1 text-[11px] ${qualityFilter === kind ? 'border-gv-pink bg-gv-pink/10 text-gv-pink' : 'border-gv-border text-gv-text-muted'}`}>{kind.replaceAll('_', ' ')}</button>
+                  ))}
+                </div>
+                {visibleQualityIssues.length === 0 ? <p className="text-sm text-gv-green-deep">No issues in this filter.</p> : (
+                  <div className="max-h-72 space-y-2 overflow-auto pr-1">
+                    {visibleQualityIssues.map(issue => (
+                      <Link key={issue.id} href={`/annotations/${annotateId}/videos/${issue.videoId}?segment=${issue.segmentId}`} className="flex items-start gap-3 rounded-lg border border-gv-border/60 bg-white/35 px-3 py-2 hover:border-gv-pink/40">
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${issue.severity === 'critical' ? 'bg-red-500' : issue.severity === 'warning' ? 'bg-amber-500' : 'bg-sky-500'}`} />
+                        <span className="min-w-0 flex-1"><span className="block text-xs font-medium text-gv-text">{issue.title} · S{issue.segmentId}</span><span className="block truncate text-[11px] text-gv-text-muted">{issue.videoName} — {issue.detail}</span></span>
+                        <span className="text-xs text-gv-pink">Review →</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
         )}
 
         {uploading && (

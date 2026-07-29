@@ -1,6 +1,6 @@
 'use client'
 
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useStore } from '@/services/store'
 import Link from 'next/link'
@@ -13,6 +13,8 @@ import { TextContent, type TextContentEdits } from '@/components/video-annotatio
 import { UndoToast, type UndoToastItem } from '@/components/video-annotation/UndoToast'
 import { VideoBatchUploader } from '@/components/video-annotation/VideoBatchUploader'
 import { ExportDialog } from '@/components/video-annotation/ExportDialog'
+import { IdentityManager } from '@/components/video-annotation/IdentityManager'
+import { TimelineEditor } from '@/components/video-annotation/TimelineEditor'
 import { WorkspaceHeader } from '@/components/WorkspaceHeader'
 import { useLang } from '@/services/i18n'
 import {
@@ -324,6 +326,8 @@ function SegmentReviewEditor({
 export default function AnnotateDetailPage() {
   const { t, lang } = useLang()
   const { id: routeProjectId, annotateId, videoId: routeVideoId } = useParams<{ id?: string; annotateId: string; videoId?: string }>()
+  const searchParams = useSearchParams()
+  const routeSegmentId = Number(searchParams.get('segment'))
   const { updateAnnotateSet } = useStore()
 
   const [set, setSet] = useState<AnnotateSet | null>(null)
@@ -364,12 +368,14 @@ export default function AnnotateDetailPage() {
           : (data.videos || [])
         const firstVideo = videos[0]
         setSelectedVideoId(firstVideo?.videoId || null)
-        setSelectedSegmentId(firstVideo?.segments?.[0]?.segmentId ?? null)
+        setSelectedSegmentId(Number.isInteger(routeSegmentId) && firstVideo?.segments?.some(segment => segment.segmentId === routeSegmentId)
+          ? routeSegmentId
+          : firstVideo?.segments?.[0]?.segmentId ?? null)
       }
       setLoading(false)
     })
     return () => { active = false }
-  }, [requestSet, routeVideoId])
+  }, [requestSet, routeVideoId, routeSegmentId])
   useEffect(() => { if (!set || !id) return; updateAnnotateSet(id, annotateId, set) }, [set, id, annotateId, updateAnnotateSet])
 
   const [transition, setTransition] = useState<'uploading' | 'detecting' | 'annotating' | null>(null)
@@ -1445,6 +1451,16 @@ export default function AnnotateDetailPage() {
     }
   }, [selectedVideoId, selectedSegmentId, selectedFrame?.frameIndex, flushPendingDeletes])
 
+  const handleReviewStatus = useCallback(async (status: 'needs_review' | 'approved' | 'rejected') => {
+    if (!selectedVideo || !selectedSegment) return
+    const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/segments/review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId: selectedVideo.videoId, segmentId: selectedSegment.segmentId, status }),
+    })
+    const payload = await response.json().catch(() => null) as { data?: AnnotateSet } | null
+    if (response.ok && payload?.data) setSet(payload.data)
+  }, [annotateId, selectedVideo, selectedSegment])
+
   // ── Render ─────────────────────────────────────────
 
   if (loading) return <div className="flex-1 flex items-center justify-center"><p className="text-gv-text-dim">Loading...</p></div>
@@ -1959,6 +1975,16 @@ export default function AnnotateDetailPage() {
               </div>
             ) : activeAnnotation ? (
               <>
+                {selectedVideo && selectedSegment && <>
+                  <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-gv-border bg-white/30 p-2">
+                    <span className="mr-auto text-xs text-gv-text-muted">Review: <strong className="text-gv-text">{selectedSegment.reviewStatus || 'unreviewed'}</strong></span>
+                    <button type="button" onClick={() => void handleReviewStatus('needs_review')} className="rounded bg-gv-gold/10 px-2 py-1 text-xs text-gv-gold-dark">Needs Review</button>
+                    <button type="button" onClick={() => void handleReviewStatus('approved')} className="rounded bg-gv-green/15 px-2 py-1 text-xs text-gv-green-deep">Approve</button>
+                    <button type="button" onClick={() => void handleReviewStatus('rejected')} className="rounded bg-gv-pink/10 px-2 py-1 text-xs text-gv-pink">Reject</button>
+                  </div>
+                  <IdentityManager annotateSetId={annotateId} video={selectedVideo} selectedSegmentId={selectedSegment.segmentId} selectedTrackId={selectedEntityType === 'person' ? selectedTrackId : null} onUpdate={setSet} />
+                  <TimelineEditor key={`${selectedSegment.segmentId}:${selectedFrame?.frameIndex ?? 'mid'}`} annotateSetId={annotateId} video={selectedVideo} segment={selectedSegment} initialTime={selectedFrame?.timestamp ?? (selectedSegment.start + selectedSegment.end) / 2} onUpdate={task => { setSet(task); setSelectedTrackId(null); setSelectedEntityType(null); setSelectedFrameIndex(null) }} />
+                </>}
                 {selectedSegment?.status === 'partial_completed' && (
                   <div className="mb-4 rounded-lg border border-gv-gold/30 bg-gv-gold/5 p-3">
                     <p className="text-sm font-medium text-gv-gold-dark">{t('video.degraded_result')}</p>

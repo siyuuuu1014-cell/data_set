@@ -39,11 +39,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Trigger scene detection via worker
+    const safeThreshold = Math.max(0.01, body.sceneThreshold ?? 0.4)
     const jobId = await submitJob({
       video_path: videoPath,
       segment_start: 0,
       segment_end: metadata.duration,
-      options: { mode: 'scene_detect', scene_threshold: body.sceneThreshold ?? 0.4 },
+      options: { mode: 'scene_detect', scene_threshold: safeThreshold },
     })
 
     // Poll for result
@@ -74,8 +75,17 @@ export async function POST(req: NextRequest) {
     const taskPath = getTaskPath(body.annotateSetId)
     if (existsSync(taskPath)) {
       const raw = await readFile(taskPath, 'utf-8')
-      const task = JSON.parse(raw)
-      const vid = task.videos?.find((v: Record<string, unknown>) => v.videoId === body.videoId)
+      let task: Record<string, unknown>
+      try {
+        task = JSON.parse(raw) as Record<string, unknown>
+      } catch {
+        return Response.json(
+          { error: { code: 'INTERNAL', message: 'Annotation task file is corrupted and cannot be read' } },
+          { status: 500 },
+        )
+      }
+      const videos = task.videos as Array<Record<string, unknown>> | undefined
+      const vid = videos?.find((v: Record<string, unknown>) => v.videoId === body.videoId)
       if (vid) {
         vid.segments = segments.map((s) => ({
           segmentId: s.segment_id,

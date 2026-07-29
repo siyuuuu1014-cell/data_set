@@ -62,7 +62,7 @@ export function normalizeVideoSemanticConfig(
 
   const config: VideoSemanticConfig = {
     mode,
-    apiKey: typeof value.apiKey === 'string' ? value.apiKey.trim() : existing.apiKey,
+    apiKey: typeof value.apiKey === 'string' ? value.apiKey.trim() : (process.env.NUWA_VIDEO_SEMANTIC_API_KEY || existing.apiKey),
     baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl.trim() : existing.baseUrl,
     model: typeof value.model === 'string' ? value.model.trim() : existing.model,
     apiFormat,

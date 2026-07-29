@@ -24,6 +24,11 @@ export interface VideoDescriptionResult {
   source: 'llm' | 'fallback'
 }
 
+export interface CustomJsonExportOptions {
+  includeOcr?: boolean
+  includeSpeechTranscript?: boolean
+}
+
 /**
  * Normalize exported ontology values without rewriting free text or identifiers.
  * Persisted annotations may predate newer required fields, so the export boundary
@@ -113,16 +118,41 @@ function exportPersons(persons: PersonAnnotation[] | null | undefined) {
   }))
 }
 
-function exportObjects(objects: ObjectAnnotation[] | null | undefined) {
-  return (Array.isArray(objects) ? objects : []).filter(object => !isOcrObject(object)).map(object => ({
-    trackId: object.trackId,
-    name: normalizeExportLabel(object.name),
-    category: normalizeExportLabel(object.category),
-    color: normalizeExportLabel(object.color),
-    brand: object.brand,
-    bbox: object.bbox,
-    depth: object.depth,
-  }))
+function exportObjects(
+  objects: ObjectAnnotation[] | null | undefined,
+  includeOcr = false,
+) {
+  return (Array.isArray(objects) ? objects : []).flatMap(object => {
+    const ocr = isOcrObject(object)
+    if (ocr && !includeOcr) return []
+    if (ocr) {
+      const text = typeof object._textContent === 'string' && object._textContent
+        ? object._textContent
+        : typeof object.name === 'string'
+          ? object.name
+          : ''
+      if (!text) return []
+      return [{
+        trackId: object.trackId,
+        name: text,
+        category: 'text',
+        color: normalizeExportLabel(object.color),
+        brand: object.brand,
+        bbox: object.bbox,
+        depth: object.depth,
+        _textContent: text,
+      }]
+    }
+    return [{
+      trackId: object.trackId,
+      name: normalizeExportLabel(object.name),
+      category: normalizeExportLabel(object.category),
+      color: normalizeExportLabel(object.color),
+      brand: object.brand,
+      bbox: object.bbox,
+      depth: object.depth,
+    }]
+  })
 }
 
 function exportEvents(events: EventAnnotation[] | null | undefined) {
@@ -454,21 +484,32 @@ export async function generateSemanticVideoDescription(
 }
 
 /** Generate user-specified Custom JSON format. */
-export function exportCustomJson(annotations: VideoAnnotation[]): string {
+export function exportCustomJson(
+  annotations: VideoAnnotation[],
+  options: CustomJsonExportOptions = {},
+): string {
   const output: Record<string, unknown>[] = []
   for (const ann of annotations) {
     output.push({
       video: ann.video,
-      annotations: ann.annotations.map(seg => ({
-        segmentId: seg.segmentId,
-        start: seg.start,
-        end: seg.end,
-        scene: exportScene(seg.scene),
-        camera: exportCamera(seg.camera),
-        persons: exportPersons(seg.persons),
-        objects: exportObjects(seg.objects),
-        events: exportEvents(visualEventsFor(seg)),
-      })),
+      annotations: ann.annotations.map(seg => {
+        const speechTranscript = typeof seg.speechTranscript === 'string'
+          ? seg.speechTranscript
+          : ''
+        return {
+          segmentId: seg.segmentId,
+          start: seg.start,
+          end: seg.end,
+          scene: exportScene(seg.scene),
+          camera: exportCamera(seg.camera),
+          persons: exportPersons(seg.persons),
+          objects: exportObjects(seg.objects, options.includeOcr),
+          events: exportEvents(visualEventsFor(seg)),
+          ...(options.includeSpeechTranscript && speechTranscript.trim()
+            ? { speechTranscript }
+            : {}),
+        }
+      }),
     })
   }
   return JSON.stringify(output, null, 2)

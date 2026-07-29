@@ -18,6 +18,49 @@ export function trackRefKey(ref: TrackRef): string {
   return `${ref.entityType}:${ref.trackId}`
 }
 
+/** Compact UI identity; Track remains the segment-local fallback. */
+export function personDisplayId(personId: string | null | undefined, trackId: number): string {
+  const manual = personId?.match(/:manual-person:(\d+)$/)
+  if (manual) return `P-M${manual[1]}`
+  const model = personId?.match(/:person:(\d+)$/)
+  if (model) return `P-${model[1]}`
+  return `T-${trackId}`
+}
+
+function isEmptySemanticLabel(value: string | null | undefined): boolean {
+  const normalized = String(value || '').trim().toLowerCase()
+  return !normalized || normalized === 'unknown'
+}
+
+/** Fill only unreviewed Person fields; identity, bbox, depth, and reviewed values stay untouched. */
+export function fillEmptyPersonAttributes(
+  person: PersonAnnotation,
+  suggestion: Pick<
+    PersonAnnotation,
+    'gender' | 'ageGroup' | 'hair' | 'expression' | 'pose' | 'action' | 'facing' | 'occlusion' | 'clothing'
+  >,
+): PersonAnnotation {
+  return {
+    ...person,
+    gender: isEmptySemanticLabel(person.gender) ? suggestion.gender : person.gender,
+    ageGroup: isEmptySemanticLabel(person.ageGroup) ? suggestion.ageGroup : person.ageGroup,
+    hair: {
+      color: isEmptySemanticLabel(person.hair?.color) ? suggestion.hair.color : person.hair.color,
+      style: isEmptySemanticLabel(person.hair?.style) ? suggestion.hair.style : person.hair.style,
+    },
+    expression: isEmptySemanticLabel(person.expression) ? suggestion.expression : person.expression,
+    pose: isEmptySemanticLabel(person.pose) ? suggestion.pose : person.pose,
+    action: person.action.length === 0 ? [...suggestion.action] : person.action,
+    facing: isEmptySemanticLabel(person.facing) ? suggestion.facing : person.facing,
+    // Zero is a valid reviewed value as well as the legacy default. Never
+    // overwrite it without explicit field-level user input.
+    occlusion: person.occlusion,
+    clothing: person.clothing.length === 0
+      ? suggestion.clothing.map(item => ({ ...item, attributes: [...item.attributes] }))
+      : person.clothing,
+  }
+}
+
 export function clampBox(box: BBox, width: number, height: number): BBox {
   const x = Math.max(0, Math.min(Math.round(box.x), Math.max(0, width - 1)))
   const y = Math.max(0, Math.min(Math.round(box.y), Math.max(0, height - 1)))

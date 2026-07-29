@@ -6,6 +6,7 @@ import type {
   DeploymentStatus,
   WorkerJobStatus,
   WorkerHealth,
+  PersonAnalysisJobStatus,
 } from './types'
 import type { VideoSemanticConfig } from './remote-semantic-config'
 
@@ -60,6 +61,19 @@ export async function getJobStatus(jobId: string): Promise<WorkerJobStatus> {
     return { jobId, status: 'failed', progress: 0, result: null, error }
   }
   return res.json() as Promise<WorkerJobStatus>
+}
+
+export async function getPersonAnalysisJobStatus(jobId: string): Promise<PersonAnalysisJobStatus> {
+  const res = await fetch(`${workerUrl}/jobs/${encodeURIComponent(jobId)}`, {
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!res.ok) {
+    const error = res.status === 404
+      ? 'Person analysis job is no longer available; run the analysis again.'
+      : `Person analysis status request failed (HTTP ${res.status})`
+    return { jobId, status: 'failed', progress: 0, result: null, error }
+  }
+  return res.json() as Promise<PersonAnalysisJobStatus>
 }
 
 export async function cancelJob(jobId: string): Promise<boolean> {

@@ -32,6 +32,18 @@ export interface FrameAnnotation {
   observations: FrameObservation[]
 }
 
+/** Existing human-drawn box supplied to a segment re-run for semantic review. */
+export interface ReviewTrackCandidate {
+  trackId: number
+  entityType: SpatialEntityType
+  className: string
+  bbox: BBox
+  timestamp: number
+  imageWidth: number
+  imageHeight: number
+  personId?: string | null
+}
+
 // ── Semantic attributes ────────────────────────────────────
 
 export interface HairInfo {
@@ -77,6 +89,27 @@ export interface PersonAnnotation {
   keypoints: unknown[]  // reserved, always [] in Phase 1
   _className?: string
   _detectionConfidence?: number
+}
+
+/** Preview-only semantic fields returned for one explicitly selected person box. */
+export type PersonSemanticSuggestion = Pick<
+  PersonAnnotation,
+  'gender' | 'ageGroup' | 'hair' | 'expression' | 'pose' | 'action' | 'facing' | 'occlusion' | 'clothing'
+>
+
+export interface PersonAnalysisResult {
+  person: PersonSemanticSuggestion
+  source: 'local_qwen' | 'remote_api'
+  timestamp: number
+}
+
+export interface PersonAnalysisJobStatus {
+  jobId: string
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  progress: number
+  progressDetail?: string
+  result: PersonAnalysisResult | null
+  error: string | null
 }
 
 export interface ObjectAnnotation {
@@ -162,6 +195,10 @@ export interface SegmentAnnotation {
   _provider_statuses?: Record<string, ProviderExecutionResult>
   _pipeline_status?: 'completed' | 'partial_completed'
   _identity_aliases?: Record<string, string>
+  /** Worker-only transport data used to enrich existing manual review tracks. */
+  _review_person_suggestions?: Array<Partial<PersonAnnotation> & Pick<PersonAnnotation, 'trackId'>>
+  /** Worker-only transport data used to enrich existing manual review tracks. */
+  _review_object_suggestions?: Array<Partial<ObjectAnnotation> & Pick<ObjectAnnotation, 'trackId'>>
   _humanEdited?: boolean
 }
 
@@ -203,6 +240,8 @@ export interface VideoTaskItem {
   status: VideoTaskStatus
   segments: SegmentState[]
   uploadProgress: number  // 0-100
+  /** Monotonic video-scoped sequence for identities created by human Draw. */
+  nextManualPersonId?: number
 }
 
 // ── Segment state ──────────────────────────────────────────
@@ -230,6 +269,8 @@ export interface SegmentState {
   workerJobId?: string
   processingMode?: AnnotationExecutionMode
   lastCompletedMode?: AnnotationExecutionMode
+  /** Monotonic segment-scoped sequence for manually created tracks. */
+  nextManualTrackId?: number
 }
 
 // ── Annotate set ───────────────────────────────────────────

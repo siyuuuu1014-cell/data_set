@@ -28,14 +28,18 @@ indoor: true or false
 camera_angle: "eye-level", "low", "high", "overhead", or "unknown"
 event_type: one event label for the main visible activity
 event_description: one short sentence summarizing what is visibly happening
-persons: a list of clearly visible people; for each include gender, age, action, clothing, and hair
-objects: a list of clearly visible non-person objects; for each include name, category, color, and brand
+persons: a list of clearly visible people; for each include trackId, gender,
+ageGroup, hair {color, style}, expression, pose, action (list), facing, and
+clothing (list of {type, color, attributes, brand})
+objects: a list of clearly visible non-person objects; for each include trackId, name, category, color, and brand
 
 Rules:
 - Never guess an object, person, action, or event that is not visually supported.
 - If an object is uncertain or too small to identify, omit it from objects.
 - Use an empty list when no person or object is clearly visible.
 - Use "unknown" for an uncertain attribute instead of inventing a value.
+- When boxes are labelled P<number> or O<number>, copy that exact number into
+  trackId. Never infer Track identity from list order and never invent an ID.
 - For event_type, return exactly one of: music_performance, sports_activity,
   dance_performance, conversation, argument, celebration, ceremony, cooking,
   eating, cleaning, repairing, shopping, commuting, exercising, playing,
@@ -106,7 +110,138 @@ _EVENT_DEFAULT_DESCRIPTIONS = {
 }
 
 
-def _parse_response(raw: str) -> dict:
+def _safe_track_id(value: Any, allowed_track_ids: set[int] | None = None) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        labelled = re.fullmatch(r"\s*[PpOo]?\s*#?\s*(\d+)\s*", value)
+        if labelled:
+            value = labelled.group(1)
+    try:
+        track_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    if track_id < 0 or (allowed_track_ids is not None and track_id not in allowed_track_ids):
+        return None
+    return track_id
+
+
+_APPEARANCE_COLORS = (
+    "black", "brown", "blonde", "gray", "white", "red", "pink", "blue",
+    "green", "purple", "orange", "yellow", "silver", "gold", "multicolored",
+)
+_HAIR_STYLES = (
+    "short", "long", "curly", "straight", "wavy", "bald", "tied",
+    "ponytail", "pigtails", "braided", "bob", "bun", "spiky",
+)
+
+
+def _semantic_label(value: Any, default: str = "unknown") -> str:
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return default
+    normalized = re.sub(r"\s+", " ", str(value)).strip().lower()
+    return normalized if normalized else default
+
+
+def _semantic_list(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else str(value or "").split(",")
+    return [
+        normalized
+        for item in values
+        if (normalized := _semantic_label(item, ""))
+    ]
+
+
+def _appearance_color(value: Any) -> str:
+    normalized = _semantic_label(value)
+    aliases = {"grey": "gray", "blond": "blonde", "multi-colored": "multicolored"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized in _APPEARANCE_COLORS:
+        return normalized
+    for color in _APPEARANCE_COLORS:
+        if re.search(rf"(?<![a-z]){re.escape(color)}(?![a-z])", normalized):
+            return color
+    return "unknown"
+
+
+def _hair_attributes(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        color_source = value.get("color")
+        style_source = value.get("style")
+    else:
+        color_source = value
+        style_source = value
+    style_text = _semantic_label(style_source)
+    style = next((
+        item for item in _HAIR_STYLES
+        if re.search(rf"(?<![a-z]){re.escape(item)}(?![a-z])", style_text)
+    ), "unknown")
+    return {"color": _appearance_color(color_source), "style": style}
+
+
+def _clothing_attributes(value: Any) -> list[dict[str, Any]]:
+    if not value:
+        return []
+    values = value if isinstance(value, list) else [
+        item for item in str(value).split(",") if item.strip()
+    ]
+    clothing: list[dict[str, Any]] = []
+    for raw_item in values:
+        if isinstance(raw_item, dict):
+            clothing_type = _semantic_label(
+                raw_item.get("type") or raw_item.get("name"), "unknown"
+            )
+            color = _appearance_color(raw_item.get("color"))
+            attributes = _semantic_list(raw_item.get("attributes", []))
+            brand_value = raw_item.get("brand")
+            brand = None if brand_value in (None, "", "unknown") else str(brand_value).strip()
+        else:
+            text = _semantic_label(raw_item, "")
+            if not text:
+                continue
+            main, _, detail = text.partition(" with ")
+            words = main.split()
+            clothing_type = words[-1] if words else "unknown"
+            color = _appearance_color(main)
+            attributes = [detail] if detail else []
+            brand = None
+        if clothing_type == "unknown" and color == "unknown" and not attributes and not brand:
+            continue
+        clothing.append({
+            "type": clothing_type,
+            "color": color,
+            "attributes": attributes,
+            "brand": brand,
+        })
+    return clothing
+
+
+def _fill_single_person_hair_from_description(
+    persons: list[dict[str, Any]],
+    description: Any,
+) -> None:
+    """Keep a one-person structured card consistent with explicit prose.
+
+    The fallback is intentionally limited to exactly one Track and requires
+    an explicit "<color> hair" or "<color>-haired" phrase. Multi-person
+    descriptions remain untouched because attribution would be ambiguous.
+    """
+    if len(persons) != 1:
+        return
+    hair = persons[0].get("hair")
+    if not isinstance(hair, dict) or hair.get("color") not in (None, "", "unknown"):
+        return
+    text = _semantic_label(description, "")
+    for color in _APPEARANCE_COLORS:
+        if re.search(
+            rf"(?<![a-z]){re.escape(color)}(?:[-\s]+(?:colored[-\s]+)?hair(?:ed)?)(?![a-z])",
+            text,
+        ):
+            hair["color"] = color
+            return
+
+
+def _parse_response(raw: str, allowed_track_ids: set[int] | None = None) -> dict:
     """Parse Qwen's JSON output into structured semantic fields."""
     import json_repair
 
@@ -144,76 +279,55 @@ def _parse_response(raw: str) -> dict:
 
     # --- Parse persons into attributes list ---
     persons_attrs: list[dict] = []
-    for i, p in enumerate(data.get("persons") or [], start=1):
+    for p in data.get("persons") or []:
+        if not isinstance(p, dict):
+            continue
+        track_id = _safe_track_id(p.get("trackId"), allowed_track_ids)
+        if allowed_track_ids is not None and track_id is None:
+            continue
         person = {
-            "trackId": i,
             # Identity is assigned by the video-scoped tracker. Semantic
             # attributes are not unique enough to identify a real person.
             "personId": None,
             "gender": _pick(p.get("gender"), ["male", "female"], "unknown"),
             "ageGroup": _pick(
-                p.get("age"),
+                p.get("ageGroup", p.get("age")),
                 ["child", "teen", "young adult", "middle aged", "elderly"],
                 "unknown",
                 aliases={"young": "young adult", "middle": "middle aged"},
             ),
-            "expression": "unknown",
-            "pose": "unknown",
+            "expression": _semantic_label(p.get("expression")),
+            "pose": _semantic_label(p.get("pose")),
             "action": [],
-            "facing": "unknown",
-            "hair": {"color": "unknown", "style": "unknown"},
-            "clothing": [],
+            "facing": _semantic_label(p.get("facing")),
+            "hair": _hair_attributes(p.get("hair")),
+            "clothing": _clothing_attributes(p.get("clothing")),
         }
+        if track_id is not None:
+            person["trackId"] = track_id
 
         # Parse action
-        action = p.get("action", "")
-        if action:
-            person["action"] = [a.strip() for a in str(action).split(",") if a.strip()]
-
-        # Parse hair
-        hair = p.get("hair", "")
-        if hair:
-            parts = str(hair).lower().split()
-            hair_colors = ["black", "brown", "blonde", "gray", "white", "red"]
-            hair_styles = ["short", "long", "curly", "straight", "bald", "tied"]
-            for w in parts:
-                if w in hair_colors:
-                    person["hair"]["color"] = w
-                if w in hair_styles:
-                    person["hair"]["style"] = w
-
-        # Parse clothing
-        clothing = p.get("clothing", "")
-        if clothing:
-            for item in str(clothing).split(","):
-                item = item.strip()
-                if not item:
-                    continue
-                parts = item.lower().split()
-                cloth_type = parts[-1] if len(parts) > 1 else item
-                cloth_color = parts[0] if len(parts) > 1 and parts[0] in [
-                    "black", "white", "red", "blue", "green", "yellow", "brown", "gray", "grey",
-                    "pink", "orange", "purple", "dark", "light"
-                ] else "unknown"
-                person["clothing"].append({
-                    "type": cloth_type,
-                    "color": cloth_color,
-                    "attributes": [],
-                    "brand": None,
-                })
+        person["action"] = _semantic_list(p.get("action"))
 
         persons_attrs.append(person)
 
     # --- Parse objects ---
     objects_attrs: list[dict] = []
-    for i, o in enumerate(data.get("objects") or [], start=len(persons_attrs) + 1):
-        objects_attrs.append({
-            "trackId": i + 100,  # offset to avoid collision with person trackIds
+    for o in data.get("objects") or []:
+        if not isinstance(o, dict):
+            continue
+        track_id = _safe_track_id(o.get("trackId"), allowed_track_ids)
+        if allowed_track_ids is not None and track_id is None:
+            continue
+        item = {
             "name": str(o.get("name", "")),
             "category": str(o.get("category", "other")),
             "color": str(o.get("color", "unknown")),
             "brand": o.get("brand") or None,
-        })
+        }
+        if track_id is not None:
+            item["trackId"] = track_id
+        objects_attrs.append(item)
 
     # --- Scene ---
     scene_type = str(data.get("scene", "unknown")).lower().replace(" ", "_")
@@ -241,6 +355,7 @@ def _parse_response(raw: str) -> dict:
     # --- Events ---
     events: list[dict] = []
     raw_description = data.get("event_description", data.get("event", ""))
+    _fill_single_person_hair_from_description(persons_attrs, raw_description)
     event = _normalize_event(data.get("event_type", raw_description))
     if not event and str(raw_description or "").strip():
         event = "visual_activity"
@@ -421,6 +536,7 @@ class QwenVLSemantic:
         ontology: dict | None = None,
         prompt_template: str = "",
         examples: list[dict] | None = None,
+        track_candidates: list[dict] | None = None,
     ) -> 'SegmentSemantic':
         from .base import SegmentSemantic
 
@@ -430,18 +546,44 @@ class QwenVLSemantic:
         if not frame_paths or len(frame_paths) == 0:
             return self._empty()
 
-        image_path = frame_paths[0]
+        selected_paths = list(frame_paths)[:3]
+        images: list[Image.Image] = []
         try:
-            img = Image.open(image_path).convert("RGB")
-            logger.info("Qwen3-VL processing: %s (%dx%d)", image_path, img.width, img.height)
+            for image_path in selected_paths:
+                with Image.open(image_path) as source:
+                    images.append(source.convert("RGB"))
+            logger.info(
+                "Qwen3-VL processing %d Track-aware frame(s): %s",
+                len(images),
+                ", ".join(f"{image.width}x{image.height}" for image in images),
+            )
+
+            candidates = [
+                item for item in (track_candidates or [])
+                if isinstance(item, dict) and isinstance(item.get("trackId"), int)
+            ]
+            candidate_lines = "\n".join(
+                f"- trackId {item['trackId']}: {item.get('entityType', 'object')} "
+                f"({item.get('className', 'unknown')})"
+                for item in candidates
+            )
+            user_instruction = "Describe these chronological frames as JSON."
+            if candidate_lines:
+                user_instruction = (
+                    "The frames contain labelled detector boxes. Analyse only the listed "
+                    "entities and return their exact numeric trackId with their attributes. "
+                    "A P label is a person and an O label is an object. Omit a candidate if "
+                    "its attributes are not visually supported; do not match by array order.\n"
+                    f"Candidates:\n{candidate_lines}"
+                )
 
             messages = [
                 {"role": "system", "content": PROMPT},
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image", "image": img},
-                        {"type": "text", "text": "Describe this frame as JSON."},
+                        *({"type": "image", "image": image} for image in images),
+                        {"type": "text", "text": user_instruction},
                     ],
                 },
             ]
@@ -450,14 +592,14 @@ class QwenVLSemantic:
                 messages, tokenize=False, add_generation_prompt=True
             )
             inputs = self._processor(
-                text=[text], images=[img], return_tensors="pt"
+                text=[text], images=images, return_tensors="pt"
             )
             inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
 
             with torch.inference_mode():
                 generated = self._model.generate(
                     **inputs,
-                    max_new_tokens=700,
+                    max_new_tokens=1200,
                     temperature=0.3,
                     do_sample=False,
                     use_cache=True,
@@ -468,7 +610,11 @@ class QwenVLSemantic:
             raw_text = self._processor.decode(output_ids, skip_special_tokens=True)
             logger.info("Qwen3-VL raw: %.400s", raw_text)
 
-            parsed = _parse_response(raw_text)
+            allowed_track_ids = {
+                int(item["trackId"])
+                for item in candidates
+            } if candidates else None
+            parsed = _parse_response(raw_text, allowed_track_ids=allowed_track_ids)
             if not parsed:
                 raise RuntimeError("Qwen3-VL returned an empty or invalid semantic response")
 
@@ -487,6 +633,8 @@ class QwenVLSemantic:
                 f"Qwen3-VL semantic inference failed: {type(e).__name__}: {e}"
             ) from e
         finally:
+            for image in images:
+                image.close()
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
 

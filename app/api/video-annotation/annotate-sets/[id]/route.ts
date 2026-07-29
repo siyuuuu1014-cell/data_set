@@ -10,6 +10,7 @@ import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
 import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/services/video-annotation/model-result'
 import { repairLegacyMultipartFilename } from '@/services/video-annotation/upload-stream'
 import { repairLegacyOcrObjectCollisions } from '@/services/video-annotation/annotation-migrations'
+import { assignMissingManualPersonIds } from '@/services/video-annotation/manual-track'
 
 // GET /api/video-annotation/annotate-sets/[id]
 // Always polls Worker for processing segments and syncs results.
@@ -91,6 +92,7 @@ export async function GET(
           }
         }
       }
+      if (assignMissingManualPersonIds(task)) modified = true
 
       const normalizedTask = withDerivedAnnotationStatuses(task)
       const statusChanged = normalizedTask.status !== task.status || normalizedTask.videos.some((video, index) => video.status !== task.videos[index]?.status)

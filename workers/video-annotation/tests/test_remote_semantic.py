@@ -128,6 +128,33 @@ class RemoteSemanticPayloadTests(unittest.TestCase):
         self.assertEqual(parsed["events"][0]["description"], "A person moves.")
         self.assertEqual(parsed["events"][0]["confidence"], 1.0)
 
+    def test_response_parser_keeps_only_allowed_explicit_track_ids(self) -> None:
+        parsed = _parse_remote_response(json.dumps({
+            "scene": {},
+            "camera": {},
+            "persons_attributes": [
+                {"trackId": 9, "gender": "female"},
+                {"trackId": 99, "gender": "male"},
+                {"gender": "male"},
+            ],
+            "objects_attributes": [
+                {"trackId": 4, "name": "book"},
+                {"trackId": 40, "name": "cup"},
+            ],
+            "events": [],
+        }), allowed_track_ids={4, 9})
+
+        self.assertEqual(parsed["persons_attributes"], [{"trackId": 9, "gender": "female"}])
+        self.assertEqual(parsed["objects_attributes"], [{"trackId": 4, "name": "book"}])
+
+    def test_response_parser_accepts_visible_box_label_as_explicit_track_id(self) -> None:
+        parsed = _parse_remote_response(json.dumps({
+            "scene": {},
+            "persons_attributes": [{"trackId": "P1000002", "gender": "female"}],
+        }), allowed_track_ids={1000002})
+
+        self.assertEqual(parsed["persons_attributes"][0]["trackId"], 1000002)
+
     def test_missing_config_defaults_to_local_but_invalid_config_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "video-semantic-config.json"

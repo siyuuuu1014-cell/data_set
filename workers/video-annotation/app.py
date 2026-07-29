@@ -11,8 +11,25 @@ import secrets
 import asyncio
 from contextlib import asynccontextmanager
 
+from pydantic import BaseModel, Field, model_validator
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+
+
+class JobSubmission(BaseModel):
+    model_config = {"extra": "allow"}
+
+    video_path: str
+    segment_start: float = Field(default=0.0)
+    segment_end: float = Field(default=0.0)
+    options: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_segment_bounds(self) -> "JobSubmission":
+        if self.segment_end < self.segment_start:
+            raise ValueError("segment_end must be >= segment_start")
+        return self
 
 from config import WORKER_HOST, WORKER_PORT, DEVICE
 from logging_utils import setup_logging
@@ -151,22 +168,9 @@ async def test_remote_semantic(payload: dict, request: Request):
 
 
 @app.post("/jobs")
-async def submit_job(payload: dict):
-    """Submit an annotation job.
-
-    Expected payload:
-        {
-            "video_path": "/path/to/video.mp4",
-            "segment_start": 0.0,
-            "segment_end": 5.2,
-            "options": {
-                "categories": ["person", "car"],
-                "sample_fps": 0.5,
-                "ontology": {}
-            }
-        }
-    """
-    job_id = job_queue.submit(payload)
+async def submit_job(payload: JobSubmission):
+    """Submit an annotation job."""
+    job_id = job_queue.submit(payload.model_dump())
     return {"jobId": job_id, "status": "queued"}
 
 

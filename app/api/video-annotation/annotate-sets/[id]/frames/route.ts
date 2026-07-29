@@ -5,6 +5,7 @@ import type { AnnotateSet, SegmentAnnotation } from '@/services/video-annotation
 import { getTaskPath } from '@/services/video-annotation/server-paths'
 import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
 import { withDerivedAnnotationStatuses } from '@/services/video-annotation/status'
+import { findAnnotationTrackConflicts } from '@/services/video-annotation/manual-track'
 
 interface FramePatchBody {
   videoId?: unknown
@@ -23,7 +24,7 @@ function isSegmentAnnotation(value: unknown): value is SegmentAnnotation {
   const annotation = value as Partial<SegmentAnnotation>
   if (!Array.isArray(annotation.persons) || !Array.isArray(annotation.objects)) return false
   if (annotation.frames !== undefined && !Array.isArray(annotation.frames)) return false
-  return (annotation.frames || []).every(frame => (
+  const framesValid = (annotation.frames || []).every(frame => (
     Number.isInteger(frame.frameIndex)
     && Number.isFinite(frame.timestamp)
     && frame.timestamp >= 0
@@ -39,6 +40,7 @@ function isSegmentAnnotation(value: unknown): value is SegmentAnnotation {
       && observation.bbox.height > 0
     ))
   ))
+  return framesValid && findAnnotationTrackConflicts(annotation as SegmentAnnotation).length === 0
 }
 
 /** Persist one segment's frame edits without replacing the complete task document. */

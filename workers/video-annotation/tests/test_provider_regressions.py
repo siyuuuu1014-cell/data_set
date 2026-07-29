@@ -17,6 +17,8 @@ from pipeline import (
     _deduplicate_ocr_texts,
     _degraded_visual_providers,
     _detector_confidence_for_tracking,
+    _prepare_semantic_track_frames,
+    _semantic_tracks_with_review_candidates,
     _select_grounding_categories,
 )
 from providers.detector.yolo11 import YOLO11Detector
@@ -84,6 +86,142 @@ class SemanticPickTests(unittest.TestCase):
         options = ["child", "teen", "young adult", "middle aged", "elderly"]
         self.assertEqual(_pick("young", options, "unknown", aliases=aliases), "young adult")
         self.assertEqual(_pick("middle", options, "unknown", aliases=aliases), "middle aged")
+
+    def test_qwen_parser_preserves_only_allowed_explicit_track_ids(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"room","persons":['
+            '{"trackId":9,"gender":"female","action":"reading"},'
+            '{"trackId":99,"gender":"male","action":"standing"},'
+            '{"gender":"male","action":"walking"}],'
+            '"objects":[{"trackId":4,"name":"book"}]}'
+            , allowed_track_ids={4, 9}
+        )
+
+        self.assertEqual([item.get("trackId") for item in parsed["persons_attributes"]], [9])
+        self.assertEqual(parsed["objects_attributes"][0]["trackId"], 4)
+
+    def test_qwen_parser_accepts_visible_box_label_as_explicit_track_id(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"room","persons":['
+            '{"trackId":"P1000002","gender":"female","action":"smiling"}]}',
+            allowed_track_ids={1000002},
+        )
+
+        self.assertEqual(parsed["persons_attributes"][0]["trackId"], 1000002)
+
+    def test_qwen_parser_preserves_structured_person_appearance_fields(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"illustration","persons":[{'
+            '"trackId":1,"gender":"female","ageGroup":"teen",'
+            '"hair":{"color":"pink","style":"long"},'
+            '"expression":"joyful","pose":"standing","action":["smiling"],'
+            '"facing":"front","clothing":[{'
+            '"type":"bow","color":"red","attributes":["large"],"brand":null}]}]}',
+            allowed_track_ids={1},
+        )
+
+        person = parsed["persons_attributes"][0]
+        self.assertEqual(person["hair"], {"color": "pink", "style": "long"})
+        self.assertEqual(person["expression"], "joyful")
+        self.assertEqual(person["pose"], "standing")
+        self.assertEqual(person["action"], ["smiling"])
+        self.assertEqual(person["facing"], "front")
+        self.assertEqual(person["clothing"], [{
+            "type": "bow", "color": "red", "attributes": ["large"], "brand": None,
+        }])
+
+    def test_qwen_parser_supports_non_photographic_hair_colors_in_text(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"illustration","persons":['
+            '{"trackId":1,"hair":"long purple hair","clothing":"pink jacket with emblem"}]}',
+            allowed_track_ids={1},
+        )
+
+        person = parsed["persons_attributes"][0]
+        self.assertEqual(person["hair"], {"color": "purple", "style": "long"})
+        self.assertEqual(person["clothing"][0]["type"], "jacket")
+        self.assertEqual(person["clothing"][0]["color"], "pink")
+
+    def test_single_person_explicit_hair_description_fills_missing_structured_color(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"illustration",'
+            '"event_description":"A cartoon character with pink hair is shown.",'
+            '"persons":[{"trackId":1,"hair":"unknown"}]}',
+            allowed_track_ids={1},
+        )
+
+        self.assertEqual(parsed["persons_attributes"][0]["hair"]["color"], "pink")
+
+    def test_multi_person_description_never_guesses_hair_owner(self) -> None:
+        parsed = _parse_response(
+            '{"scene":"illustration",'
+            '"event_description":"A pink-haired character stands beside another person.",'
+            '"persons":[{"trackId":1,"hair":"unknown"},{"trackId":2,"hair":"unknown"}]}',
+            allowed_track_ids={1, 2},
+        )
+
+        self.assertEqual(
+            [item["hair"]["color"] for item in parsed["persons_attributes"]],
+            ["unknown", "unknown"],
+        )
+
+
+class SemanticTrackFrameTests(unittest.TestCase):
+    def test_manual_review_candidate_is_added_only_to_semantic_track_copy(self) -> None:
+        tracks = [FrameTrack(0, [])]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "frame_0.jpg"
+            Image.new("RGB", (200, 100), "white").save(path)
+            semantic_tracks = _semantic_tracks_with_review_candidates(
+                tracks,
+                [str(path)],
+                [{
+                    "trackId": 1000002,
+                    "entityType": "person",
+                    "className": "person",
+                    "bbox": {"x": 10, "y": 10, "width": 20, "height": 30},
+                    "timestamp": 5.0,
+                    "imageWidth": 100,
+                    "imageHeight": 100,
+                    "personId": "video:manual-person:1",
+                }],
+                segment_start=5.0,
+                tracking_fps=3.0,
+            )
+
+        self.assertEqual(tracks[0].tracks, [])
+        self.assertEqual(semantic_tracks[0].tracks[0]["trackId"], 1000002)
+        self.assertEqual(semantic_tracks[0].tracks[0]["bbox"], [20.0, 10.0, 40.0, 30.0])
+        self.assertEqual(semantic_tracks[0].tracks[0]["source"], "manual")
+
+    def test_labelled_frames_and_manifest_use_real_track_ids(self) -> None:
+        tracks = [
+            FrameTrack(0, [{
+                "trackId": 9, "className": "person", "bbox": [2, 3, 20, 30],
+                "detectionConfidence": 0.9,
+            }]),
+            FrameTrack(1, [{
+                "trackId": 4, "className": "book", "bbox": [5, 6, 15, 12],
+                "detectionConfidence": 0.8,
+            }]),
+        ]
+        with TemporaryDirectory() as directory:
+            paths = []
+            for index in range(2):
+                path = Path(directory) / f"frame_{index}.jpg"
+                Image.new("RGB", (64, 48), "white").save(path)
+                paths.append(str(path))
+
+            output_paths, candidates = _prepare_semantic_track_frames(
+                paths, tracks, directory, max_frames=2,
+            )
+
+            self.assertEqual(len(output_paths), 2)
+            self.assertTrue(all(Path(path).exists() for path in output_paths))
+            self.assertEqual(
+                {(item["trackId"], item["entityType"]) for item in candidates},
+                {(9, "person"), (4, "object")},
+            )
 
 
 class ProviderCompatibilityTests(unittest.TestCase):
@@ -735,6 +873,88 @@ class SemanticEvidenceTests(unittest.TestCase):
         self.assertEqual(result["events"][0]["type"], "visual_activity")
         self.assertIn("bird", result["events"][0]["description"])
         self.assertNotIn("butterfly", result["events"][0]["description"])
+
+    def test_person_attributes_bind_by_track_id_not_array_position(self) -> None:
+        tracks = [FrameTrack(0, [
+            {
+                "trackId": 7, "className": "person", "bbox": [10, 20, 30, 40],
+                "detectionConfidence": 0.9, "trackingConfidence": 0.9,
+            },
+            {
+                "trackId": 2, "className": "person", "bbox": [60, 20, 30, 40],
+                "detectionConfidence": 0.9, "trackingConfidence": 0.9,
+            },
+        ])]
+        semantic = SegmentSemantic(
+            scene={}, camera={}, objects_attributes=[], events=[],
+            persons_attributes=[
+                {"trackId": 2, "gender": "female", "action": ["reading"]},
+                {"trackId": 7, "gender": "male", "action": ["standing"]},
+            ],
+        )
+
+        result = merge_results(
+            tracks=tracks,
+            fine_objects=[],
+            semantic=semantic,
+            depth_result=SimpleNamespace(objects_depths=[]),
+        )
+
+        by_track = {person["trackId"]: person for person in result["persons"]}
+        self.assertEqual(by_track[7]["gender"], "male")
+        self.assertEqual(by_track[7]["action"], ["standing"])
+        self.assertEqual(by_track[2]["gender"], "female")
+        self.assertEqual(by_track[2]["action"], ["reading"])
+
+    def test_unbound_person_attributes_do_not_fall_back_to_array_position(self) -> None:
+        tracks = [FrameTrack(0, [{
+            "trackId": 7, "className": "person", "bbox": [10, 20, 30, 40],
+            "detectionConfidence": 0.9, "trackingConfidence": 0.9,
+        }])]
+        semantic = SegmentSemantic(
+            scene={}, camera={}, objects_attributes=[], events=[],
+            persons_attributes=[{"gender": "female", "action": ["reading"]}],
+        )
+
+        result = merge_results(
+            tracks=tracks,
+            fine_objects=[],
+            semantic=semantic,
+            depth_result=SimpleNamespace(objects_depths=[]),
+        )
+
+        self.assertEqual(result["persons"][0]["gender"], "unknown")
+        self.assertEqual(result["persons"][0]["action"], [])
+
+    def test_object_attributes_bind_only_to_matching_track_id(self) -> None:
+        tracks = [FrameTrack(0, [
+            {
+                "trackId": 3, "className": "bird", "bbox": [10, 20, 30, 40],
+                "detectionConfidence": 0.9, "trackingConfidence": 0.9,
+            },
+            {
+                "trackId": 8, "className": "bird", "bbox": [60, 20, 30, 40],
+                "detectionConfidence": 0.9, "trackingConfidence": 0.9,
+            },
+        ])]
+        semantic = self._semantic(
+            [
+                {"trackId": 8, "name": "bird", "color": "white"},
+                {"trackId": 3, "name": "bird", "color": "brown"},
+            ],
+            [],
+        )
+
+        result = merge_results(
+            tracks=tracks,
+            fine_objects=[],
+            semantic=semantic,
+            depth_result=SimpleNamespace(objects_depths=[]),
+        )
+
+        by_track = {item["trackId"]: item for item in result["objects"]}
+        self.assertEqual(by_track[3]["color"], "brown")
+        self.assertEqual(by_track[8]["color"], "white")
 
 
 if __name__ == "__main__":

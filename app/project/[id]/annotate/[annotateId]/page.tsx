@@ -23,16 +23,18 @@ import {
   exportCoco,
   generateVideoDescription,
   generateSemanticVideoDescription,
+  type CustomJsonExportOptions,
 } from '@/services/video-annotation/export-service'
 import { visualEventsFor } from '@/services/video-annotation/visual-events'
 import { isUntouchedDraftSegment, MIN_MANUAL_SEGMENT_DURATION } from '@/services/video-annotation/segment-split'
 import {
   clampBox,
   convertEntityType,
+  fillEmptyPersonAttributes,
   frameDisplayEntities,
   legacyFrame,
   nearestFrame,
-  nextTrackId,
+  personDisplayId,
   renameObjectLabel,
   replaceObservation,
   trackRefKey,
@@ -44,7 +46,7 @@ import type {
   AnnotateSet, BBox, ExportFormat,
   SegmentState, VideoTaskItem, VideoAnnotation, SegmentAnnotation,
   PersonAnnotation, ObjectAnnotation, SceneAnnotation, CameraAnnotation, EventAnnotation,
-  AnnotationExecutionMode, FrameAnnotation, SpatialEntityType
+  AnnotationExecutionMode, FrameAnnotation, SpatialEntityType, PersonAnalysisResult
 } from '@/services/video-annotation/types'
 
 type PagePhase = 'no_videos' | 'uploading' | 'ready_uploaded' | 'detecting' | 'segments_pending' | 'annotating' | 'completed'
@@ -66,6 +68,10 @@ function formatSplitTime(seconds: number): string {
   const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
   const minutes = Math.floor(safe / 60)
   return `${minutes}:${(safe % 60).toFixed(3).padStart(6, '0')}`
+}
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds))
 }
 
 function hasRealData(human: SegmentAnnotation | null, model: SegmentAnnotation | null): boolean {
@@ -126,6 +132,7 @@ function TrackReviewEditor({
   selectedFrameIndex,
   selectedFrameLabel,
   selectedSourceLabels,
+  onAnalyzePerson,
   onDelete,
   onSave,
   onConvert,
@@ -136,6 +143,7 @@ function TrackReviewEditor({
   selectedFrameIndex: number
   selectedFrameLabel?: string
   selectedSourceLabels: string[]
+  onAnalyzePerson: (trackId: number, frameIndex: number) => Promise<PersonAnalysisResult>
   onDelete: (trackId: number, entityType: SpatialEntityType) => void
   onSave: (updated: PersonAnnotation | ObjectAnnotation, scope: ObjectLabelRenameScope, sourceLabels?: string[], frameIndex?: number) => void
   onConvert: (scope: 'frame' | 'track', targetType: SpatialEntityType, objectLabel?: string) => void
@@ -151,6 +159,9 @@ function TrackReviewEditor({
   )
   const [dirty, setDirty] = useState(false)
   const [conversionLabel, setConversionLabel] = useState('')
+  const [analysisStatus, setAnalysisStatus] = useState<'idle' | 'running' | 'ready' | 'failed'>('idle')
+  const [analysisResult, setAnalysisResult] = useState<PersonAnalysisResult | null>(null)
+  const [analysisError, setAnalysisError] = useState('')
 
   if (!edits) return null
 
@@ -158,7 +169,14 @@ function TrackReviewEditor({
     <div className="mb-4 p-3 rounded-lg border border-gv-border bg-gv-surface">
       <h4 className="text-sm font-semibold text-gv-text mb-2 flex items-center justify-between">
         <span>
-          Track {selectedTrackId}
+          {'gender' in edits
+            ? `Person ${personDisplayId((edits as PersonAnnotation).personId, selectedTrackId)}`
+            : `Object Track ${selectedTrackId}`}
+          {'gender' in edits && (
+            <span className="ml-2 text-xs text-gv-text-muted font-normal">
+              (segment Track {selectedTrackId})
+            </span>
+          )}
           {('_className' in edits) && (
             <span className="ml-2 text-xs text-gv-text-muted font-normal">
               ({edits._className})
@@ -182,6 +200,56 @@ function TrackReviewEditor({
         detectionConfidence={(edits as unknown as Record<string, unknown>)._detectionConfidence as number | undefined}
         frameLabel={selectedFrameLabel}
       />
+      {'gender' in edits && (
+        <div className="mt-3 rounded-lg border border-gv-border/60 bg-gv-bg/60 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={analysisStatus === 'running'}
+              onClick={() => {
+                setAnalysisStatus('running')
+                setAnalysisError('')
+                setAnalysisResult(null)
+                void onAnalyzePerson(selectedTrackId, selectedFrameIndex).then(result => {
+                  setAnalysisResult(result)
+                  setAnalysisStatus('ready')
+                }).catch(error => {
+                  setAnalysisError(error instanceof Error ? error.message : String(error))
+                  setAnalysisStatus('failed')
+                })
+              }}
+              className="rounded bg-gv-pink/10 px-3 py-1.5 text-xs font-medium text-gv-pink hover:bg-gv-pink/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {analysisStatus === 'running' ? 'Analyzing Selected Person…' : 'Analyze Selected Person'}
+            </button>
+            <span className="text-xs text-gv-text-muted">
+              Preview only; existing reviewed values are never overwritten.
+            </span>
+          </div>
+          {analysisResult && (
+            <div className="mt-3 space-y-2 text-xs">
+              <p className="text-gv-text-muted">
+                Suggested by {analysisResult.source === 'remote_api' ? 'Remote API' : 'Local Qwen'} at {analysisResult.timestamp.toFixed(3)}s
+              </p>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-gv-surface p-2 text-gv-text">
+                {JSON.stringify(analysisResult.person, null, 2)}
+              </pre>
+              <button
+                type="button"
+                onClick={() => {
+                  setEdits(fillEmptyPersonAttributes(edits as PersonAnnotation, analysisResult.person))
+                  setDirty(true)
+                }}
+                className="rounded bg-gv-green/20 px-3 py-1.5 font-medium text-gv-green-deep hover:bg-gv-green/30"
+              >
+                Fill Empty Fields (Not Saved Yet)
+              </button>
+              <p className="text-gv-gold-dark">Review the fields, then click Save Changes.</p>
+            </div>
+          )}
+          {analysisError && <p className="mt-2 text-xs text-gv-pink">{analysisError}</p>}
+        </div>
+      )}
       <div className="mt-3 border-t border-gv-border/60 pt-3">
         <p className="mb-2 text-xs font-medium text-gv-text">
           Wrong type? Convert {selectedEntityType === 'person' ? 'Person → Object' : 'Object → Person'}
@@ -316,6 +384,7 @@ export default function AnnotateDetailPage() {
   const spatialSaveRevisionRef = useRef(0)
   const [workerStatus, setWorkerStatus] = useState<string>('checking')
   const [showExport, setShowExport] = useState(false)
+  const [showSegmentExport, setShowSegmentExport] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [annotatingSegments, setAnnotatingSegments] = useState<Set<string>>(new Set())
@@ -497,7 +566,7 @@ export default function AnnotateDetailPage() {
     }
   }, [set, scopedVideos, selectedFailedSegments, retryingSelected, handleAnnotateSegment, fetchSet])
 
-  const handleExport = useCallback(async (format: ExportFormat) => {
+  const handleExport = useCallback(async (format: ExportFormat, options: CustomJsonExportOptions) => {
     if (!set || exporting) return
     setExporting(true)
     try {
@@ -524,7 +593,7 @@ export default function AnnotateDetailPage() {
         summaries.forEach((summary, index) => {
           annotations[index].video.description = summary.description
         })
-        await downloadAsFile(exportCustomJson(annotations), `${set.name}_annotations.json`)
+        await downloadAsFile(exportCustomJson(annotations, options), `${set.name}_annotations.json`)
         if (summaries.some(summary => summary.source === 'fallback')) {
           alert(t('video.export_summary_fallback'))
         }
@@ -542,7 +611,7 @@ export default function AnnotateDetailPage() {
     }
   }, [set, scopedVideos, exporting, lang, t])
 
-  const handleExportCurrentSegment = useCallback(async () => {
+  const handleExportCurrentSegment = useCallback(async (options: CustomJsonExportOptions) => {
     if (!set || !selectedVideoId || selectedSegmentId == null || exporting) return
     const video = (set.videos || []).find(item => item.videoId === selectedVideoId)
     const segment = video?.segments?.find(item => item.segmentId === selectedSegmentId)
@@ -580,10 +649,11 @@ export default function AnnotateDetailPage() {
         annotations: [currentAnnotation],
       }]
       await downloadAsFile(
-        exportCustomJson(singleSegmentExport),
+        exportCustomJson(singleSegmentExport, options),
         `${video.videoId}_segment_${segment.segmentId}.json`,
       )
       if (summary.source === 'fallback') alert(t('video.export_summary_fallback'))
+      setShowSegmentExport(false)
     } catch (error) {
       console.error('[video export] current segment export failed', error)
       alert(t('video.export_failed'))
@@ -632,44 +702,63 @@ export default function AnnotateDetailPage() {
   }, [])
 
   const handleDrawBox = useCallback((box: BBox, imageWidth: number, imageHeight: number) => {
-    if (!set || !selectedVideoId || selectedSegmentId == null || !drawEntityType) return
-    const video = set.videos.find(item => item.videoId === selectedVideoId)
+    const currentSet = setRef.current
+    if (!currentSet || !selectedVideoId || selectedSegmentId == null || !drawEntityType) return
+    const video = currentSet.videos.find(item => item.videoId === selectedVideoId)
     const segment = video?.segments.find(item => item.segmentId === selectedSegmentId)
     const source = segment ? getEffectiveAnnotation(segment) : null
     if (!video || !segment || !source) return
-    let annotation = deepClone(source)
-    const frame = editingFrameFor(annotation, segment, video, selectedFrameIndex)
-    const trackId = nextTrackId(annotation)
+    const frame = editingFrameFor(source, segment, video, selectedFrameIndex)
     const normalizedBox = clampBox(box, imageWidth, imageHeight)
     const className = drawEntityType === 'person' ? 'person' : drawObjectName.trim()
     if (!className) return
-    annotation = upsertFrame(annotation, {
-      ...frame, imageWidth, imageHeight,
-      observations: [...frame.observations, { trackId, entityType: drawEntityType, className, bbox: normalizedBox, source: 'manual' }],
-    })
-    if (drawEntityType === 'person') {
-      annotation.persons = [...annotation.persons, {
-        trackId, personId: null, gender: 'unknown', ageGroup: 'unknown',
-        hair: { color: 'unknown', style: 'unknown' }, expression: 'unknown', pose: 'unknown',
-        action: [], facing: 'unknown', occlusion: 0, clothing: [], bbox: normalizedBox,
-        depth: null, keypoints: [], _className: 'manual',
-      }]
-    } else {
-      annotation.objects = [...annotation.objects, {
-        trackId, name: className, category: 'other', color: 'unknown', brand: null,
-        bbox: normalizedBox, depth: null,
-      }]
-    }
-    const nextSet: AnnotateSet = { ...set, videos: set.videos.map(item => item.videoId !== selectedVideoId ? item : ({
-      ...item,
-      segments: item.segments.map(current => current.segmentId !== selectedSegmentId ? current : ({ ...current, humanAnnotation: annotation })),
-    })) }
-    setSelectedFrameIndex(frame.frameIndex)
-    setSelectedTrackId(trackId)
-    setSelectedEntityType(drawEntityType)
+    const entityType = drawEntityType
+    const videoId = selectedVideoId
+    const segmentId = selectedSegmentId
+    setSelectedTrackId(null)
+    setSelectedEntityType(null)
     setCanvasMode('view')
-    persistSegmentAnnotation(nextSet, selectedVideoId, selectedSegmentId, annotation)
-  }, [set, selectedVideoId, selectedSegmentId, selectedFrameIndex, drawEntityType, drawObjectName, persistSegmentAnnotation])
+    setSpatialSaveStatus('saving')
+    const revision = ++spatialSaveRevisionRef.current
+    spatialSaveQueueRef.current = spatialSaveQueueRef.current.catch(() => {}).then(async () => {
+      const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/frames/manual-track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId,
+          segmentId,
+          frameIndex: frame.frameIndex,
+          timestamp: frame.timestamp,
+          imageWidth,
+          imageHeight,
+          entityType,
+          className,
+          bbox: normalizedBox,
+        }),
+      })
+      const payload = await response.json().catch(() => null) as {
+        data?: AnnotateSet
+        manualTrack?: { trackId?: number; personId?: string | null }
+      } | null
+      if (!response.ok || !payload?.data || !Number.isSafeInteger(payload.manualTrack?.trackId)) {
+        throw new Error(apiErrorMessage(payload, `HTTP ${response.status}`))
+      }
+      const trackId = payload.manualTrack!.trackId!
+      setRef.current = payload.data
+      setSet(payload.data)
+      updateAnnotateSet(id, annotateId, payload.data)
+      setSelectedFrameIndex(frame.frameIndex)
+      setSelectedTrackId(trackId)
+      setSelectedEntityType(entityType)
+      if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('saved')
+    }).catch(error => {
+      console.error('[manual track] save failed', error)
+      if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('failed')
+    })
+  }, [
+    id, annotateId, updateAnnotateSet, selectedVideoId, selectedSegmentId,
+    selectedFrameIndex, drawEntityType, drawObjectName,
+  ])
 
   const handleResizeBox = useCallback((trackId: number, entityType: SpatialEntityType, newBox: BBox, imageWidth: number, imageHeight: number) => {
     if (!set || !selectedVideoId || selectedSegmentId == null) return
@@ -1229,13 +1318,25 @@ export default function AnnotateDetailPage() {
       .filter(object => object._textContent || object.category.trim().toLowerCase() === 'text')
       .map(object => object.trackId),
   ), [activeAnnotation])
+  const visibleFramePersonCount = useMemo(() => (
+    selectedFrame?.observations.filter(observation => observation.entityType === 'person').length || 0
+  ), [selectedFrame])
   const visibleFrameObjectCount = useMemo(() => (
     selectedFrame?.observations.filter(observation => (
       observation.entityType === 'object' && !ocrTrackIds.has(observation.trackId)
     )).length || 0
   ), [selectedFrame, ocrTrackIds])
+  const visibleFrameOcrCount = useMemo(() => (
+    selectedFrame?.observations.filter(observation => (
+      observation.entityType === 'object' && ocrTrackIds.has(observation.trackId)
+    )).length || 0
+  ), [selectedFrame, ocrTrackIds])
+  const segmentPersonTrackCount = activeAnnotation?.persons?.length || 0
   const segmentObjectTrackCount = useMemo(() => (
     (activeAnnotation?.objects || []).filter(object => !ocrTrackIds.has(object.trackId)).length
+  ), [activeAnnotation, ocrTrackIds])
+  const segmentOcrTrackCount = useMemo(() => (
+    (activeAnnotation?.objects || []).filter(object => ocrTrackIds.has(object.trackId)).length
   ), [activeAnnotation, ocrTrackIds])
   const activePendingTrackKeys = useMemo(() => {
     if (!selectedVideoId || selectedSegmentId == null || !selectedFrame) return new Set<string>()
@@ -1268,6 +1369,58 @@ export default function AnnotateDetailPage() {
       `${selectedVideo.videoId}_segment_${selectedSegment.segmentId}_frame_${selectedFrame.frameIndex}.json`,
     )
   }, [selectedVideo, selectedSegment, activeAnnotation, selectedFrame])
+
+  const handleAnalyzeSelectedPerson = useCallback(async (
+    trackId: number,
+    frameIndex: number,
+  ): Promise<PersonAnalysisResult> => {
+    if (!selectedVideoId || selectedSegmentId == null) {
+      throw new Error('Select a video segment before analyzing a person.')
+    }
+    const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/person-analysis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoId: selectedVideoId,
+        segmentId: selectedSegmentId,
+        frameIndex,
+        trackId,
+      }),
+    })
+    const submitted = await response.json().catch(() => null) as {
+      data?: { jobId?: string }
+      error?: unknown
+    } | null
+    if (!response.ok || !submitted?.data?.jobId) {
+      throw new Error(apiErrorMessage(submitted, `Person analysis failed (HTTP ${response.status})`))
+    }
+
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      await waitFor(1000)
+      const statusResponse = await fetch(
+        `/api/video-annotation/annotate-sets/${annotateId}/person-analysis?jobId=${encodeURIComponent(submitted.data.jobId)}`,
+        { cache: 'no-store' },
+      )
+      const statusPayload = await statusResponse.json().catch(() => null) as {
+        data?: {
+          status?: string
+          result?: PersonAnalysisResult | null
+          error?: string | null
+        }
+        error?: unknown
+      } | null
+      if (!statusResponse.ok || !statusPayload?.data) {
+        throw new Error(apiErrorMessage(statusPayload, `Person analysis status failed (HTTP ${statusResponse.status})`))
+      }
+      if (statusPayload.data.status === 'completed' && statusPayload.data.result) {
+        return statusPayload.data.result
+      }
+      if (statusPayload.data.status === 'failed' || statusPayload.data.status === 'cancelled') {
+        throw new Error(statusPayload.data.error || 'Person analysis did not complete.')
+      }
+    }
+    throw new Error('Person analysis timed out after 3 minutes.')
+  }, [annotateId, selectedVideoId, selectedSegmentId])
 
   // ── Keyboard delete ────────────────────────────────
 
@@ -1345,9 +1498,9 @@ export default function AnnotateDetailPage() {
           <>
             {selectedSegmentId != null && (
               <button
-                onClick={() => void handleExportCurrentSegment()}
+                onClick={() => setShowSegmentExport(true)}
                 disabled={exporting}
-                title="Includes every non-OCR Track observed anywhere in the current segment, not only the selected frame."
+                title="Exports the current segment; corrected OCR and speech can be included from the export dialog."
                 className="btn-outline rounded-lg px-4 py-2 text-sm disabled:opacity-50"
               >
                 {exporting ? t('video.generating_summary') : t('video.export_current_segment')}
@@ -1738,7 +1891,9 @@ export default function AnnotateDetailPage() {
                   <span>{selectedFrame ? `Frame ${selectedFrame.frameIndex} · ${selectedFrame.timestamp.toFixed(3)}s` : 'No frame selected'}</span>
                   {selectedFrame && (
                     <span>
-                      Current frame: {visibleFrameObjectCount} objects · Segment: {segmentObjectTrackCount} tracks
+                      Current frame: {visibleFramePersonCount} people · {visibleFrameObjectCount} objects · {visibleFrameOcrCount} OCR
+                      {' · '}
+                      Segment: {segmentPersonTrackCount} people · {segmentObjectTrackCount} objects · {segmentOcrTrackCount} OCR
                     </span>
                   )}
                   {!activeAnnotation?.frames?.length && activeAnnotation && (
@@ -1748,7 +1903,7 @@ export default function AnnotateDetailPage() {
                   {selectedFrame && <button
                     type="button"
                     onClick={() => void handleExportCurrentFrame()}
-                    title="Exports only non-OCR objects visible in this selected sampled frame."
+                    title="Exports people and non-OCR objects visible in this selected sampled frame."
                     className="rounded bg-gv-bg px-2 py-1 text-gv-text-dim hover:bg-gv-pink/10"
                   >Export Current Frame JSON</button>}
                   {spatialSaveStatus !== 'idle' && (
@@ -1760,8 +1915,8 @@ export default function AnnotateDetailPage() {
                 {canvasMode === 'draw' && (
                   <div className="mb-2 flex items-center gap-2 rounded-lg border border-gv-border bg-gv-surface p-2 text-xs">
                     <span className="text-gv-text-muted">Choose label:</span>
-                    <button type="button" onClick={() => setDrawEntityType('person')} className={`rounded px-2 py-1 ${drawEntityType === 'person' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>Person</button>
-                    <button type="button" onClick={() => setDrawEntityType('object')} className={`rounded px-2 py-1 ${drawEntityType === 'object' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>Object</button>
+                    <button type="button" disabled={spatialSaveStatus === 'saving'} onClick={() => setDrawEntityType('person')} className={`rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${drawEntityType === 'person' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>Person</button>
+                    <button type="button" disabled={spatialSaveStatus === 'saving'} onClick={() => setDrawEntityType('object')} className={`rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${drawEntityType === 'object' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>Object</button>
                     {drawEntityType === 'object' && <input autoFocus value={drawObjectName} onChange={event => setDrawObjectName(event.target.value)} placeholder="Required object label" className="min-w-40 rounded border border-gv-border bg-gv-bg px-2 py-1 text-gv-text" />}
                     {drawEntityType === null && <span className="text-gv-gold-dark">Select a type before drawing.</span>}
                     {drawEntityType === 'object' && !drawObjectName.trim() && <span className="text-gv-gold-dark">Enter an object label.</span>}
@@ -1774,7 +1929,9 @@ export default function AnnotateDetailPage() {
                   imgWidth={selectedFrame.imageWidth || selectedVideo.width || 1920}
                   imgHeight={selectedFrame.imageHeight || selectedVideo.height || 1080}
                   mode={canvasMode}
-                  drawEnabled={drawEntityType === 'person' || (drawEntityType === 'object' && Boolean(drawObjectName.trim()))}
+                  drawEnabled={spatialSaveStatus !== 'saving' && (
+                    drawEntityType === 'person' || (drawEntityType === 'object' && Boolean(drawObjectName.trim()))
+                  )}
                   hiddenTrackKeys={activePendingTrackKeys}
                   onModeChange={handleCanvasModeChange}
                   onDrawBox={handleDrawBox}
@@ -1794,7 +1951,11 @@ export default function AnnotateDetailPage() {
                   <p className="text-xs text-gv-text-muted">{(selectedSegment as unknown as Record<string,string>).error || 'Some pipeline phases failed.'}</p>
                   <p className="text-xs text-gv-text-muted mt-2">Switch to <strong>Draw</strong> mode to add boxes manually, or edit JSON below.</p>
                 </div>
-                <JsonEditor annotation={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end, scene: { tags: [], place: { type: 'unknown', indoor: true, weather: null, lighting: 'unknown', timeOfDay: 'unknown' } }, camera: { shot: 'unknown', angle: 'unknown', movement: [], lens: 'unknown', stabilization: 'unknown' }, persons: [], objects: [], events: [] }} onSave={handleJsonSave} />
+                <JsonEditor
+                  annotation={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end, scene: { tags: [], place: { type: 'unknown', indoor: true, weather: null, lighting: 'unknown', timeOfDay: 'unknown' } }, camera: { shot: 'unknown', angle: 'unknown', movement: [], lens: 'unknown', stabilization: 'unknown' }, persons: [], objects: [], events: [] }}
+                  segmentMetadata={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end }}
+                  onSave={handleJsonSave}
+                />
               </div>
             ) : activeAnnotation ? (
               <>
@@ -1824,6 +1985,7 @@ export default function AnnotateDetailPage() {
                       && observation.entityType === selectedEntityType
                     ))?.className}
                     selectedSourceLabels={selectedObjectSourceLabels}
+                    onAnalyzePerson={handleAnalyzeSelectedPerson}
                     onDelete={handleDeleteTrack}
                     onSave={handleSaveEdits}
                     onConvert={handleConvertEntityType}
@@ -1848,7 +2010,11 @@ export default function AnnotateDetailPage() {
                   annotation={activeAnnotation}
                   onSave={handleSaveSegEdits}
                 />
-                <JsonEditor annotation={activeAnnotation} onSave={handleJsonSave} />
+                <JsonEditor
+                  annotation={activeAnnotation}
+                  segmentMetadata={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end }}
+                  onSave={handleJsonSave}
+                />
               </>
             ) : (
               <div className="flex items-center justify-center h-full text-gv-text-dim text-sm">Select a segment to view annotations</div>
@@ -1881,6 +2047,16 @@ export default function AnnotateDetailPage() {
         onExport={handleExport}
         busy={exporting}
         busyText={t('video.generating_summary')}
+      />
+      <ExportDialog
+        open={showSegmentExport}
+        onClose={() => { if (!exporting) setShowSegmentExport(false) }}
+        onExport={(_format, options) => handleExportCurrentSegment(options)}
+        busy={exporting}
+        busyText={t('video.generating_summary')}
+        jsonOnly
+        title="Export Current Segment JSON"
+        description="Choose whether to include corrected OCR and speech transcript content."
       />
       <UndoToast
         toasts={toasts}

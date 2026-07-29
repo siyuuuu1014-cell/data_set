@@ -8,9 +8,10 @@ import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
 import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/services/video-annotation/model-result'
 import {
   buildAnnotationOptions,
+  buildReviewTrackCandidates,
   precisionAvailabilityError,
 } from '@/services/video-annotation/annotation-options'
-import type { AnnotationExecutionMode } from '@/services/video-annotation/types'
+import type { AnnotateSet, AnnotationExecutionMode, SegmentState } from '@/services/video-annotation/types'
 
 // POST /api/video-annotation/segments/[id]/annotate — trigger annotation
 export async function POST(
@@ -59,6 +60,19 @@ export async function POST(
       }
     }
 
+    const taskPath = getTaskPath(body.annotateSetId)
+    if (!existsSync(taskPath)) {
+      return Response.json({ error: { code: 'NOT_FOUND', message: 'Task not found' } }, { status: 404 })
+    }
+    const reviewCandidates = await withTaskFileLock(taskPath, async () => {
+      const raw = await readFile(taskPath, 'utf-8')
+      const task = JSON.parse(raw) as AnnotateSet
+      const segment = task.videos
+        ?.find(video => video.videoId === body.videoId)
+        ?.segments?.find(item => item.segmentId === parseInt(segmentId, 10)) as SegmentState | undefined
+      return segment ? buildReviewTrackCandidates(segment) : []
+    })
+
     // Find video file
     const videoDir = getUploadDir(body.videoId)
     const files = await readdir(videoDir)
@@ -78,11 +92,11 @@ export async function POST(
         videoId: body.videoId,
         segmentId: parseInt(segmentId, 10),
         mode,
+        reviewCandidates,
       }),
     })
 
     // Store jobId mapping
-    const taskPath = getTaskPath(body.annotateSetId)
     await withTaskFileLock(taskPath, async () => {
       if (!existsSync(taskPath)) return
       const raw = await readFile(taskPath, 'utf-8')

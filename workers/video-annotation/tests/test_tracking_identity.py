@@ -65,9 +65,15 @@ class TrackerAssociationTests(unittest.TestCase):
 
         self.assertEqual([frame.frame_index for frame in target], [4, 5])
 
-    def test_detection_batch_rejects_missing_frame_results(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "1 frame results for a 2-frame batch"):
-            _extend_detection_batch([], [FrameDetection(0, [])], offset=0, expected_count=2)
+    def test_detection_batch_mismatch_is_gracefully_skipped(self) -> None:
+        """An inconsistent batch warns and continues without discarding previous batches."""
+        target: list[FrameDetection] = [FrameDetection(0, [])]
+        _extend_detection_batch(
+            target, [FrameDetection(1, [])], offset=1, expected_count=2,
+        )
+        # The mismatched batch was skipped; the target retains only the previous item.
+        self.assertEqual(len(target), 1)
+        self.assertEqual(target[0].frame_index, 0)
 
 
 class ByteTrackBackendTests(unittest.TestCase):

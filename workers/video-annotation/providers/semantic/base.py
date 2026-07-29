@@ -41,6 +41,7 @@ class SemanticProvider(Protocol):
         ontology: dict,
         prompt_template: str,
         examples: list[dict],
+        track_candidates: list[dict] | None = None,
     ) -> SegmentSemantic:
         """Generate structured semantic attributes for a segment."""
         ...

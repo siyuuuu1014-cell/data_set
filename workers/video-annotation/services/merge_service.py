@@ -10,6 +10,22 @@ logger = logging.getLogger(__name__)
 _OCR_TRACK_ID_BASE = 1_000_000
 
 
+def _semantic_attributes_by_track(items: list[dict]) -> dict[int, dict]:
+    """Index only explicit model Track IDs; never infer identity from order."""
+    indexed: dict[int, dict] = {}
+    for item in items:
+        if not isinstance(item, dict) or isinstance(item.get("trackId"), bool):
+            continue
+        try:
+            track_id = int(item["trackId"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if track_id < 0 or track_id in indexed:
+            continue
+        indexed[track_id] = item
+    return indexed
+
+
 def merge_results(
     tracks: list,              # list of FrameTrack from ByteTrack
     fine_objects: list[dict],  # LocateAnything-3B results
@@ -82,8 +98,10 @@ def merge_results(
     # ── Build objects list ─────────────────────────────
     objects: list[dict] = []
 
-    # Collect Qwen-described objects first (with semantic names, no precise bbox)
+    # Semantic entity attributes are accepted only when the provider returned
+    # an explicit detector Track ID. Array position is not an identity signal.
     qwen_objects: list[dict] = semantic.objects_attributes if semantic else []
+    qwen_objects_by_track = _semantic_attributes_by_track(qwen_objects)
 
     # Match fine_objects (LocateAnything) to tracks
     matched_track_ids: set[int] = set()
@@ -108,12 +126,18 @@ def merge_results(
                 best_iou = iou
                 best_tid = tid
 
+        semantic_match = qwen_objects_by_track.get(best_tid, {}) if best_tid is not None else {}
+        fine_color = fo.get("color")
         obj_entry = {
             "trackId": best_tid if best_tid is not None else fo.get("trackId", len(objects) + 100),
             "name": fo.get("className", "unknown"),
             "category": _infer_category(fo.get("className", "")),
-            "color": fo.get("color", "unknown"),
-            "brand": fo.get("brand"),
+            "color": (
+                semantic_match.get("color") or "unknown"
+                if not fine_color or str(fine_color).lower() == "unknown"
+                else fine_color
+            ),
+            "brand": fo.get("brand") or semantic_match.get("brand"),
             "bbox": {"x": int(fo_x), "y": int(fo_y), "width": int(fo_w), "height": int(fo_h)},
             "depth": _get_depth_for_track(depth_result, best_tid),
         }
@@ -125,9 +149,9 @@ def merge_results(
     # ── Build persons list ─────────────────────────────
     persons: list[dict] = []
 
-    # Match semantic person attributes to remaining tracks
+    # Match semantic person attributes to remaining tracks by explicit Track ID.
     track_attrs: list[dict] = semantic.persons_attributes if semantic else []
-    person_idx = 0  # match Qwen person[i] to ByteTrack person i
+    track_attrs_by_id = _semantic_attributes_by_track(track_attrs)
 
     for tid, t in track_map.items():
         if tid in dedup_ids:
@@ -139,8 +163,7 @@ def merge_results(
 
         # Non-person tracks (birds, butterflies, cars, etc.) go to objects
         if className != "person":
-            # Try to match with a Qwen object description
-            qwen_match = _match_qwen_object(qwen_objects, className)
+            qwen_match = qwen_objects_by_track.get(tid, {})
             objects.append({
                 "trackId": tid,
                 # A semantic model may enrich attributes, but it must never
@@ -160,10 +183,7 @@ def merge_results(
             })
             continue
 
-        attrs: dict = {}
-        if person_idx < len(track_attrs):
-            attrs = track_attrs[person_idx]
-            person_idx += 1
+        attrs = track_attrs_by_id.get(tid, {})
 
         person = {
             "trackId": tid,

@@ -11,9 +11,11 @@ import tempfile
 import time
 import unicodedata
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from config import (
     DEFAULT_TRACKING_SAMPLE_FPS,
@@ -29,6 +31,7 @@ from config import (
 from providers.depth.base import DepthResult
 from providers.registry import create_provider, is_provider_enabled, mark_loaded
 from providers.semantic.remote_api import RemoteApiSemantic, semantic_inference_mode
+from providers.tracker.base import FrameTrack
 from services.frame_sampling import (
     extract_frames,
     extract_segment_keyframes,
@@ -63,6 +66,182 @@ _ADAPTIVE_FILL_CATEGORIES = (
     "chair", "table", "car", "bottle", "cup", "backpack", "door", "window",
     "laptop", "television", "book", "shoe", "hat", "glasses", "food",
 )
+
+_MAX_SEMANTIC_TRACK_FRAMES = 3
+
+
+def _semantic_tracks_with_review_candidates(
+    tracks: list[Any],
+    frame_paths: list[str],
+    review_candidates: Any,
+    segment_start: float,
+    tracking_fps: float,
+) -> list[Any]:
+    """Add human-drawn boxes to a semantic-only copy of tracking output.
+
+    These candidates never enter detector/tracker results. They exist only so
+    a normal segment re-run can enrich a manual card by its stable Track ID.
+    """
+    copied = [
+        FrameTrack(int(frame.frame_index), [dict(item) for item in frame.tracks])
+        for frame in tracks
+    ]
+    if not frame_paths or not isinstance(review_candidates, list):
+        return copied
+
+    by_index = {int(frame.frame_index): frame for frame in copied}
+    safe_fps = max(float(tracking_fps or 0), 0.001)
+    for candidate in review_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            track_id = int(candidate["trackId"])
+            timestamp = float(candidate["timestamp"])
+            bbox = candidate["bbox"]
+            x = float(bbox["x"])
+            y = float(bbox["y"])
+            width = float(bbox["width"])
+            height = float(bbox["height"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        entity_type = str(candidate.get("entityType") or "")
+        if track_id < 0 or entity_type not in {"person", "object"}:
+            continue
+
+        frame_index = max(0, min(
+            len(frame_paths) - 1,
+            int(round((timestamp - float(segment_start)) * safe_fps)),
+        ))
+        with Image.open(frame_paths[frame_index]) as source:
+            target_width, target_height = source.size
+        source_width = max(float(candidate.get("imageWidth") or target_width), 1.0)
+        source_height = max(float(candidate.get("imageHeight") or target_height), 1.0)
+        scaled_bbox = [
+            x * target_width / source_width,
+            y * target_height / source_height,
+            width * target_width / source_width,
+            height * target_height / source_height,
+        ]
+        frame = by_index.get(frame_index)
+        if frame is None:
+            frame = FrameTrack(frame_index, [])
+            copied.append(frame)
+            by_index[frame_index] = frame
+        if any(int(item.get("trackId", -1)) == track_id for item in frame.tracks):
+            continue
+        frame.tracks.append({
+            "trackId": track_id,
+            "className": "person" if entity_type == "person" else str(candidate.get("className") or "object"),
+            "entityType": entity_type,
+            "bbox": scaled_bbox,
+            "detectionConfidence": 1.0,
+            "trackingConfidence": 1.0,
+            "source": "manual",
+            "personId": candidate.get("personId"),
+        })
+
+    copied.sort(key=lambda frame: int(frame.frame_index))
+    return copied
+
+
+def _prepare_semantic_track_frames(
+    frame_paths: list[str],
+    tracks: list[Any],
+    output_dir: str,
+    max_frames: int = _MAX_SEMANTIC_TRACK_FRAMES,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Create labelled tracking frames so semantic attributes can bind by ID.
+
+    Selection is greedy by previously unseen Track IDs, with people weighted
+    ahead of objects. The labels are part of the image evidence; the matching
+    manifest is also sent as text so the model never has to infer an array
+    position as identity.
+    """
+    usable = [
+        frame for frame in tracks
+        if 0 <= int(getattr(frame, "frame_index", -1)) < len(frame_paths)
+        and getattr(frame, "tracks", None)
+    ]
+    if not usable or max_frames <= 0:
+        return [], []
+
+    selected: list[Any] = []
+    covered: set[int] = set()
+    remaining = list(usable)
+    while remaining and len(selected) < max_frames:
+        def score(frame: Any) -> tuple[int, float, int]:
+            unseen = [
+                item for item in frame.tracks
+                if int(item.get("trackId", -1)) not in covered
+            ]
+            weighted = sum(
+                3 if str(item.get("className") or "") == "person" else 1
+                for item in unseen
+            )
+            confidence = sum(float(item.get("detectionConfidence", 0)) for item in unseen)
+            return weighted, confidence, -int(frame.frame_index)
+
+        best = max(remaining, key=score)
+        if score(best)[0] <= 0:
+            break
+        selected.append(best)
+        covered.update(int(item["trackId"]) for item in best.tracks)
+        remaining.remove(best)
+
+    selected.sort(key=lambda frame: int(frame.frame_index))
+    candidates: dict[int, dict[str, Any]] = {}
+    output_paths: list[str] = []
+    for output_index, frame in enumerate(selected):
+        source_path = frame_paths[int(frame.frame_index)]
+        with Image.open(source_path) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        stroke = max(2, round(min(image.width, image.height) / 240))
+        font_size = max(14, round(min(image.width, image.height) / 24))
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+        except OSError:
+            font = ImageFont.load_default()
+        for item in frame.tracks:
+            try:
+                track_id = int(item["trackId"])
+                x, y, width, height = (float(value) for value in item["bbox"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            class_name = str(item.get("className") or "unknown")
+            entity_type = str(item.get("entityType") or (
+                "person" if class_name == "person" else "object"
+            ))
+            prefix = "P" if entity_type == "person" else "O"
+            label = f"{prefix}{track_id} {class_name}"
+            color = (255, 51, 170) if entity_type == "person" else (85, 190, 90)
+            left = max(0, min(image.width - 1, int(round(x))))
+            top = max(0, min(image.height - 1, int(round(y))))
+            right = max(left + 1, min(image.width, int(round(x + width))))
+            bottom = max(top + 1, min(image.height, int(round(y + height))))
+            draw.rectangle((left, top, right, bottom), outline=color, width=stroke)
+            text_box = draw.textbbox((left, top), label, font=font)
+            text_width = max(1, text_box[2] - text_box[0])
+            text_height = max(1, text_box[3] - text_box[1])
+            label_top = max(0, top - text_height - 4)
+            draw.rectangle(
+                (left, label_top, min(image.width, left + text_width + 6), label_top + text_height + 4),
+                fill=color,
+            )
+            draw.text((left + 3, label_top + 2), label, fill=(0, 0, 0), font=font)
+            candidates.setdefault(track_id, {
+                "trackId": track_id,
+                "entityType": entity_type,
+                "className": class_name,
+                "source": item.get("source") or "model",
+                "personId": item.get("personId"),
+            })
+
+        output_path = str(Path(output_dir) / f"semantic_tracks_{output_index:02d}.jpg")
+        image.save(output_path, format="JPEG", quality=90)
+        output_paths.append(output_path)
+
+    return output_paths, list(candidates.values())
 
 
 def _normalize_grounding_category(value: Any) -> str:
@@ -243,10 +422,12 @@ def _extend_detection_batch(
 ) -> None:
     """Append one provider batch with caller-owned absolute frame indexes."""
     if len(batch_detections) != expected_count:
-        raise RuntimeError(
-            "Detector returned "
-            f"{len(batch_detections)} frame results for a {expected_count}-frame batch"
+        logger.warning(
+            "Detector returned %d frame results for a %d-frame batch; skipping batch",
+            len(batch_detections),
+            expected_count,
         )
+        return
     for local_index, frame_detection in enumerate(batch_detections):
         frame_detection.frame_index = offset + local_index
     detections.extend(batch_detections)
@@ -473,6 +654,35 @@ def run_annotation_pipeline(
         errors.append(f"Keyframe extraction failed: {e}")
         logger.warning("Keyframe extraction failed (will skip visual phases): %s", e)
 
+    semantic_frame_paths = keyframe_paths
+    semantic_track_candidates: list[dict[str, Any]] = []
+    semantic_tracks = _semantic_tracks_with_review_candidates(
+        tracks,
+        frames_paths,
+        opts.get("review_candidates"),
+        segment_start,
+        tracking_fps,
+    )
+    if semantic_tracks and frames_paths:
+        try:
+            labelled_paths, semantic_track_candidates = _prepare_semantic_track_frames(
+                frames_paths,
+                semantic_tracks,
+                keyframes_dir.name,
+            )
+            if labelled_paths:
+                semantic_frame_paths = labelled_paths
+                logger.info(
+                    "Semantic Track binding: %d labelled frames, %d candidates",
+                    len(labelled_paths),
+                    len(semantic_track_candidates),
+                )
+        except Exception as e:
+            # Scene-level semantic analysis remains available even if visual
+            # labelling fails. Without labelled evidence the merge layer will
+            # leave entity attributes unknown instead of guessing by position.
+            logger.warning("Semantic Track frame preparation failed: %s", e)
+
     # Phase 3: local Qwen or the independently configured remote multimodal API.
     # Semantic candidates also keep the
     # following open-vocabulary grounding query bounded.
@@ -481,7 +691,7 @@ def run_annotation_pipeline(
     semantic: Any = None
     if not visual_provider_enabled["qwen_vl"]:
         provider_results["qwen_vl"] = {"status": "disabled"}
-    elif not keyframe_paths:
+    elif not semantic_frame_paths:
         provider_results["qwen_vl"] = {"status": "skipped", "reason": "no_keyframe"}
     else:
         try:
@@ -491,12 +701,13 @@ def run_annotation_pipeline(
                 try:
                     semantic = semantic_provider.annotate_semantic(
                         video_path=video_path,
-                        frame_paths=keyframe_paths,
+                        frame_paths=semantic_frame_paths,
                         start=segment_start,
                         end=segment_end,
                         ontology=opts.get("ontology", {}),
                         prompt_template=opts.get("prompt_template", ""),
                         examples=opts.get("examples"),
+                        track_candidates=semantic_track_candidates,
                     )
                 finally:
                     semantic_provider.unload()
@@ -504,12 +715,13 @@ def run_annotation_pipeline(
                 with _loaded_provider("qwen_vl") as semantic_provider:
                     semantic = semantic_provider.annotate_semantic(
                         video_path=video_path,
-                        frame_paths=keyframe_paths,
+                        frame_paths=semantic_frame_paths,
                         start=segment_start,
                         end=segment_end,
                         ontology=opts.get("ontology", {}),
                         prompt_template=opts.get("prompt_template", ""),
                         examples=opts.get("examples"),
+                        track_candidates=semantic_track_candidates,
                     )
             logger.info("%s: semantic complete", semantic_label)
             provider_results["qwen_vl"] = {
@@ -735,6 +947,41 @@ def run_annotation_pipeline(
         tracking_fps=tracking_fps,
         video_fps=video_fps,
     )
+
+    # Return semantic suggestions for existing manual cards as transport-only
+    # metadata. The web layer applies them to empty fields, then strips them
+    # before persisting/exporting the model annotation.
+    review_person_candidates = {
+        int(item["trackId"]): item
+        for item in semantic_track_candidates
+        if item.get("source") == "manual" and item.get("entityType") == "person"
+    }
+    review_object_ids = {
+        int(item["trackId"])
+        for item in semantic_track_candidates
+        if item.get("source") == "manual" and item.get("entityType") == "object"
+    }
+    if semantic is not None and review_person_candidates:
+        suggestions = [
+            {
+                **item,
+                "personId": review_person_candidates[int(item["trackId"])].get("personId"),
+            }
+            for item in (getattr(semantic, "persons_attributes", []) or [])
+            if (
+                isinstance(item, dict)
+                and item.get("trackId") in review_person_candidates
+            )
+        ]
+        if suggestions:
+            merged["_review_person_suggestions"] = suggestions
+    if semantic is not None and review_object_ids:
+        suggestions = [
+            item for item in (getattr(semantic, "objects_attributes", []) or [])
+            if isinstance(item, dict) and item.get("trackId") in review_object_ids
+        ]
+        if suggestions:
+            merged["_review_object_suggestions"] = suggestions
 
     if errors:
         merged["_pipeline_errors"] = errors

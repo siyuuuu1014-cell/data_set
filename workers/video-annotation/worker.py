@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
-from config import CACHE_DIR, SCENE_THRESHOLD
+from config import CACHE_DIR, DATA_ROOT, SCENE_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +167,33 @@ class JobQueue:
         return None, None
 
     def _execute(self, payload: dict, job_id: str) -> dict:
-        video_path = payload["video_path"]
+        video_path = Path(payload["video_path"]).expanduser().resolve()
+        data_root = Path(DATA_ROOT).expanduser().resolve()
+        if not str(video_path).startswith(str(data_root) + os.sep) and video_path != data_root:
+            raise ValueError("video_path is outside the configured data directory")
+        video_path = str(video_path)
         options = payload.get("options", {})
         mode = options.get("mode", "annotate")
+
+        if mode == "person_analysis":
+            from services.person_analysis import run_person_analysis
+
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id]["progress"] = 10
+                    self._jobs[job_id]["progressDetail"] = "Extracting selected person"
+            result = run_person_analysis(
+                video_path=video_path,
+                timestamp=float(payload["segment_start"]),
+                bbox=options.get("bbox", {}),
+                image_width=float(options.get("image_width", 0)),
+                image_height=float(options.get("image_height", 0)),
+            )
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id]["progress"] = 95
+                    self._jobs[job_id]["progressDetail"] = "Person suggestion ready"
+            return result
 
         if mode == "scene_detect":
             from pipeline import run_scene_detection

@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { CANVAS_MAX_W, CANVAS_MAX_H, CANVAS_MIN_BOX_SIZE } from '@/services/video-annotation/constants'
 import { drawRect, getClassColor } from '@/services/video-annotation/canvas-utils'
+import { personDisplayId } from '@/services/video-annotation/frame-annotations'
 import type { PersonAnnotation, ObjectAnnotation, BBox, SpatialEntityType } from '@/services/video-annotation/types'
 
 type CanvasMode = 'view' | 'draw'
@@ -148,7 +149,7 @@ export function AnnotationCanvas({
       ctx.globalAlpha = isDragging ? 0.4 : isSel ? 1 : 0.7
       drawRect(ctx, p.bbox.x * dynamicScale, p.bbox.y * dynamicScale, p.bbox.width * dynamicScale, p.bbox.height * dynamicScale,
         isSel ? '#FF6CCE' : getClassColor('person'),
-        `p${p.trackId}:${(p as unknown as Record<string, unknown>)._className || p.gender || 'obj'}`,
+        `${personDisplayId(p.personId, p.trackId)}:${(p as unknown as Record<string, unknown>)._className || p.gender || 'person'}`,
         isSel ? 3 : 2)
       ctx.globalAlpha = 1
     })

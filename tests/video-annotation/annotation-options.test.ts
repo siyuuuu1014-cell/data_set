@@ -3,9 +3,10 @@ import test from 'node:test'
 
 import {
   buildAnnotationOptions,
+  buildReviewTrackCandidates,
   precisionAvailabilityError,
 } from '../../services/video-annotation/annotation-options'
-import type { DeploymentStatus } from '../../services/video-annotation/types'
+import type { DeploymentStatus, SegmentAnnotation, SegmentState } from '../../services/video-annotation/types'
 
 function deployment(
   mode: DeploymentStatus['mode'],
@@ -57,6 +58,39 @@ test('precision annotation enables LocateAnything only for the selected job', ()
   })
 
   assert.deepEqual(options.providers, { locate_anything: true })
+})
+
+test('segment re-run carries only human-drawn boxes as semantic review candidates', () => {
+  const annotation: SegmentAnnotation = {
+    segmentId: 13, start: 10, end: 12,
+    scene: { tags: [], place: { type: 'unknown', indoor: true, weather: null, lighting: 'unknown', timeOfDay: 'unknown' } },
+    camera: { shot: 'unknown', angle: 'unknown', movement: [], lens: 'unknown', stabilization: 'unknown' },
+    persons: [{
+      trackId: 1000002, personId: 'video-1:manual-person:1', gender: 'unknown', ageGroup: 'unknown',
+      hair: { color: 'unknown', style: 'unknown' }, expression: 'unknown', pose: 'unknown', action: [],
+      facing: 'unknown', occlusion: 0, clothing: [], bbox: { x: 10, y: 20, width: 30, height: 40 },
+      depth: null, keypoints: [], _className: 'manual',
+    }],
+    objects: [], events: [],
+    frames: [{
+      frameIndex: 300, timestamp: 10, imageWidth: 640, imageHeight: 360,
+      observations: [{
+        trackId: 1000002, entityType: 'person', className: 'person',
+        bbox: { x: 10, y: 20, width: 30, height: 40 }, source: 'manual',
+      }],
+    }],
+  }
+  const segment: SegmentState = {
+    segmentId: 13, start: 10, end: 12, status: 'completed',
+    modelAnnotation: null, humanAnnotation: annotation,
+  }
+
+  assert.deepEqual(buildReviewTrackCandidates(segment), [{
+    trackId: 1000002, entityType: 'person', className: 'person',
+    bbox: { x: 10, y: 20, width: 30, height: 40 },
+    timestamp: 10, imageWidth: 640, imageHeight: 360,
+    personId: 'video-1:manual-person:1',
+  }])
 })
 
 test('precision annotation requires a ready enhanced deployment', () => {

@@ -38,12 +38,14 @@ Return only one JSON object using exactly this structure:
 {
   "scene": {"tags": [], "place": {"type": "unknown", "indoor": true, "weather": null, "lighting": "unknown", "timeOfDay": "unknown"}},
   "camera": {"shot": "unknown", "angle": "unknown", "movement": [], "lens": "unknown", "stabilization": "unknown"},
-  "persons_attributes": [{"gender": "unknown", "ageGroup": "unknown", "hair": {"color": "unknown", "style": "unknown"}, "expression": "unknown", "pose": "unknown", "action": [], "facing": "unknown", "occlusion": 0, "clothing": []}],
-  "objects_attributes": [{"name": "", "category": "other", "color": "unknown", "brand": null}],
+  "persons_attributes": [{"trackId": 1, "gender": "unknown", "ageGroup": "unknown", "hair": {"color": "unknown", "style": "unknown"}, "expression": "unknown", "pose": "unknown", "action": [], "facing": "unknown", "occlusion": 0, "clothing": []}],
+  "objects_attributes": [{"trackId": 2, "name": "", "category": "other", "color": "unknown", "brand": null}],
   "events": [{"type": "visual_activity", "description": "One short sentence about visible activity.", "confidence": 0.7}]
 }
 Use empty arrays when nothing is visible. Never invent a person, object, action,
 event, text, identity, cause, or outcome. Do not use speech as visual evidence.
+When detector boxes are labelled P<number> or O<number>, copy that exact number
+to trackId. Never assign attributes by list order and never invent a Track ID.
 Event type must be one of: music_performance, sports_activity,
 dance_performance, conversation, argument, celebration, ceremony, cooking,
 eating, cleaning, repairing, shopping, commuting, exercising, playing,
@@ -72,7 +74,26 @@ def _as_bool(value: Any, default: bool) -> bool:
     return default
 
 
-def _parse_remote_response(raw: str) -> dict[str, Any]:
+def _safe_track_id(value: Any, allowed_track_ids: set[int] | None = None) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        labelled = re.fullmatch(r"\s*[PpOo]?\s*#?\s*(\d+)\s*", value)
+        if labelled:
+            value = labelled.group(1)
+    try:
+        track_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    if track_id < 0 or (allowed_track_ids is not None and track_id not in allowed_track_ids):
+        return None
+    return track_id
+
+
+def _parse_remote_response(
+    raw: str,
+    allowed_track_ids: set[int] | None = None,
+) -> dict[str, Any]:
     fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
     text = fenced.group(1) if fenced else raw
     candidate = re.search(r"\{[\s\S]*", text)
@@ -115,14 +136,35 @@ def _parse_remote_response(raw: str) -> dict[str, Any]:
         "stabilization": str(camera.get("stabilization") or "unknown"),
     }
 
-    persons = [
-        item for item in data.get("persons_attributes", [])
-        if isinstance(item, dict)
-    ] if isinstance(data.get("persons_attributes"), list) else []
-    objects = [
-        item for item in data.get("objects_attributes", [])
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    ] if isinstance(data.get("objects_attributes"), list) else []
+    persons: list[dict[str, Any]] = []
+    if isinstance(data.get("persons_attributes"), list):
+        for source in data["persons_attributes"]:
+            if not isinstance(source, dict):
+                continue
+            track_id = _safe_track_id(source.get("trackId"), allowed_track_ids)
+            if allowed_track_ids is not None and track_id is None:
+                continue
+            item = dict(source)
+            if track_id is not None:
+                item["trackId"] = track_id
+            else:
+                item.pop("trackId", None)
+            persons.append(item)
+
+    objects: list[dict[str, Any]] = []
+    if isinstance(data.get("objects_attributes"), list):
+        for source in data["objects_attributes"]:
+            if not isinstance(source, dict) or not str(source.get("name") or "").strip():
+                continue
+            track_id = _safe_track_id(source.get("trackId"), allowed_track_ids)
+            if allowed_track_ids is not None and track_id is None:
+                continue
+            item = dict(source)
+            if track_id is not None:
+                item["trackId"] = track_id
+            else:
+                item.pop("trackId", None)
+            objects.append(item)
     events: list[dict[str, Any]] = []
     if isinstance(data.get("events"), list):
         for item in data["events"]:
@@ -292,7 +334,7 @@ class RemoteApiSemantic:
         config["apiFormat"] = api_format
         config["baseUrl"] = str(config["baseUrl"]).strip()
         config["model"] = str(config["model"]).strip()
-        config["apiKey"] = str(config.get("apiKey", "")).strip()
+        config["apiKey"] = os.environ.get("NUWA_VIDEO_SEMANTIC_API_KEY") or str(config.get("apiKey", "")).strip()
         _validate_request_url(_endpoint(config["baseUrl"], api_format))
         self._config = config
         self._loaded = True
@@ -327,7 +369,7 @@ class RemoteApiSemantic:
             content.append({"type": "text", "text": user_prompt})
             body = {
                 "model": self._config["model"],
-                "max_tokens": 1000,
+                "max_tokens": 1600,
                 "temperature": 0,
                 "system": REMOTE_PROMPT,
                 "messages": [{"role": "user", "content": content}],
@@ -350,7 +392,7 @@ class RemoteApiSemantic:
                     {"role": "user", "content": content},
                 ],
                 "temperature": 0,
-                "max_tokens": 1000,
+                "max_tokens": 1600,
             }
 
         request = Request(
@@ -380,6 +422,7 @@ class RemoteApiSemantic:
         ontology: dict | None = None,
         prompt_template: str = "",
         examples: list[dict] | None = None,
+        track_candidates: list[dict] | None = None,
     ) -> SegmentSemantic:
         if not self._loaded:
             self.load()
@@ -393,13 +436,33 @@ class RemoteApiSemantic:
                 events=[],
             )
         images = [_encode_image(path) for path in selected_paths]
-        raw_text = self._request(
-            images,
+        candidates = [
+            item for item in (track_candidates or [])
+            if isinstance(item, dict) and isinstance(item.get("trackId"), int)
+        ]
+        user_prompt = (
             "The images are chronological keyframes from one video segment "
-            f"({start:.2f}s to {end:.2f}s). Describe their shared visible content and main visible activity as JSON.",
+            f"({start:.2f}s to {end:.2f}s). Describe their shared visible content and main visible activity as JSON."
         )
+        if candidates:
+            manifest = "\n".join(
+                f"- trackId {item['trackId']}: {item.get('entityType', 'object')} "
+                f"({item.get('className', 'unknown')})"
+                for item in candidates
+            )
+            user_prompt += (
+                "\nThe frames contain labelled detector boxes. Analyse only these candidates, "
+                "copy the exact numeric trackId into each returned entity, and omit candidates "
+                "that are not visually supported. Never bind by array order.\nCandidates:\n"
+                + manifest
+            )
+        raw_text = self._request(images, user_prompt)
         logger.info("Remote semantic response received (model=%s, chars=%d)", self.model_name, len(raw_text))
-        parsed = _parse_remote_response(raw_text)
+        allowed_track_ids = {
+            int(item["trackId"])
+            for item in candidates
+        } if candidates else None
+        parsed = _parse_remote_response(raw_text, allowed_track_ids=allowed_track_ids)
         if not parsed:
             raise RuntimeError("Remote semantic API returned an empty or invalid semantic response")
         return SegmentSemantic(

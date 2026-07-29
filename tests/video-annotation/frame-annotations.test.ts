@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { clampBox, convertEntityType, frameDisplayEntities, legacyFrame, nextTrackId, renameObjectLabel, replaceObservation, upsertFrame } from '../../services/video-annotation/frame-annotations'
+import { clampBox, convertEntityType, fillEmptyPersonAttributes, frameDisplayEntities, legacyFrame, nextTrackId, renameObjectLabel, replaceObservation, upsertFrame } from '../../services/video-annotation/frame-annotations'
 import { exportCurrentFrameJson, exportCustomJson } from '../../services/video-annotation/export-service'
+import { prepareSegmentAnnotationForReview, validateSegmentAnnotationReview, withAuthoritativeSegmentMetadata } from '../../services/video-annotation/json-review'
 import type { SegmentAnnotation } from '../../services/video-annotation/types'
 
 const annotation: SegmentAnnotation = {
@@ -41,6 +42,34 @@ test('frame edits are clamped and track allocation scans both entity types', () 
   assert.equal(nextTrackId(annotation), 2)
 })
 
+test('targeted person suggestions fill only empty semantic fields', () => {
+  const reviewed = {
+    ...annotation.persons[0],
+    gender: 'female',
+    action: ['reviewed_action'],
+    occlusion: 0,
+  }
+  const result = fillEmptyPersonAttributes(reviewed, {
+    gender: 'male',
+    ageGroup: 'young_adult',
+    hair: { color: 'red', style: 'long' },
+    expression: 'smiling',
+    pose: 'standing',
+    action: ['standing'],
+    facing: 'front',
+    occlusion: 0.5,
+    clothing: [{ type: 'jacket', color: 'pink', attributes: [], brand: null }],
+  })
+  assert.equal(result.gender, 'female')
+  assert.equal(result.ageGroup, 'young_adult')
+  assert.deepEqual(result.action, ['reviewed_action'])
+  assert.equal(result.occlusion, 0)
+  assert.deepEqual(result.hair, { color: 'red', style: 'long' })
+  assert.equal(result.clothing[0].type, 'jacket')
+  assert.equal(result.personId, reviewed.personId)
+  assert.deepEqual(result.bbox, reviewed.bbox)
+})
+
 test('upsert replaces one frame without changing neighbouring frames', () => {
   const first = legacyFrame(annotation, 10, 10, 100, 100)
   const second = legacyFrame(annotation, 11, 10, 100, 100)
@@ -50,6 +79,76 @@ test('upsert replaces one frame without changing neighbouring frames', () => {
   assert.equal(result.frames?.length, 2)
   assert.equal(result.frames?.[0].observations.length, 2)
   assert.equal(result.frames?.[1].observations.length, 0)
+})
+
+test('segment review JSON keeps review content and strips runtime-only diagnostics', () => {
+  const frame = legacyFrame(annotation, 11, 24, 100, 100)
+  const reviewed = prepareSegmentAnnotationForReview({
+    ...annotation,
+    persons: annotation.persons.map(person => ({ ...person, _className: 'person', _detectionConfidence: 0.91 })),
+    objects: [{
+      trackId: 1_000_000,
+      name: '字幕',
+      category: 'text',
+      color: 'white',
+      brand: null,
+      bbox: null,
+      depth: null,
+      _textContent: '人工字幕',
+      _detectionConfidence: 0.88,
+    }],
+    events: [{ type: '[Speech] legacy words', confidence: 0.9 }],
+    frames: [frame],
+    _recognition: { ocr: { status: 'completed', count: 1 } },
+    _provider_statuses: { yolo: { status: 'completed' } },
+    _pipeline_status: 'completed',
+  }) as SegmentAnnotation & Record<string, unknown>
+
+  assert.equal(reviewed.speechTranscript, 'legacy words')
+  assert.equal(reviewed.objects[0]._textContent, '人工字幕')
+  assert.equal(reviewed.frames?.length, 1)
+  assert.equal(reviewed._recognition, undefined)
+  assert.equal(reviewed._provider_statuses, undefined)
+  assert.equal(reviewed._pipeline_status, undefined)
+  assert.equal(reviewed.persons[0]._detectionConfidence, undefined)
+  assert.equal(reviewed.objects[0]._detectionConfidence, undefined)
+})
+
+test('segment review metadata always comes from the selected outer segment', () => {
+  const stale = { ...annotation, segmentId: undefined, start: undefined, end: undefined } as unknown as SegmentAnnotation
+  const metadata = { segmentId: 3, start: 2.933312, end: 3.766688 }
+
+  const reviewed = prepareSegmentAnnotationForReview(stale, metadata)
+  assert.equal(reviewed.segmentId, 3)
+  assert.equal(reviewed.start, 2.933312)
+  assert.equal(reviewed.end, 3.766688)
+
+  const attemptedEdit = withAuthoritativeSegmentMetadata(
+    { ...annotation, segmentId: 99, start: 100, end: 101 },
+    metadata,
+  )
+  assert.equal(attemptedEdit.segmentId, 3)
+  assert.equal(attemptedEdit.start, 2.933312)
+  assert.equal(attemptedEdit.end, 3.766688)
+  assert.deepEqual(validateSegmentAnnotationReview(attemptedEdit), [])
+})
+
+test('segment review JSON validation rejects unsafe whole-annotation replacements', () => {
+  assert.deepEqual(validateSegmentAnnotationReview(annotation), [])
+
+  const errors = validateSegmentAnnotationReview({
+    ...annotation,
+    end: 9,
+    persons: [{ ...annotation.persons[0], trackId: 'one', bbox: { x: 0, y: 0, width: 'wide', height: 10 } }],
+    objects: 'not-an-array',
+    frames: [{ frameIndex: 10, timestamp: 'late', observations: null }],
+  })
+  assert.ok(errors.includes('end must be greater than start'))
+  assert.ok(errors.includes('persons[0].trackId must be a finite number'))
+  assert.ok(errors.includes('persons[0].bbox.width must be a finite number'))
+  assert.ok(errors.includes('objects must be an array'))
+  assert.ok(errors.includes('frames[0].timestamp must be a finite number'))
+  assert.ok(errors.includes('frames[0].observations must be an array'))
 })
 
 test('custom JSON normalizes labels and omits speech, OCR, and frame observations', () => {
@@ -90,6 +189,53 @@ test('custom JSON normalizes labels and omits speech, OCR, and frame observation
   assert.equal(segment.events[0].description, 'A person plays music.')
   assert.equal(segment.speechTranscript, undefined)
   assert.equal(segment.frames, undefined)
+})
+
+test('custom JSON can include OCR and speech without restoring frames or diagnostics', () => {
+  const frame = legacyFrame(annotation, 11, 24, 100, 100)
+  const exported = JSON.parse(exportCustomJson([{
+    video: { videoId: 'v1', filePath: 'v1.mp4', duration: 12, fps: 24, width: 100, height: 100, description: '' },
+    annotations: [{
+      ...annotation,
+      speechTranscript: ' Keep this corrected transcript. ',
+      objects: [
+        ...annotation.objects,
+        {
+          trackId: 1_000_000,
+          name: '旧识别内容',
+          category: 'text',
+          color: 'White',
+          brand: null,
+          bbox: { x: 5, y: 80, width: 90, height: 10 },
+          depth: null,
+          _textContent: '人工修正：Hello, 世界！',
+          _detectionConfidence: 0.99,
+        },
+      ],
+      frames: [frame],
+      _provider_statuses: { qwen_vl: { status: 'completed' } },
+      _pipeline_status: 'completed',
+    }],
+  }], {
+    includeOcr: true,
+    includeSpeechTranscript: true,
+  }))[0].annotations[0]
+
+  assert.equal(exported.speechTranscript, ' Keep this corrected transcript. ')
+  assert.equal(exported.objects.length, 2)
+  assert.deepEqual(exported.objects[1], {
+    trackId: 1_000_000,
+    name: '人工修正：Hello, 世界！',
+    category: 'text',
+    color: 'white',
+    brand: null,
+    bbox: { x: 5, y: 80, width: 90, height: 10 },
+    depth: null,
+    _textContent: '人工修正：Hello, 世界！',
+  })
+  assert.equal(exported.frames, undefined)
+  assert.equal(exported._provider_statuses, undefined)
+  assert.equal(exported._pipeline_status, undefined)
 })
 
 test('custom JSON safely exports sparse legacy and manually edited labels', () => {

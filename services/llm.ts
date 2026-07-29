@@ -11,6 +11,7 @@ export async function callLlm(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemPrompt, userPrompt, cacheKey }),
+    signal: AbortSignal.timeout(60000),
   })
 
   const data = await res.json()
@@ -30,6 +31,7 @@ async function postChunk(systemPrompt: string, chunk: string[]): Promise<string[
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemPrompt, userPrompts: chunk }),
+      signal: AbortSignal.timeout(120000),
     })
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || `LLM API error ${res.status}`)
@@ -104,6 +106,7 @@ export async function callLlmVision(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemPrompt, userPrompt, images }),
+    signal: AbortSignal.timeout(120000),
   })
 
   const data = await res.json()
@@ -122,6 +125,7 @@ export async function testLlmConnection(): Promise<{ ok: boolean; error?: string
         systemPrompt: 'Reply with only the word "OK".',
         userPrompt: 'Ping',
       }),
+      signal: AbortSignal.timeout(30000),
     })
     const data = await res.json()
     if (res.ok) return { ok: true }

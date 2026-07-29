@@ -95,7 +95,9 @@ def _crop_person(
         )
         if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
             raise ValueError("Person analysis bbox does not overlap the decoded frame")
-        image.crop(crop_box).save(output_path, format="JPEG", quality=92)
+        cropped = image.crop(crop_box)
+        cropped.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        cropped.save(output_path, format="JPEG", quality=92)
 
 
 def run_person_analysis(

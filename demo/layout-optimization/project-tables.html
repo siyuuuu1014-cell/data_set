@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目表列表 — Nuwa Layout Demo</title>
+<style>:root{--pink:#FF6CCE;--pink-dark:#E04EB0;--pink-glow:rgba(255,108,206,0.2);--green:#CCED68;--green-dark:#A8D430;--bg:#FBFFF8;--bg-deep:#F2F8E8;--surface:#FFF;--border:#E8E0D5;--text:#3D3226;--text-dim:#8A7E70;--text-muted:#B5AA9D}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--bg);background-image:radial-gradient(ellipse 80% 50% at 50% -20%,rgba(204,237,104,.10),transparent),radial-gradient(ellipse 60% 40% at 90% 80%,rgba(255,108,206,.06),transparent);color:var(--text);min-height:100vh}
+.app-header{position:sticky;top:0;z-index:50;border-bottom:1px solid rgba(232,224,213,.6);background:rgba(251,255,248,.85);backdrop-filter:blur(16px);padding:10px 20px;display:flex;align-items:center;gap:12px}
+.back-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text-dim)}
+.back-btn:hover{border-color:var(--pink);color:var(--pink)}
+.breadcrumb{font-size:10px;text-transform:uppercase;letter-spacing:.15em;color:var(--text-muted)}
+.breadcrumb+h1{font-size:16px;font-weight:600}
+.header-actions{margin-left:auto;display:flex;gap:8px}
+.btn{padding:7px 16px;border-radius:8px;font-size:12px;font-weight:500;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--pink);color:var(--pink)}
+.btn.primary{background:linear-gradient(135deg,var(--pink),var(--pink-dark),var(--green-dark));background-size:200% 200%;animation:shift 3s ease infinite;color:#fff;border:none}
+.btn.primary:hover{box-shadow:0 0 20px var(--pink-glow)}
+@keyframes shift{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+main{max-width:900px;margin:0 auto;padding:24px 20px 48px}
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+.filter-input{padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;outline:none;background:var(--surface);color:var(--text);width:200px}
+.filter-input:focus{border-color:var(--pink);box-shadow:0 0 0 2px var(--pink-glow)}
+.table-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0;margin-bottom:8px;transition:all .2s;display:flex;align-items:center;overflow:hidden}
+.table-card:hover{border-color:var(--pink);box-shadow:0 2px 16px rgba(255,108,206,.06)}
+.drag-handle{padding:16px 12px;color:var(--text-muted);cursor:grab;font-size:14px;margin-right:4px}
+.table-card:hover .drag-handle{color:var(--pink)}
+.table-info{flex:1;padding:12px 0;min-width:0}
+.table-name{font-size:14px;font-weight:600;margin-bottom:2px}
+.table-name:hover{color:var(--pink)}
+.table-stats{font-size:11px;color:var(--text-dim)}
+.col-pills{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px}
+.col-pill{padding:2px 7px;border-radius:99px;font-size:10px;background:var(--bg-deep);border:1px solid var(--border);color:var(--text-dim);white-space:nowrap}
+.table-actions{display:flex;gap:6px;padding-right:16px;flex-shrink:0}
+.table-actions .btn{padding:5px 12px;font-size:11px}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center;border:2px dashed var(--border);border-radius:16px}
+.empty-icon{font-size:40px;margin-bottom:12px;opacity:.5}
+.empty h3{font-size:15px;font-weight:600;color:var(--text-dim)}
+.empty p{font-size:13px;color:var(--text-muted);margin-top:4px}
+</style>
+</head>
+<body>
+<header class="app-header">
+  <button class="back-btn">←</button>
+  <div>
+    <span class="breadcrumb">合成数据</span>
+    <h1>clickhouse</h1>
+  </div>
+  <div class="header-actions">
+    <button class="btn">批量导出</button>
+    <button class="btn primary">+ 新建表</button>
+  </div>
+</header>
+<main>
+  <div class="toolbar">
+    <input class="filter-input" placeholder="搜索表名...">
+    <span style="font-size:11px;color:var(--text-muted);margin-left:auto">11 张表 · 拖拽排序</span>
+  </div>
+  <div class="table-card"><div class="drag-handle">⠿</div><div class="table-info"><div class="table-name">user_profile_features</div><div class="table-stats">5 列 · 200 行 · Parquet ✓</div><div class="col-pills"><span class="col-pill">user_id (UUID)</span><span class="col-pill">user_name (文本)</span><span class="col-pill">age (数字)</span></div></div><div class="table-actions"><button class="btn">编辑</button><button class="btn" style="color:var(--pink-dark)">删除</button></div></div>
+  <div class="table-card"><div class="drag-handle">⠿</div><div class="table-info"><div class="table-name">u2a_behavior</div><div class="table-stats">8 列 · 1,250 行 · Parquet ✓</div><div class="col-pills"><span class="col-pill">user_id (FK→user_profile)</span><span class="col-pill">action (文本)</span><span class="col-pill">timestamp (日期)</span></div></div><div class="table-actions"><button class="btn">编辑</button><button class="btn" style="color:var(--pink-dark)">删除</button></div></div>
+  <div class="table-card"><div class="drag-handle">⠿</div><div class="table-info"><div class="table-name">published_asset</div><div class="table-stats">6 列 · 340 行 · Parquet ✓</div><div class="col-pills"><span class="col-pill">asset_id (ID)</span><span class="col-pill">title (文本)</span><span class="col-pill">type (文本)</span></div></div><div class="table-actions"><button class="btn">编辑</button><button class="btn" style="color:var(--pink-dark)">删除</button></div></div>
+  <div class="table-card"><div class="drag-handle">⠿</div><div class="table-info"><div class="table-name">content_feature</div><div class="table-stats">12 列 · 0 行</div><div class="col-pills"><span class="col-pill">feature_id (ID)</span><span class="col-pill">vector (文本)</span></div></div><div class="table-actions"><button class="btn">编辑</button><button class="btn" style="color:var(--pink-dark)">删除</button></div></div>
+</main>
+</body>
+</html>

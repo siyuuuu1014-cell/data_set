@@ -365,6 +365,7 @@ nuwa/
 - 检测/跟踪现在默认独立按 `3 FPS` 采样，并以每批四帧的方式解码；Pipeline 根据批内位置统一写入绝对帧序号，并拒绝结果数量不完整的检测批次，不再信任 Provider 自行维护的索引。Qwen/Remote API 最多接收三张以 Track 覆盖率选择的标记跟踪帧，因此语义关联不再受旧 `0.5 FPS` 选项限制，同时内存占用仍有边界。
 - 空间框现在保存在 `SegmentAnnotation.frames[]` 中，每项包含帧索引、时间戳、图像尺寸、实体类型、Track ID、置信度、来源和 bbox。原有片段级 `persons`/`objects` 继续作为语义与兼容摘要，因此已有任务仍能打开和导出。
 - 审核页的播放器、提取帧和 Canvas 由同一个采样帧驱动；帧步进使用视频 FPS 或已保存的采样时间戳，不再写死 30 FPS。每次进入 Draw 都必须明确选择 Person 或 Object，选择 Object 后还必须手动填写标签。人工框改由服务端在任务文件锁内分配 Track；每个片段保存单调递增计数，删除后也不复用旧编号；人工 Person 创建时会立即获得视频内唯一的 `personId`。选择、移动、缩放、撤销和删除仍按“帧 + 实体类型 + Track ID”隔离。删除默认只移除当前帧的框，所有帧都不再观察到该实体时才移除兼容摘要。
+- 每个采样帧的 Canvas 上方新增可折叠的 **Current Frame Tracks** 列表。嵌套框或重叠框导致画布点击歧义时，可从列表精确选择任意 Person/Object；列表还提供只影响显示的 Hide/Show，以及经确认后删除当前帧框的入口。Person 与 Object 使用“实体类型 + Track ID”作为独立键，即使数字 ID 相同也不会串选；临时隐藏不会写入标注或影响导出。
 - 选中框后可以在 Person 与 Object 之间双向转换。`Convert This Frame` 是默认的低风险操作；`Convert Entire Track` 需要二次确认，并在一次带锁保存中更新该视频已标注片段里匹配的视频级身份观察。Person→Object 必须手动填写物体标签，转换会保留 bbox、Track ID、时间戳和未受影响的语义属性。
 - 物体标签纠错现在默认限定到当前帧。`Save This Frame Label` 只修改当前选中采样帧的 observation，不改片段摘要、相邻帧、整条 Track 或片段 Event；当前帧 JSON 会优先采用该人工帧标签并单独重算视觉 Event。`Save Entire Track` 与 `Apply Label to Matching Objects` 仅作为需要确认的显式扩大范围操作，分别用于确实需要整轨修正和 Track 断裂的情况；后者可以读取保留的原始模型标签，但不会硬编码任何类别。批量操作继续排除 OCR 标签。
 - 审核页会分别显示当前采样帧和完整片段中的 Person、非 OCR Object 与 OCR 数量；实体进入或离开画面时，两组数量本来就不一定相等。人物 Canvas 标签优先显示紧凑的视频身份（`P-…` 或 `P-M…`），片段 Track 编号作为次级审核信息保留。对于历史数据中“同一个低位 Track ID 同时携带普通物体与 `_textContent`”的污染，读取任务时会执行幂等迁移：只有相邻时间、边界框高 IoU 且候选唯一时才把普通框恢复到已有 Track，OCR 则从保留的模型结果恢复到百万 ID 命名空间；候选不明确时绝不自动合并。

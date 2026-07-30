@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nuwa 布局优化 Demo 索引</title>
+<style>
+  :root {
+    --pink: #FF6CCE; --pink-dark: #E04EB0; --pink-glow: rgba(255,108,206,0.2);
+    --green: #CCED68; --green-dark: #A8D430;
+    --bg: #FBFFF8; --bg-deep: #F2F8E8; --surface: #FFFFFF;
+    --border: #E8E0D5; --text: #3D3226; --text-dim: #8A7E70; --text-muted: #B5AA9D;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(204,237,104,0.10), transparent),
+      radial-gradient(ellipse 60% 40% at 90% 80%, rgba(255,108,206,0.06), transparent);
+    color: var(--text); min-height: 100vh;
+  }
+  .header {
+    border-bottom: 1px solid rgba(232,224,213,0.6);
+    background: rgba(251,255,248,0.85); backdrop-filter: blur(16px);
+    padding: 16px 32px; display: flex; align-items: center; gap: 12px;
+  }
+  .logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--pink), var(--green));
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 13px;
+  }
+  .title {
+    font-weight: 700; font-size: 16px;
+    background: linear-gradient(135deg, var(--pink), var(--green-dark));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .subtitle { font-size: 12px; color: var(--text-muted); margin-left: 8px; }
+  main { max-width: 1000px; margin: 0 auto; padding: 40px 24px; }
+  h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--pink); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+  }
+  h2::after { content:''; flex:1; height:1px; background: rgba(232,224,213,0.7); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; transition: all 0.2s; text-decoration: none; color: inherit; display: block;
+  }
+  .card:hover {
+    border-color: var(--pink); box-shadow: 0 4px 24px rgba(255,108,206,0.08);
+    transform: translateY(-2px);
+  }
+  .card h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .card p { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+  .card .tag {
+    display: inline-block; margin-top: 12px; padding: 3px 10px; border-radius: 99px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+    background: rgba(255,108,206,0.08); color: var(--pink-dark);
+    border: 1px solid rgba(255,108,206,0.15);
+  }
+  .section { margin-bottom: 48px; }
+  .note {
+    background: rgba(255,108,206,0.04); border: 1px solid rgba(255,108,206,0.12);
+    border-radius: 10px; padding: 16px 20px; margin-top: 40px;
+    font-size: 13px; color: var(--text-dim); line-height: 1.6;
+  }
+  .note strong { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo">N</div>
+  <span class="title">Nuwa</span>
+  <span class="subtitle">布局优化方案 Demo</span>
+</header>
+
+<main>
+
+  <div class="section">
+    <h2>核心页面</h2>
+    <div class="grid">
+      <a href="dashboard.html" class="card">
+        <h3>Dashboard 首页</h3>
+        <p>双工作区入口 + 项目卡片网格 + 统计概览</p>
+        <span class="tag">Operate</span>
+      </a>
+      <a href="project-tables.html" class="card">
+        <h3>项目 · 表列表</h3>
+        <p>拖拽排序 + 快速操作 + 批量导出</p>
+        <span class="tag">Operate</span>
+      </a>
+      <a href="table-editor.html" class="card">
+        <h3>表编辑器</h3>
+        <p>Schema / 数据预览 / 列统计 三 tab 分离</p>
+        <span class="tag">Operate</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>视频标注工具</h2>
+    <div class="grid">
+      <a href="video-projects.html" class="card">
+        <h3>标注项目列表</h3>
+        <p>Quality Center + 视频卡片 + 批量上传</p>
+        <span class="tag">Operate</span>
+      </a>
+      <a href="video-canvas.html" class="card">
+        <h3>视频标注 Canvas</h3>
+        <p>三栏布局：片段树 | Canvas | 属性面板 + 底部时间轴</p>
+        <span class="tag">Operate</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>配置 & 系统</h2>
+    <div class="grid">
+      <a href="settings.html" class="card">
+        <h3>设置页</h3>
+        <p>侧边 Tab 导航替代纵向滚动</p>
+        <span class="tag">Operate</span>
+      </a>
+      <a href="new-table.html" class="card">
+        <h3>新建表</h3>
+        <p>列构建器 + 关联表导入 + 模板选择</p>
+        <span class="tag">Operate</span>
+      </a>
+      <a href="new-project.html" class="card">
+        <h3>新建项目</h3>
+        <p>极简创建流程 + 模板快速启动</p>
+        <span class="tag">Operate</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>说明：</strong>这些 demo 仅展示布局优化方向（信息架构、间距、密度、响应式结构），不改动任何项目代码。<br>
+    所有 demo 使用 Nuwa 现有设计 token（pink #FF6CCE, green #CCED68, cream #FBFFF8），保持视觉一致性。<br>
+    点击任意卡片查看对应页面的优化方案。
+  </div>
+
+</main>
+
+</body>
+</html>

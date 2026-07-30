@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>标注项目列表 — Nuwa Layout Demo</title>
+<style>:root{--pink:#FF6CCE;--pink-dark:#E04EB0;--pink-glow:rgba(255,108,206,0.2);--green:#CCED68;--green-dark:#A8D430;--gold:#F5B840;--bg:#FBFFF8;--bg-deep:#F2F8E8;--surface:#FFF;--border:#E8E0D5;--text:#3D3226;--text-dim:#8A7E70;--text-muted:#B5AA9D}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--bg);background-image:radial-gradient(ellipse 80% 50% at 50% -20%,rgba(204,237,104,.10),transparent),radial-gradient(ellipse 60% 40% at 90% 80%,rgba(255,108,206,.06),transparent);color:var(--text);min-height:100vh}
+.app-header{position:sticky;top:0;z-index:50;border-bottom:1px solid rgba(232,224,213,.6);background:rgba(251,255,248,.85);backdrop-filter:blur(16px);padding:12px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ws-switch{display:flex;gap:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface)}
+.ws-btn{padding:6px 16px;font-size:12px;font-weight:500;border:none;background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.ws-btn.active{background:rgba(255,108,206,.08);color:var(--pink-dark);font-weight:600}
+.ws-btn:first-child{border-right:1px solid var(--border)}
+.header-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--green-dark)}
+main{max-width:900px;margin:0 auto;padding:24px 20px 48px}
+.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px}
+.section-head h1{font-size:20px;font-weight:700}
+.new-btn{padding:8px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,var(--pink),var(--pink-dark),var(--green-dark));background-size:200% 200%;animation:shift 3s ease infinite;color:#fff;font-weight:500;font-size:13px;cursor:pointer;transition:all .2s}
+.new-btn:hover{box-shadow:0 0 20px var(--pink-glow);transform:translateY(-1px)}
+@keyframes shift{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+
+/* Quality Center */
+.quality-bar{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.q-stat{text-align:center}
+.q-stat .num{font-size:20px;font-weight:700}
+.q-stat .num.critical{color:#e53e3e}
+.q-stat .num.warning{color:#d69e2e}
+.q-stat .num.ok{color:var(--green-dark)}
+.q-stat .label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-top:2px}
+.q-divider{width:1px;height:32px;background:var(--border);margin:0 4px}
+
+/* Video Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:all .2s}
+.card:hover{border-color:var(--pink);box-shadow:0 4px 24px rgba(255,108,206,.08);transform:translateY(-2px)}
+.thumb{aspect-ratio:16/9;background:linear-gradient(135deg,rgba(255,108,206,.1),rgba(204,237,104,.08));display:flex;align-items:center;justify-content:center;font-size:32px;border-bottom:1px solid var(--border);position:relative;overflow:hidden}
+.thumb .play{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;color:var(--pink);font-size:14px;opacity:0;transition:all .2s}
+.card:hover .thumb .play{opacity:1}
+.card-body{padding:14px}
+.card-body h3{font-size:13px;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-body .info{font-size:11px;color:var(--text-dim)}
+.progress-bar{height:3px;background:var(--bg-deep);border-radius:2px;margin-top:8px;overflow:hidden}
+.progress-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--pink),var(--green-dark))}
+.progress-label{font-size:10px;color:var(--text-muted);margin-top:4px;display:flex;justify-content:space-between}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center;border:2px dashed var(--border);border-radius:16px;margin-top:20px}
+.empty-icon{font-size:40px;margin-bottom:12px}
+.empty h3{font-size:15px;font-weight:600;color:var(--text-dim)}
+.empty p{font-size:13px;color:var(--text-muted);margin-top:4px}
+</style>
+</head>
+<body>
+<header class="app-header">
+  <div class="ws-switch">
+    <button class="ws-btn">合成数据</button>
+    <button class="ws-btn active">视频标注</button>
+  </div>
+  <div class="header-right">
+    <div class="status-dot"></div>
+    <span style="font-size:11px;color:var(--text-dim)">Worker 在线 · 127.0.0.1:8765</span>
+    <a href="#" style="font-size:11px;color:var(--text-dim);text-decoration:none">设置</a>
+  </div>
+</header>
+<main>
+  <div class="section-head">
+    <h1>视频标注项目</h1>
+    <button class="new-btn">+ 新建标注项目</button>
+  </div>
+
+  <!-- Quality Center -->
+  <div class="quality-bar">
+    <div class="q-stat"><div class="num critical">2</div><div class="label">Critical</div></div>
+    <div class="q-stat"><div class="num warning">5</div><div class="label">Warnings</div></div>
+    <div class="q-stat"><div class="num ok">8</div><div class="label">Unreviewed</div></div>
+    <div class="q-divider"></div>
+    <span style="font-size:12px;color:var(--text-dim)">clickhouse-demo · 3 个视频，24 个片段</span>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="thumb">🎬<div class="play">▶</div></div>
+      <div class="card-body">
+        <h3>scene_001.mp4</h3>
+        <div class="info">1920×1080 · 00:01:45</div>
+        <div class="progress-bar"><div class="progress-fill" style="width:62%"></div></div>
+        <div class="progress-label"><span>5/8 已完成</span><span>3 草稿</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="thumb">🎬<div class="play">▶</div></div>
+      <div class="card-body">
+        <h3>scene_002.mp4</h3>
+        <div class="info">1920×1080 · 00:02:12</div>
+        <div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div>
+        <div class="progress-label"><span>8/8 已完成</span><span style="color:var(--green-dark)">✓</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="thumb">🎬<div class="play">▶</div></div>
+      <div class="card-body">
+        <h3>scene_003.mp4</h3>
+        <div class="info">1280×720 · 00:00:58</div>
+        <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+        <div class="progress-label"><span>0/8 未开始</span><span>待检测</span></div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

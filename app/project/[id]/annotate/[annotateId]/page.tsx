@@ -5,7 +5,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useStore } from '@/services/store'
 import Link from 'next/link'
 import { VideoPlayer } from '@/components/video-annotation/VideoPlayer'
-import { AnnotationCanvas } from '@/components/video-annotation/AnnotationCanvas'
+import { FrameTrackList } from '@/components/video-annotation/FrameTrackList'
 import { TrackEditor } from '@/components/video-annotation/TrackEditor'
 import { SceneCameraEditor } from '@/components/video-annotation/SceneCameraEditor'
 import { JsonEditor } from '@/components/video-annotation/JsonEditor'
@@ -1938,7 +1938,8 @@ export default function AnnotateDetailPage() {
                     {drawEntityType === 'object' && !drawObjectName.trim() && <span className="text-gv-gold-dark">Enter an object label.</span>}
                   </div>
                 )}
-                {selectedFrame && <AnnotationCanvas
+                {selectedFrame && <FrameTrackList
+                  key={`${selectedVideo.videoId}:${selectedSegment.segmentId}:${selectedFrame.frameIndex}`}
                   imageUrl={`/api/video-annotation/files/${selectedVideo.videoId}?frame=${selectedFrame.frameIndex}&fps=${selectedVideo.fps || 30}&t=${selectedFrame.timestamp}`}
                   persons={displayPersons}
                   objects={displayObjects}
@@ -1948,11 +1949,12 @@ export default function AnnotateDetailPage() {
                   drawEnabled={spatialSaveStatus !== 'saving' && (
                     drawEntityType === 'person' || (drawEntityType === 'object' && Boolean(drawObjectName.trim()))
                   )}
-                  hiddenTrackKeys={activePendingTrackKeys}
+                  pendingHiddenTrackKeys={activePendingTrackKeys}
                   onModeChange={handleCanvasModeChange}
                   onDrawBox={handleDrawBox}
                   onSelectTrack={(trackId, entityType) => { setSelectedTrackId(trackId); setSelectedEntityType(entityType) }}
                   onResizeBox={handleResizeBox}
+                  onDeleteTrack={handleDeleteTrack}
                   selectedTrackId={selectedTrackId}
                   selectedEntityType={selectedEntityType}
                 />}

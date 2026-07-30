@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新建表 — Nuwa Layout Demo</title>
+<style>:root{--pink:#FF6CCE;--pink-dark:#E04EB0;--pink-glow:rgba(255,108,206,0.2);--green:#CCED68;--green-dark:#A8D430;--bg:#FBFFF8;--bg-deep:#F2F8E8;--surface:#FFF;--border:#E8E0D5;--text:#3D3226;--text-dim:#8A7E70;--text-muted:#B5AA9D}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--bg);background-image:radial-gradient(ellipse 80% 50% at 50% -20%,rgba(204,237,104,.10),transparent),radial-gradient(ellipse 60% 40% at 90% 80%,rgba(255,108,206,.06),transparent);color:var(--text);min-height:100vh}
+.app-header{position:sticky;top:0;z-index:50;border-bottom:1px solid rgba(232,224,213,.6);background:rgba(251,255,248,.85);backdrop-filter:blur(16px);padding:10px 20px;display:flex;align-items:center;gap:10px}
+.back-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text-dim)}
+.back-btn:hover{border-color:var(--pink);color:var(--pink)}
+main{max-width:640px;margin:0 auto;padding:32px 20px}
+h1{font-size:20px;font-weight:700;margin-bottom:24px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;font-weight:500;color:var(--text-dim);margin-bottom:4px}
+.form-group input[type=text]{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:var(--surface);color:var(--text)}
+.form-group input:focus{border-color:var(--pink);box-shadow:0 0 0 2px var(--pink-glow)}
+.col-editor{border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden;background:var(--surface)}
+.col-editor .col-bar{padding:10px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);background:var(--bg-deep)}
+.col-bar .drag{color:var(--text-muted);font-size:13px;cursor:grab}.col-bar .col-num{font-size:10px;color:var(--text-muted);font-weight:600}.col-bar select{padding:4px 8px;border-radius:5px;border:1px solid var(--border);font-size:11px;outline:none;background:var(--surface)}.col-bar input{flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;outline:none}.col-bar input:focus{border-color:var(--pink)}.col-bar .del{width:24px;height:24px;border-radius:5px;border:1px solid transparent;background:transparent;cursor:pointer;color:var(--text-muted);font-size:14px}.col-bar .del:hover{border-color:var(--pink);color:var(--pink-dark)}
+.col-detail{padding:14px;display:none}.col-bar.open+.col-detail{display:block}.col-detail textarea{width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px;outline:none;resize:vertical;min-height:50px;background:var(--bg)}.col-detail textarea:focus{border-color:var(--pink)}
+.add-col-btn{padding:8px 16px;border-radius:8px;border:1px dashed var(--border);background:transparent;color:var(--text-dim);cursor:pointer;font-size:12px;width:100%;transition:all .15s;margin-bottom:24px}
+.add-col-btn:hover{border-color:var(--pink);color:var(--pink);background:rgba(255,108,206,.03)}
+.actions{display:flex;gap:8px;justify-content:flex-end}
+.btn{padding:9px 22px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all .15s}
+.btn:hover{border-color:var(--pink);color:var(--pink)}
+.btn.primary{background:linear-gradient(135deg,var(--pink),var(--pink-dark),var(--green-dark));background-size:200% 200%;animation:shift 3s ease infinite;color:#fff;border:none}
+.btn.primary:hover{box-shadow:0 0 20px var(--pink-glow)}
+@keyframes shift{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+.import-section{margin-bottom:24px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.import-section .btn{padding:7px 14px;font-size:11px}
+.llm-alert{padding:10px 14px;border-radius:8px;font-size:12px;margin-bottom:20px}
+.llm-alert.ok{background:rgba(204,237,104,.1);border:1px solid rgba(168,212,48,.3);color:#6B8C1E}
+.llm-alert.warn{background:rgba(255,108,206,.06);border:1px solid rgba(255,108,206,.2);color:var(--pink-dark)}
+</style>
+</head>
+<body>
+<header class="app-header">
+  <button class="back-btn">←</button>
+  <span style="font-size:14px;font-weight:600">新建数据表</span>
+  <span style="font-size:11px;margin-left:8px;color:var(--text-muted)">clickhouse</span>
+</header>
+<main>
+  <div class="llm-alert ok">✓ LLM 已配置 (DeepSeek) — 文本列将调用模型生成。</div>
+
+  <div class="form-group">
+    <label>表名</label>
+    <input type="text" placeholder="例如：user_events" value="">
+  </div>
+
+  <div class="import-section">
+    <span style="font-size:11px;color:var(--text-muted)">快速导入：</span>
+    <button class="btn">📄 导入 .nuwa 文件</button>
+    <button class="btn">🖼 图片识别列结构</button>
+    <button class="btn">📋 从其他表复制</button>
+  </div>
+
+  <label style="display:block;font-size:12px;font-weight:500;color:var(--text-dim);margin-bottom:8px">列定义 (3)</label>
+
+  <div class="col-editor">
+    <div class="col-bar"><span class="drag">⠿</span><span class="col-num">1</span><select><option>文本 (LLM)</option><option>数字</option><option>布尔</option><option>日期</option><option>ID</option><option>外键</option></select><input value="user_name" placeholder="列名"><button class="del">×</button></div>
+    <div class="col-detail"><textarea placeholder="LLM 生成提示词...">随机生成中文姓名，含姓氏和名字</textarea></div>
+  </div>
+  <div class="col-editor">
+    <div class="col-bar"><span class="drag">⠿</span><span class="col-num">2</span><select><option>数字</option></select><input value="age" placeholder="列名"><button class="del">×</button></div>
+    <div class="col-detail"><textarea placeholder="生成表达式...">Math.floor(Math.random() * 50 + 18)</textarea></div>
+  </div>
+  <div class="col-editor">
+    <div class="col-bar"><span class="drag">⠿</span><span class="col-num">3</span><select><option>ID</option></select><input value="id" placeholder="列名"><button class="del">×</button></div>
+  </div>
+
+  <button class="add-col-btn">+ 添加列</button>
+
+  <div class="actions">
+    <button class="btn">取消</button>
+    <button class="btn primary">创建表</button>
+  </div>
+</main>
+</body>
+</html>

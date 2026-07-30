@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nuwa — Annotate Workspace</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --accent:       #ff3d9a;
+  --accent-soft:  #ff5eb4;
+  --accent-muted: #ffb3d9;
+  --accent-glow:  rgba(255,61,154,0.25);
+  --bg-root:      #020617;
+  --bg-surface:   #0f172a;
+  --bg-raised:    #1e293b;
+  --bg-glass:     rgba(15,23,42,0.75);
+  --border:       rgba(255,255,255,0.06);
+  --border-hover: rgba(255,255,255,0.10);
+  --text:         #f1f5f9;
+  --text-dim:     #94a3b8;
+  --text-muted:   #64748b;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg-root);
+  color: var(--text);
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ── Particle canvas ── */
+#orbCanvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+
+/* ── Scroll reveal ── */
+.reveal {
+  opacity: 0; transform: translateY(20px);
+  transition: opacity 0.5s cubic-bezier(0.16,1,0.3,1), transform 0.5s cubic-bezier(0.16,1,0.3,1);
+}
+.reveal.visible { opacity: 1; transform: translateY(0); }
+
+/* ── Fade up ── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 0.45s cubic-bezier(0.16,1,0.3,1) both; }
+.fade-up:nth-child(1) { animation-delay: 0.03s; }
+.fade-up:nth-child(2) { animation-delay: 0.09s; }
+.fade-up:nth-child(3) { animation-delay: 0.15s; }
+
+/* ── Magnetic lift ── */
+.mag {
+  transition: transform 0.2s cubic-bezier(0.25,0.8,0.25,1.2), box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.mag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  border-color: var(--border-hover);
+}
+
+/* ── Accent button ── */
+.btn-accent {
+  background: linear-gradient(135deg, var(--accent), #c026d3);
+  color: white;
+  box-shadow: 0 2px 12px var(--accent-glow);
+  transition: box-shadow 0.2s ease, transform 0.12s ease;
+}
+.btn-accent:hover { box-shadow: 0 4px 20px rgba(255,61,154,0.4); transform: translateY(-1px); }
+.btn-accent:active { transform: translateY(0); }
+
+.accent-text { color: var(--accent-soft); }
+.accent-bg   { background: rgba(255,61,154,0.08); }
+
+/* ── Status dots ── */
+.dot-done    { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.35); }
+.dot-warn    { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.35); }
+.dot-active  { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.dot-error   { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.35); }
+.dot-gray    { background: #64748b; }
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 6px currentColor; opacity: 1; }
+  50% { box-shadow: 0 0 14px currentColor; opacity: 0.75; }
+}
+
+/* ── Progress shimmer ── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.bar-accent {
+  background: linear-gradient(90deg, var(--accent), #c026d3, var(--accent));
+  background-size: 200% 100%;
+  animation: shimmer 3s ease infinite;
+}
+
+/* ── Skeleton ── */
+@keyframes skel {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 75%);
+  background-size: 200% 100%;
+  animation: skel 1.8s infinite;
+  border-radius: 6px;
+}
+
+/* ── Accordion ── */
+.acc-panel {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.16,1,0.3,1);
+}
+.acc-panel.open { grid-template-rows: 1fr; }
+.acc-inner { overflow: hidden; }
+
+/* ── Float animation ── */
+@keyframes float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-5px) } }
+.float { animation: float 3s ease-in-out infinite; }
+
+/* ── Page transition ── */
+@keyframes pageIn {
+  from { opacity: 0; filter: blur(2px); transform: scale(0.99); }
+  to   { opacity: 1; filter: blur(0); transform: scale(1); }
+}
+.page-in { animation: pageIn 0.35s cubic-bezier(0.16,1,0.3,1) both; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 4px; }
+
+/* ── Glass card ── */
+.glass {
+  background: linear-gradient(135deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+  border: 1px solid var(--border);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+</style>
+</head>
+<body>
+
+<canvas id="orbCanvas"></canvas>
+
+<!-- ═══ HEADER ═══ -->
+<header class="relative z-50 flex items-center gap-4 px-4 py-2 border-b flex-shrink-0" style="background:var(--bg-glass);border-color:var(--border)">
+  <div class="flex items-center gap-2.5">
+    <div class="w-7 h-7 rounded-md flex items-center justify-center text-white font-bold text-xs relative overflow-hidden" style="background:linear-gradient(135deg, var(--accent), #c026d3)">
+      <span class="relative z-10">N</span>
+    </div>
+    <span class="font-semibold text-sm tracking-tight">Nuwa</span>
+  </div>
+  <div class="w-px h-5 ml-2" style="background:var(--border)"></div>
+  <div class="flex-1 min-w-0">
+    <p class="text-xs truncate" style="color:var(--text-dim)">Video Annotation Project / <span class="text-white">Wildlife Documentary — Batch 3</span></p>
+  </div>
+  <div class="flex items-center gap-2 px-2.5 py-1 rounded-full text-[10px] border" style="background:rgba(34,197,94,0.06);color:#22c55e;border-color:rgba(34,197,94,0.12)">
+    <span class="w-1.5 h-1.5 rounded-full dot-done"></span>
+    Worker Online
+  </div>
+</header>
+
+<!-- ═══ MAIN WORKSPACE ═══ -->
+<div class="relative z-10 flex flex-1 overflow-hidden page-in" style="height:calc(100vh - 37px)">
+
+  <!-- LEFT SIDEBAR — Videos & Segments -->
+  <aside class="w-56 flex-shrink-0 border-r flex flex-col" style="background:var(--bg-glass);border-color:var(--border)">
+    <!-- Video selector -->
+    <div class="p-2.5 border-b" style="border-color:var(--border)">
+      <p class="text-[9px] tracking-wider uppercase mb-1.5" style="color:var(--text-muted)">Video</p>
+      <select class="w-full rounded-md border px-2 py-1.5 text-[11px] text-white" style="background:var(--bg-raised);border-color:var(--border)">
+        <option>Forest Wildlife — Morning.mp4</option>
+        <option>River Crossing — Afternoon.mp4</option>
+        <option>Mountain Pass — Evening.mp4</option>
+      </select>
+      <div class="flex items-center gap-3 mt-2 text-[10px]" style="color:var(--text-muted)">
+        <span>02:34</span><span>1920×1080</span><span>12 segments</span>
+      </div>
+    </div>
+
+    <!-- Scene detection / actions bar -->
+    <div class="flex items-center gap-1 px-2.5 py-2 border-b" style="border-color:var(--border)">
+      <span class="text-[9px] mr-1" style="color:var(--text-muted)">Threshold</span>
+      <input type="range" class="w-14 h-1 accent-pink-500" min="15" max="80" value="40" style="accent-color:var(--accent)">
+      <span class="text-[9px] font-mono" style="color:var(--accent-soft)">0.40</span>
+      <span class="flex-1"></span>
+      <button class="px-2 py-1 rounded text-[9px] font-medium accent-bg accent-text">Re-detect</button>
+    </div>
+
+    <!-- Timeline bar -->
+    <div class="px-2.5 py-2 border-b" style="border-color:var(--border)">
+      <div class="flex h-5 rounded overflow-hidden">
+        <div class="h-full cursor-pointer hover:opacity-80 transition-opacity segment-bar" data-seg="1" style="background:rgba(34,197,94,0.3);flex:4" title="S1 · completed"></div>
+        <div class="h-full cursor-pointer hover:opacity-80 transition-opacity segment-bar" data-seg="2" style="background:rgba(34,197,94,0.3);flex:5" title="S2 · completed"></div>
+        <div class="h-full cursor-pointer border-x border-[#020617] segment-bar" data-seg="3" style="background:var(--accent);flex:6;opacity:0.5" title="S3 · selected"></div>
+        <div class="h-full cursor-pointer hover:opacity-80 transition-opacity segment-bar" data-seg="4" style="background:rgba(239,68,68,0.35);flex:3" title="S4 · failed"></div>
+        <div class="h-full cursor-pointer hover:opacity-80 transition-opacity segment-bar" data-seg="5" style="background:rgba(34,197,94,0.3);flex:4" title="S5 · completed"></div>
+        <div class="h-full cursor-pointer hover:opacity-80 transition-opacity segment-bar" data-seg="6" style="background:rgba(249,115,22,0.3);flex:5" title="S6 · partial"></div>
+        <div class="h-full cursor-pointer hover:opacity-80 transition-opacity segment-bar" data-seg="7" style="background:rgba(34,197,94,0.3);flex:4" title="S7 · completed"></div>
+      </div>
+    </div>
+
+    <!-- Segment list -->
+    <div class="flex-1 overflow-auto p-1" id="segList">
+      <div class="seg-item rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up" style="color:var(--text-dim)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-done"></span>
+        <span class="flex-1">S1 · 0.0–4.2s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">done</span>
+      </div>
+      <div class="seg-item rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up" style="color:var(--text-dim)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-done"></span>
+        <span class="flex-1">S2 · 4.2–9.0s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">done</span>
+      </div>
+      <div class="seg-item active rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up accent-bg" style="border:1px solid rgba(255,61,154,0.18)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-active" style="animation:pulse-dot 2s ease-in-out infinite"></span>
+        <span class="flex-1 font-medium accent-text">S3 · 9.0–15.0s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded accent-bg accent-text">editing</span>
+      </div>
+      <div class="seg-item rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up" style="color:var(--text-dim)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-error"></span>
+        <span class="flex-1">S4 · 15.0–18.2s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(239,68,68,0.08);color:#ef4444">failed</span>
+      </div>
+      <div class="seg-item rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up" style="color:var(--text-dim)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-done"></span>
+        <span class="flex-1">S5 · 18.2–22.5s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">done</span>
+      </div>
+      <div class="seg-item rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up" style="color:var(--text-dim)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-warn"></span>
+        <span class="flex-1">S6 · 22.5–27.0s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(245,158,11,0.08);color:#f59e0b">partial</span>
+      </div>
+      <div class="seg-item rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer flex items-center gap-2 fade-up" style="color:var(--text-dim)">
+        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 dot-done"></span>
+        <span class="flex-1">S7 · 27.0–34.0s</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">done</span>
+      </div>
+    </div>
+
+    <!-- Sidebar footer -->
+    <div class="border-t p-2 flex gap-1.5" style="border-color:var(--border)">
+      <button class="flex-1 py-1.5 rounded-md text-[10px] font-medium btn-accent">Annotate All</button>
+    </div>
+  </aside>
+
+  <!-- CENTER — Video + Canvas -->
+  <div class="flex-1 flex flex-col min-w-0">
+    <!-- Toolbar -->
+    <div class="flex items-center gap-2 px-3 py-1.5 border-b flex-shrink-0" style="background:var(--bg-glass);border-color:var(--border)">
+      <div class="flex items-center gap-0.5 rounded-md p-0.5 border" style="background:rgba(255,255,255,0.03);border-color:var(--border)">
+        <button class="tool-btn active px-2.5 py-1 rounded text-[10px] font-medium transition-all" style="background:rgba(255,255,255,0.06);color:white">View</button>
+        <button class="tool-btn px-2.5 py-1 rounded text-[10px] font-medium transition-all" style="color:var(--text-dim)">Draw</button>
+        <button class="tool-btn px-2.5 py-1 rounded text-[10px] font-medium transition-all" style="color:var(--text-dim)">Move</button>
+      </div>
+      <div class="w-px h-4" style="background:var(--border)"></div>
+      <button class="px-2 py-1 rounded-md text-[10px] transition-all" style="color:var(--text-dim)">Precise Locate</button>
+      <button class="px-2 py-1 rounded-md text-[10px] transition-all" style="color:var(--text-dim)">Re-run</button>
+      <div class="flex-1"></div>
+      <div class="flex items-center gap-3 text-[10px]" style="color:var(--text-muted)">
+        <span>Frame 28</span><span>9.333s</span>
+        <span style="color:#475569">|</span>
+        <span>3 People</span><span>1 Object</span><span>2 OCR</span>
+      </div>
+      <div class="w-px h-4" style="background:var(--border)"></div>
+      <button class="px-2 py-1 rounded-md text-[10px] transition-all" style="color:var(--text-dim)">Export Frame</button>
+      <span class="text-[10px] font-medium flex items-center gap-1" style="color:#22c55e">
+        <span class="w-1 h-1 rounded-full" style="background:#22c55e"></span>Saved
+      </span>
+    </div>
+
+    <!-- Video player + Canvas area -->
+    <div class="flex-1 relative flex items-center justify-center overflow-hidden" style="background:radial-gradient(ellipse at center, var(--bg-surface) 0%, var(--bg-root) 70%)">
+      <!-- Grid background -->
+      <svg class="absolute inset-0 w-full h-full opacity-[0.015]"><defs><pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse"><path d="M 50 0 L 0 0 0 50" fill="none" stroke="white" stroke-width="0.5"/></pattern></defs><rect width="100%" height="100%" fill="url(#grid)"/></svg>
+
+      <!-- Simulated video frame border -->
+      <div class="relative w-[85%] aspect-video max-h-[75%] rounded-lg overflow-hidden border" style="border-color:var(--border);background:rgba(0,0,0,0.3)">
+        <!-- Scene details placeholder -->
+        <div class="absolute top-3 left-3 flex flex-wrap gap-1.5">
+          <span class="px-2 py-0.5 rounded text-[9px] font-medium" style="background:rgba(255,61,154,0.12);color:var(--accent-soft)">forest</span>
+          <span class="px-2 py-0.5 rounded text-[9px] font-medium" style="background:rgba(100,116,139,0.12);color:var(--text-dim)">daylight</span>
+          <span class="px-2 py-0.5 rounded text-[9px] font-medium" style="background:rgba(100,116,139,0.12);color:var(--text-dim)">wide shot</span>
+        </div>
+
+        <!-- Bounding boxes -->
+        <div class="absolute border-2 rounded-lg transition-all duration-300 float cursor-pointer" style="left:15%;top:18%;width:16%;height:44%;border-color:var(--accent-soft);box-shadow:0 0 20px rgba(255,61,154,0.1)">
+          <span class="absolute -top-5 left-0 text-[9px] px-1.5 py-0.5 rounded font-medium btn-accent whitespace-nowrap">P-M3 · Female</span>
+        </div>
+        <div class="absolute border-2 rounded-lg transition-all duration-300 float cursor-pointer" style="left:45%;top:14%;width:12%;height:40%;border-color:var(--accent-soft);box-shadow:0 0 20px rgba(255,61,154,0.1);animation-delay:1s">
+          <span class="absolute -top-5 left-0 text-[9px] px-1.5 py-0.5 rounded font-medium btn-accent whitespace-nowrap">P-1 · Male</span>
+        </div>
+        <div class="absolute border-2 rounded-lg transition-all duration-300 float cursor-pointer" style="left:65%;top:28%;width:9%;height:20%;border-color:#22c55e;box-shadow:0 0 14px rgba(34,197,94,0.08);animation-delay:2s">
+          <span class="absolute -top-5 left-0 text-[9px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap" style="background:#16a34a;color:white">O-5 · bird</span>
+        </div>
+
+        <!-- Center play overlay -->
+        <div class="absolute inset-0 flex items-center justify-center opacity-20 hover:opacity-40 transition-opacity">
+          <svg class="w-14 h-14" fill="white" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+      </div>
+
+      <!-- Shortcuts hint -->
+      <div class="absolute bottom-3 right-3 px-2.5 py-1.5 rounded-md text-[9px]" style="background:rgba(0,0,0,0.5);color:var(--text-muted);backdrop-filter:blur(12px)">
+        <span style="color:var(--text-dim)">⌨</span> Del delete · ←→ frame · Space play
+      </div>
+    </div>
+
+    <!-- Video scrubber -->
+    <div class="h-12 flex items-center gap-2 px-4 border-t flex-shrink-0" style="background:var(--bg-glass);border-color:var(--border)">
+      <button class="w-6 h-6 flex items-center justify-center rounded text-[10px] hover:text-white transition-colors" style="color:var(--text-dim)">◀◀</button>
+      <button class="w-6 h-6 flex items-center justify-center rounded text-[10px] hover:text-white transition-colors" style="color:var(--text-dim)">▶</button>
+      <span class="text-[10px] font-mono w-14 text-right" style="color:var(--text-dim)">9.333s</span>
+      <div class="flex-1 h-1.5 rounded-full relative overflow-hidden cursor-pointer" style="background:rgba(255,255,255,0.06)">
+        <div class="absolute inset-y-0 left-0 rounded-full bar-accent" style="width:58%"></div>
+        <div class="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full shadow-md" style="left:58%;background:white;box-shadow:0 0 6px rgba(255,255,255,0.3)"></div>
+      </div>
+      <span class="text-[10px] font-mono" style="color:var(--text-muted)">15.0s</span>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL — Annotation Editors -->
+  <aside class="w-72 flex-shrink-0 border-l flex flex-col overflow-auto" style="background:var(--bg-glass);border-color:var(--border)">
+    <!-- Review status bar -->
+    <div class="p-2.5 border-b flex items-center gap-2" style="border-color:var(--border)">
+      <span class="text-[10px]" style="color:var(--text-muted)">Review:</span>
+      <span class="text-[10px] font-medium">unreviewed</span>
+      <span class="flex-1"></span>
+      <button class="px-2 py-1 rounded text-[9px] font-medium transition-all" style="background:rgba(245,158,11,0.08);color:#f59e0b;border:1px solid rgba(245,158,11,0.12)">Needs Review</button>
+      <button class="px-2 py-1 rounded text-[9px] font-medium transition-all" style="background:rgba(34,197,94,0.08);color:#22c55e;border:1px solid rgba(34,197,94,0.12)">Approve</button>
+    </div>
+
+    <!-- Pipeline status -->
+    <div class="p-2.5 border-b" style="border-color:var(--border)">
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">YOLO ✓</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">ByteTrack ✓</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">Qwen ✓</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(255,61,154,0.08);color:var(--accent-soft)">OCR 3 lines</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(34,197,94,0.08);color:#22c55e">Whisper ✓</span>
+        <span class="text-[9px] px-1.5 py-0.5 rounded" style="background:rgba(100,116,139,0.08);color:var(--text-muted)">Depth ✓</span>
+      </div>
+    </div>
+
+    <!-- Identity Manager accordion -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>Person Identities <span style="color:var(--text-muted);font-weight:400">(3)</span></span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel"><div class="acc-inner px-2.5 pb-2 space-y-1">
+        <div class="flex items-center gap-2 text-[9px] rounded border px-2 py-1 mag" style="border-color:var(--border)">
+          <span class="font-mono flex-1 truncate">v1:person:1</span><span style="color:var(--text-muted)">S1-3</span><button class="px-1 py-0.5 rounded text-[8px] accent-bg accent-text">Lock</button>
+        </div>
+        <div class="flex items-center gap-2 text-[9px] rounded border px-2 py-1 mag" style="border-color:var(--border)">
+          <span class="font-mono flex-1 truncate">v1:manual-person:3</span><span style="color:var(--text-muted)">S3</span><button class="px-1 py-0.5 rounded text-[8px]" style="color:var(--text-muted)">Lock</button>
+        </div>
+        <div class="flex items-center gap-2 text-[9px] rounded border px-2 py-1 mag" style="border-color:var(--border)">
+          <span class="font-mono flex-1 truncate">v1:person:2</span><span style="color:var(--text-muted)">S3</span><button class="px-1 py-0.5 rounded text-[8px] accent-bg accent-text">Locked</button>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Timeline Tools accordion -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>Timeline Tools <span style="color:var(--text-muted);font-weight:400">(2 undo)</span></span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel"><div class="acc-inner px-2.5 pb-2 space-y-1.5">
+        <div class="flex items-center gap-1.5">
+          <input type="number" class="w-20 rounded border px-1.5 py-1 text-[9px] text-white" style="background:var(--bg-raised);border-color:var(--border)" value="12.0" step="0.1">
+          <select class="rounded border px-1.5 py-1 text-[9px] text-white" style="background:var(--bg-raised);border-color:var(--border)">
+            <option>Neither (re-run)</option><option>Left result</option><option>Right result</option>
+          </select>
+        </div>
+        <div class="flex flex-wrap gap-1">
+          <button class="px-2 py-1 rounded text-[9px] font-medium transition-all" style="border:1px solid var(--border);color:var(--text-dim)">Split</button>
+          <button class="px-2 py-1 rounded text-[9px] font-medium transition-all" style="border:1px solid var(--border);color:var(--text-dim)">Merge Next</button>
+          <button class="px-2 py-1 rounded text-[9px] font-medium transition-all" style="background:rgba(245,158,11,0.08);color:#f59e0b;border:1px solid rgba(245,158,11,0.12)">Undo</button>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Person editor accordion (open) -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>Person <span class="accent-text">P-M3</span> · Female · Standing</span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow rotate-90" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel open"><div class="acc-inner px-2.5 pb-2 space-y-1.5">
+        <div class="grid grid-cols-2 gap-1">
+          <label class="text-[9px]" style="color:var(--text-muted)">Gender</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>female</option><option>male</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Age</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>young adult</option><option>child</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Hair color</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>pink</option><option>black</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Hair style</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>ponytail</option><option>long</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Pose</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>standing</option><option>sitting</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Action</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>standing</option><option>walking</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Expression</label>
+          <select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>neutral</option><option>happy</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Occlusion</label>
+          <input type="number" class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)" value="0" min="0" max="1" step="0.1">
+        </div>
+        <div class="flex gap-1.5">
+          <button class="btn-accent flex-1 py-1.5 rounded text-[9px] font-semibold">Save Track</button>
+          <button class="flex-1 py-1.5 rounded text-[9px] font-medium transition-all" style="border:1px solid var(--border);color:var(--text-dim)">Fill Empty</button>
+          <button class="px-2 py-1.5 rounded text-[9px] font-medium transition-all" style="border:1px solid var(--border);color:var(--text-dim)">Analyze</button>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- OCR & Speech accordion -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>OCR & Speech <span style="color:var(--text-muted);font-weight:400">(3 lines)</span></span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel"><div class="acc-inner px-2.5 pb-2 space-y-1">
+        <div class="text-[9px] rounded px-2 py-1" style="color:var(--text-dim);background:var(--bg-raised)">"WILDLIFE RESERVE"</div>
+        <div class="text-[9px] rounded px-2 py-1" style="color:var(--text-dim);background:var(--bg-raised)">"Do not feed the animals"</div>
+        <div class="text-[9px] rounded px-2 py-1" style="color:var(--text-dim);background:var(--bg-raised)">"Open 6AM–8PM"</div>
+      </div></div>
+    </div>
+
+    <!-- Scene & Camera accordion -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>Scene & Camera</span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel"><div class="acc-inner px-2.5 pb-2 space-y-1.5">
+        <div class="grid grid-cols-2 gap-1">
+          <label class="text-[9px]" style="color:var(--text-muted)">Scene</label><select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>forest</option><option>indoor</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Lighting</label><select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>daylight</option><option>twilight</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Shot</label><select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>wide</option><option>medium</option></select>
+          <label class="text-[9px]" style="color:var(--text-muted)">Angle</label><select class="rounded border px-1.5 py-1 text-[10px] text-white w-full" style="background:var(--bg-raised);border-color:var(--border)"><option>eye-level</option><option>low</option></select>
+        </div>
+        <button class="btn-accent w-full py-1.5 rounded text-[9px] font-semibold">Save Scene</button>
+      </div></div>
+    </div>
+
+    <!-- Events accordion -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>Events <span style="color:var(--text-muted);font-weight:400">(1)</span></span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel"><div class="acc-inner px-2.5 pb-2">
+        <div class="rounded border px-2 py-1.5 text-[9px]" style="border-color:var(--border);color:var(--text-dim)">
+          <span class="font-medium text-white">visual_activity</span> · conf 0.7<br>
+          <span style="color:var(--text-muted)">Three people stand near a bird in a forest clearing.</span>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Advanced JSON accordion -->
+    <div class="border-b" style="border-color:var(--border)">
+      <button class="acc-header flex w-full items-center justify-between px-2.5 py-2 text-[10px] font-medium hover:bg-white/[0.02] transition-colors">
+        <span>Advanced JSON</span>
+        <svg class="w-3 h-3 transition-transform duration-300 acc-arrow" style="color:var(--text-muted)" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <div class="acc-panel"><div class="acc-inner px-2.5 pb-2">
+        <div class="rounded border p-2 font-mono text-[9px] leading-relaxed max-h-24 overflow-auto" style="border-color:var(--border);background:#0a0e17;color:var(--text-dim)">
+          <span style="color:#64748b">{</span><br>
+          <span style="color:#64748b">  "segmentId":</span> <span style="color:#22c55e">3</span>,<br>
+          <span style="color:#64748b">  "scene":</span> { <span style="color:#64748b">"type":</span> <span style="color:#f59e0b">"forest"</span> },<br>
+          <span style="color:#64748b">  "persons":</span> [ ... ],<br>
+          <span style="color:#64748b">}</span>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Bottom action bar -->
+    <div class="border-t p-2.5 flex gap-2 mt-auto" style="border-color:var(--border)">
+      <button class="flex-1 py-2 rounded-md text-[10px] font-medium transition-all" style="border:1px solid var(--border);color:var(--text-dim)">Cancel</button>
+      <button class="btn-accent flex-1 py-2 rounded-md text-[10px] font-semibold">Save Changes</button>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+// ── Particle canvas ──
+const canvas = document.getElementById('orbCanvas');
+const ctx = canvas.getContext('2d');
+let mX = -1e3, mY = -1e3;
+const particles = [];
+class P {
+  constructor() { this.reset(); this.y = Math.random() * canvas.height; }
+  reset() { this.x = Math.random() * canvas.width; this.y = -10; this.size = Math.random()*1+0.3; this.vy = Math.random()*0.2+0.06; this.vx = (Math.random()-0.5)*0.2; this.op = Math.random()*0.3+0.06; }
+  update() {
+    this.y += this.vy; this.x += this.vx;
+    const dx = mX-this.x, dy = mY-this.y, d = Math.sqrt(dx*dx+dy*dy);
+    if (d<180) { this.x += dx*0.0006; this.y += dy*0.0006; }
+    if (this.y>canvas.height+10||this.x<-10||this.x>canvas.width+10) this.reset();
+  }
+  draw() { ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fillStyle=`rgba(255,61,154,${this.op})`; ctx.fill(); }
+}
+for (let i=0;i<45;i++) particles.push(new P());
+function resize() { canvas.width=innerWidth; canvas.height=innerHeight; }
+resize(); window.addEventListener('resize',resize);
+(function anim() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  particles.forEach(p=>{p.update();p.draw()});
+  if (mX>0) { const g=ctx.createRadialGradient(mX,mY,0,mX,mY,140); g.addColorStop(0,'rgba(255,61,154,0.025)'); g.addColorStop(1,'transparent'); ctx.fillStyle=g; ctx.fillRect(0,0,canvas.width,canvas.height); }
+  requestAnimationFrame(anim);
+})();
+document.addEventListener('mousemove',e=>{mX=e.clientX;mY=e.clientY});
+
+// ── Accordion ──
+document.querySelectorAll('.acc-header').forEach(h=>h.addEventListener('click',()=>{
+  const p=h.nextElementSibling,a=h.querySelector('.acc-arrow');
+  p.classList.toggle('open');a.classList.toggle('rotate-90');
+}));
+
+// ── Segment item selection ──
+document.querySelectorAll('.seg-item').forEach(el=>el.addEventListener('click',()=>{
+  document.querySelectorAll('.seg-item').forEach(s=>{s.classList.remove('active');s.style.border='';s.style.background='';s.querySelector('span:last-child')&&(s.querySelector('.flex-1').style.color='var(--text-dim)');});
+  el.classList.add('active');el.style.border='1px solid rgba(255,61,154,0.18)';el.style.background='rgba(255,61,154,0.08)';
+  const nameSpan=el.querySelector('.flex-1');if(nameSpan)nameSpan.style.color='var(--accent-soft)';
+}));
+
+// ── Toolbar mode buttons ──
+document.querySelectorAll('.tool-btn').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.tool-btn').forEach(x=>{x.classList.remove('active');x.style.background='';x.style.color='var(--text-dim)'});
+  b.classList.add('active');b.style.background='rgba(255,255,255,0.06)';b.style.color='white';
+}));
+</script>
+</body>
+</html>

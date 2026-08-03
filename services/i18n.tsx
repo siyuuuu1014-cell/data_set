@@ -338,6 +338,7 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
     'video.save_saving': '正在保存…',
     'video.save_saved': '已保存',
     'video.save_failed': '保存失败',
+    'video.save_retry': '重试保存',
     'video.choose_draw_label': '选择标注类型：',
     'video.person_label': '人物',
     'video.object_label': '物体',
@@ -767,6 +768,9 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
     'table.previous_page': '上一页',
     'table.next_page': '下一页',
     'table.no_data': '暂无数据，点击生成',
+    'table.load_failed_hint': '数据加载失败，为避免覆盖已有数据，请在重试成功后再操作',
+    'table.load_failed_no_generate': '数据加载失败，请先重试加载，避免覆盖已有数据',
+    'table.retry_load': '重新加载',
     'table.stats': '数据概况',
     'table.edit_schema': '编辑结构',
     'table.save_changes': '保存',
@@ -1383,6 +1387,7 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
     'video.save_saving': 'Saving…',
     'video.save_saved': 'Saved',
     'video.save_failed': 'Save failed',
+    'video.save_retry': 'Retry save',
     'video.choose_draw_label': 'Choose label:',
     'video.person_label': 'Person',
     'video.object_label': 'Object',
@@ -1812,6 +1817,9 @@ const MESSAGES: Record<Lang, Record<string, string>> = {
     'table.previous_page': 'Previous page',
     'table.next_page': 'Next page',
     'table.no_data': 'No data yet. Click generate.',
+    'table.load_failed_hint': 'Failed to load data. Retry before making changes to avoid overwriting existing rows',
+    'table.load_failed_no_generate': 'Data load failed. Retry loading first to avoid overwriting existing data',
+    'table.retry_load': 'Retry load',
     'table.stats': 'Statistics',
     'table.edit_schema': 'Edit Schema',
     'table.save_changes': 'Save',
@@ -2103,6 +2111,19 @@ interface LangContextValue {
 }
 
 const LangContext = createContext<LangContextValue | null>(null)
+
+/**
+ * Format a stored date for display. Corrupt/missing timestamps must never
+ * crash a whole list page — render a placeholder instead.
+ */
+export function formatDisplayDate(value: string | undefined | null, lang: Lang): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', {
+    year: 'numeric', month: 'short', day: 'numeric',
+  })
+}
 
 const STORAGE_KEY = 'nuwa-lang'
 

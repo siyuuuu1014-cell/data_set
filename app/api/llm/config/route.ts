@@ -1,7 +1,9 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import type { NextRequest } from 'next/server'
 import type { LlmConfig } from '@/services/types'
 import { UnsafeLlmUrlError, validateLlmBaseUrl } from '@/services/llm-url-policy'
+import { deploymentMutationDenied } from '@/services/video-annotation/admin-access'
 
 const CONFIG_DIR = join(process.cwd(), 'configs')
 const CONFIG_FILE = join(CONFIG_DIR, 'llm-config.json')
@@ -38,7 +40,9 @@ export async function GET() {
   })
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const denied = deploymentMutationDenied(request)
+  if (denied) return denied
   try {
     const body = await request.json()
     const existing = readConfig()

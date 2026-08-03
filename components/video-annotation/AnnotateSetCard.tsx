@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useLang } from '@/services/i18n'
+import { useLang, formatDisplayDate } from '@/services/i18n'
 import { useConfirm } from '@/components/ui'
 import { deriveAnnotateSetStatus } from '@/services/video-annotation/status'
 import type { AnnotateSet, AnnotateSetStatus } from '@/services/video-annotation/types'
@@ -63,9 +63,7 @@ export function AnnotateSetCard({ set, onDelete, deleting = false }: Props) {
       </div>
       <span className="annotation-set-card__status" data-status={status}>{t(stat.labelKey)}</span>
       <time className="annotation-set-card__date" dateTime={set.createdAt}>
-        {new Date(set.createdAt).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', {
-          year: 'numeric', month: 'short', day: 'numeric',
-        })}
+        {formatDisplayDate(set.createdAt, lang)}
       </time>
       <div className="annotation-set-card__actions">
         <Link href={`/annotations/${set.id}`} className="annotation-set-card__open">

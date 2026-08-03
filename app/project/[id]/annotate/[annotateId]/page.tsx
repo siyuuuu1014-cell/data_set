@@ -497,6 +497,9 @@ export default function AnnotateDetailPage() {
   const [drawObjectName, setDrawObjectName] = useState('')
   const [spatialSaveStatus, setSpatialSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const spatialSaveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  // Last failed frame save, kept for an explicit user retry. Without this the
+  // optimistic UI keeps the edit but a reload silently drops it.
+  const failedSaveRef = useRef<{ videoId: string; updates: Array<{ segmentId: number; annotation: SegmentAnnotation }> } | null>(null)
   const spatialSaveRevisionRef = useRef(0)
   const [workerStatus, setWorkerStatus] = useState<string>('checking')
   const [showExport, setShowExport] = useState(false)
@@ -837,12 +840,36 @@ export default function AnnotateDetailPage() {
         body: JSON.stringify({ videoId, updates }),
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      failedSaveRef.current = null
       if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('saved')
     }).catch(error => {
       console.error('[frame annotation] save failed', error)
+      failedSaveRef.current = { videoId, updates }
       if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('failed')
     })
   }, [id, annotateId, updateAnnotateSet])
+
+  const retryFailedSave = useCallback(() => {
+    const failed = failedSaveRef.current
+    if (!failed) return
+    failedSaveRef.current = null
+    setSpatialSaveStatus('saving')
+    const { videoId, updates } = failed
+    const revision = ++spatialSaveRevisionRef.current
+    spatialSaveQueueRef.current = spatialSaveQueueRef.current.catch(() => {}).then(async () => {
+      const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/frames`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoId, updates }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      failedSaveRef.current = null
+      if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('saved')
+    }).catch(error => {
+      console.error('[frame annotation] retry failed', error)
+      failedSaveRef.current = failed
+      if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('failed')
+    })
+  }, [annotateId])
 
   const persistSegmentAnnotation = useCallback((nextSet: AnnotateSet, videoId: string, segmentId: number, annotation: SegmentAnnotation) => {
     persistAnnotationUpdates(nextSet, videoId, [{ segmentId, annotation }])
@@ -2228,6 +2255,12 @@ export default function AnnotateDetailPage() {
                     <span className={spatialSaveStatus === 'failed' ? 'text-gv-pink' : spatialSaveStatus === 'saved' ? 'text-gv-green-deep' : ''}>
                       {spatialSaveStatus === 'saving' ? t('video.save_saving') : spatialSaveStatus === 'saved' ? t('video.save_saved') : t('video.save_failed')}
                     </span>
+                  )}
+                  {spatialSaveStatus === 'failed' && (
+                    <button type="button" onClick={retryFailedSave}
+                      className="rounded bg-gv-pink/10 px-2 py-1 text-gv-pink hover:bg-gv-pink/20 transition-colors">
+                      {t('video.save_retry')}
+                    </button>
                   )}
                 </div>
                 {canvasMode === 'draw' && (

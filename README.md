@@ -184,6 +184,8 @@ Additional requirements:
 - Sufficient disk space for uploads, frames, model weights, and caches
 - A CUDA-capable GPU is recommended for heavier local providers
 
+### Windows (PowerShell)
+
 The checked-in helper scripts target PowerShell on Windows:
 
 ```powershell
@@ -197,6 +199,23 @@ The checked-in helper scripts target PowerShell on Windows:
 Run the web application separately with `npm run dev`.
 
 `setup-video-worker.ps1` creates `workers/video-annotation/.venv`; the start and environment-check scripts use that Nuwa-only interpreter and never fall back to an active Conda/base environment. This keeps Nuwa's model dependencies from changing other projects. `NUWA_WORKER_PYTHON` remains available only for an explicitly selected, Nuwa-dedicated interpreter.
+
+### Linux / macOS (bash)
+
+Use the equivalent bash script:
+
+```bash
+chmod +x scripts/start.sh
+./scripts/start.sh            # production mode (build + start)
+./scripts/start.sh --dev      # dev mode (worker hot reload + next dev)
+```
+
+`start.sh` locates Python automatically (preferring `workers/video-annotation/.venv/bin/python`, then `python3`), loads `worker.env` if present, starts the worker in the background, waits for its `/health` endpoint, and then starts the frontend. Set `NUWA_PYTHON` to pin a specific interpreter. For an existing `.venv`, run:
+
+```bash
+python3 -m venv workers/video-annotation/.venv
+workers/video-annotation/.venv/bin/pip install -e "workers/video-annotation[full]"
+```
 
 On the currently validated Windows/NVIDIA setup, install the full profile with the matching CUDA wheel index:
 

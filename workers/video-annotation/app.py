@@ -201,8 +201,11 @@ async def cancel_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+    # Pass the app object directly: the "workers.video_annotation.app"
+    # module path does not exist (workers/ is not a package and the directory
+    # name contains a hyphen), so a string target would fail to load.
     uvicorn.run(
-        "workers.video_annotation.app:app",
+        app,
         host=WORKER_HOST,
         port=WORKER_PORT,
         reload=False,

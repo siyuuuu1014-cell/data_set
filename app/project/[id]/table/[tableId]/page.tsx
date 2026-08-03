@@ -160,6 +160,8 @@ export default function TableEditorPage() {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [displayedRows, setDisplayedRows] = useState<Record<string, unknown>[]>(table?.rows || [])
   const [rowsLoading, setRowsLoading] = useState((table?.rowCount ?? 0) !== 0 && (table?.rows.length ?? 0) === 0)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadRetry, setLoadRetry] = useState(0)
   const [pageSize, setPageSize] = useState(50)
   const [currentPage, setCurrentPage] = useState(1)
   const [workspaceMode, setWorkspaceMode] = useState<'data' | 'statistics'>('data')
@@ -287,11 +289,18 @@ export default function TableEditorPage() {
   useEffect(() => {
     if (!table) return
     const seq = ++dataFetchSeqRef.current
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data-loading effect with stable deps
+    setRowsLoading(true)
+    setLoadFailed(false)
     const url = `/api/data?projectId=${id}&tableName=${encodeURIComponent(table.name)}`
     fetch(url)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
       .then(data => {
         if (seq !== dataFetchSeqRef.current) return // stale response
+        setLoadFailed(false)
         if (data.rows?.length > 0) {
           setDisplayedRows(data.rows)
           setTableRows(id, table.id, data.rows)
@@ -312,8 +321,15 @@ export default function TableEditorPage() {
         }
         setRowsLoading(false)
       })
-      .catch(() => { if (seq === dataFetchSeqRef.current) setRowsLoading(false) })
-  }, [id, table?.name])  // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => {
+        if (seq !== dataFetchSeqRef.current) return
+        setRowsLoading(false)
+        // Loading failed — the Parquet file may still hold data. Refuse any
+        // generate/overwrite action until the user retries the load, otherwise
+        // a transient error would let a fresh empty table clobber old rows.
+        setLoadFailed(true)
+      })
+  }, [id, table?.name, loadRetry])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const [editMode, setEditMode] = useState(false)
   const [editName, setEditName] = useState(table?.name || '')
@@ -339,6 +355,10 @@ export default function TableEditorPage() {
   const emptyPromptCols = table.columns.filter(c => c.type === 'text' && !c.nullable && !c.llmPrompt?.trim())
 
   const handleGenerate = async () => {
+    if (loadFailed) {
+      setGenError(t('table.load_failed_no_generate'))
+      return
+    }
     setGenError('')
     setGenerating(true)
     try {
@@ -1309,6 +1329,17 @@ export default function TableEditorPage() {
             <div className={styles.dataState}>
               <div className="w-8 h-8 border-2 border-gv-pink/30 border-t-gv-pink rounded-full animate-spin" />
               <p>{t('app.loading')}</p>
+            </div>
+          ) : loadFailed ? (
+            <div className={styles.dataState} role="alert">
+              <svg className="w-6 h-6 text-gv-pink" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v4m0 4h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0Z" />
+              </svg>
+              <p>{t('table.load_failed_hint')}</p>
+              <button type="button" onClick={() => setLoadRetry(n => n + 1)}
+                className="mt-2 rounded-lg border border-gv-border px-3 py-1.5 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors">
+                {t('table.retry_load')}
+              </button>
             </div>
           ) : (
           <div className={styles.dataState}>

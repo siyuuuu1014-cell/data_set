@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useStore } from '@/services/store'
-import { useLang } from '@/services/i18n'
+import { useLang, formatDisplayDate } from '@/services/i18n'
 import Link from 'next/link'
 import { WorkspaceHeader } from '@/components/WorkspaceHeader'
 import { PageHeader, PageShell, SlidingControl, useConfirm } from '@/components/ui'
@@ -133,9 +133,7 @@ export default function ProjectsPage() {
                   <small>{rowCount.toLocaleString()} {t('project.metric_rows')}</small>
                 </div>
                 <time dateTime={project.createdAt}>
-                  {new Date(project.createdAt).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', {
-                    year: 'numeric', month: 'short', day: 'numeric',
-                  })}
+                  {formatDisplayDate(project.createdAt, lang)}
                 </time>
                 <div className={styles.projectActions}>
                   <Link href={`/project/${project.id}`} className={styles.openAction}>{t('project.open')}</Link>

@@ -184,6 +184,8 @@ npm run start
 - 有足够的磁盘空间存放上传视频、视频帧、模型权重和缓存
 - 对于资源消耗较高的本地模型，建议使用支持 CUDA 的 GPU
 
+### Windows（PowerShell）
+
 仓库中的辅助脚本面向 Windows PowerShell：
 
 ```powershell
@@ -197,6 +199,23 @@ npm run start
 如需单独启动 Web 应用，请运行 `npm run dev`。
 
 `setup-video-worker.ps1` 会创建 `workers/video-annotation/.venv`；启动和环境检查脚本只使用这个 Nuwa 专用解释器，不再回退到当前激活的 Conda/base 环境，因此不会通过修改 Worker 依赖影响其他项目。`NUWA_WORKER_PYTHON` 仅用于显式指定另一个 Nuwa 专用解释器。
+
+### Linux / macOS（bash）
+
+使用对应的 bash 脚本：
+
+```bash
+chmod +x scripts/start.sh
+./scripts/start.sh            # 生产模式（构建后启动）
+./scripts/start.sh --dev      # 开发模式（Worker 热重载 + next dev）
+```
+
+`start.sh` 会自动定位 Python（优先使用 `workers/video-annotation/.venv/bin/python`，其次 `python3`），加载 `worker.env`（若存在），在后台启动 Worker，等待其 `/health` 端点就绪后再启动前端。可通过 `NUWA_PYTHON` 指定特定解释器。如需创建 `.venv`：
+
+```bash
+python3 -m venv workers/video-annotation/.venv
+workers/video-annotation/.venv/bin/pip install -e "workers/video-annotation[full]"
+```
 
 当前已验证的 Windows/NVIDIA 环境可使用以下命令安装完整配置：
 

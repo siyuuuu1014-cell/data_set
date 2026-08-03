@@ -73,6 +73,9 @@ workers/video-annotation/cache/
 # Project snapshot
 project_tree.txt
 
+# JetBrains IDE (private per-user config)
+.idea/
+
 # Design / review / demo artifacts (local only, not for publishing)
 .impeccable/
 .hermes/

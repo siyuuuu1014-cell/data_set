@@ -41,8 +41,9 @@ function isCrossSiteMutation(request: NextRequest): boolean {
   const origin = request.headers.get('origin')
   if (!origin || origin === 'null') return false
   try {
-    const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0].trim()
-    const requestHost = forwardedHost || request.headers.get('host')
+    // Never trust x-forwarded-host: it is client-controllable without a
+    // reverse proxy and would let an attacker spoof a same-site origin.
+    const requestHost = request.headers.get('host')
     if (!requestHost) return new URL(origin).origin !== request.nextUrl.origin
     return new URL(origin).host.toLowerCase() !== requestHost.toLowerCase()
   } catch {

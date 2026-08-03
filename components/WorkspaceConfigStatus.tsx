@@ -48,15 +48,15 @@ export function WorkspaceConfigStatus({ workspace }: { workspace: Workspace }) {
   const toneClasses: Record<Tone, { text: string; dot: string }> = {
     ready: {
       text: 'text-gv-green-deep hover:text-gv-green-dark',
-      dot: 'bg-gv-green-deep shadow-[0_0_6px_var(--color-gv-green-glow)]',
+      dot: 'bg-gv-green-deep ring-2 ring-gv-green-deep/10',
     },
     warning: {
       text: 'text-gv-gold hover:text-gv-pink',
-      dot: 'bg-gv-gold shadow-[0_0_6px_rgba(234,179,8,0.28)]',
+      dot: 'bg-gv-gold ring-2 ring-gv-gold/10',
     },
     error: {
       text: 'text-gv-pink hover:text-gv-pink-light',
-      dot: 'bg-gv-pink shadow-[0_0_6px_var(--color-gv-pink-glow)]',
+      dot: 'bg-gv-pink ring-2 ring-gv-pink/10',
     },
     checking: {
       text: 'text-gv-text-dim',
@@ -65,7 +65,7 @@ export function WorkspaceConfigStatus({ workspace }: { workspace: Workspace }) {
   }
 
   return (
-    <Link href="/settings" className={`hidden sm:flex items-center gap-2 text-xs transition-colors ${toneClasses[tone].text}`}>
+    <Link href="/settings" className={`hidden sm:flex items-center gap-2 text-xs transition-colors ${toneClasses[tone].text}`} aria-live="polite">
       <span className={`w-2 h-2 rounded-full ${toneClasses[tone].dot}`} />
       <span>{label}</span>
     </Link>

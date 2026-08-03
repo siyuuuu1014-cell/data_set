@@ -115,7 +115,7 @@ export function NuwaHome() {
       <a className={styles.skipLink} href="#workspace-entry">跳至工作区入口</a>
 
       <header className={styles.header}>
-        <Link className={styles.brand} href="/home-demo" aria-label="Nuwa 首页">
+        <Link className={styles.brand} href="/" aria-label="Nuwa 首页">
           <span className={styles.brandMark}>N</span>
           <span>
             <strong>NUWA</strong>
@@ -134,7 +134,7 @@ export function NuwaHome() {
       </section>
 
       <nav className={styles.entryGrid} id="workspace-entry" aria-label="选择工作区">
-        <Link className={`${styles.entry} ${styles.dataEntry}`} href="/">
+        <Link className={`${styles.entry} ${styles.dataEntry}`} href="/projects">
           <span className={styles.entryIndex}>数据合成</span>
           <span className={styles.entryBody}>
             <span className={styles.entryGlyph}><DataGlyph /></span>

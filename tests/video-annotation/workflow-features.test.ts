@@ -3,6 +3,7 @@ import test from 'node:test'
 import { deriveQualityIssues } from '../../services/video-annotation/quality-center'
 import { applyManualIdentityReview, mergeVideoPeople, splitVideoPerson } from '../../services/video-annotation/identity-review'
 import { adjustSegmentBoundary, mergeAdjacentSegments, splitAnnotatedSegment, undoTimelineEdit } from '../../services/video-annotation/segment-timeline'
+import { deriveAnnotateSetStatus, deriveVideoReviewSummary, withDerivedAnnotationStatuses } from '../../services/video-annotation/status'
 import type { AnnotateSet, SegmentAnnotation } from '../../services/video-annotation/types'
 
 function annotation(segmentId: number, start: number, end: number, trackId = 1, personId = 'v1:person:1'): SegmentAnnotation {
@@ -29,6 +30,25 @@ test('quality center derives actionable issues without mutating annotations', ()
   assert.ok(issues.some(issue => issue.kind === 'unknown_fields'))
   assert.ok(issues.some(issue => issue.kind === 'unreviewed'))
   assert.equal(JSON.stringify(task), before)
+})
+
+test('review status drives video summary and project status after processing completes', () => {
+  const task = fixture()
+  assert.equal(deriveVideoReviewSummary(task.videos[0]).status, 'unreviewed')
+  assert.equal(deriveAnnotateSetStatus(task), 'awaiting_review')
+
+  task.videos[0].segments[0].reviewStatus = 'approved'
+  task.videos[0].segments[1].reviewStatus = 'needs_review'
+  assert.deepEqual(deriveVideoReviewSummary(task.videos[0]), {
+    total: 2,
+    approved: 1,
+    status: 'needs_review',
+  })
+  assert.equal(withDerivedAnnotationStatuses(task).status, 'awaiting_review')
+
+  task.videos[0].segments[1].reviewStatus = 'approved'
+  assert.equal(deriveVideoReviewSummary(task.videos[0]).status, 'approved')
+  assert.equal(withDerivedAnnotationStatuses(task).status, 'approved')
 })
 
 test('manual identity merge is persisted and reapplied after a model rerun', () => {

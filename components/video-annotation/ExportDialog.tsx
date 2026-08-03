@@ -1,118 +1,227 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useLang } from '@/services/i18n'
 import type { CustomJsonExportOptions } from '@/services/video-annotation/export-service'
 import type { ExportFormat } from '@/services/video-annotation/types'
+import styles from './review-export.module.css'
 
 interface Props {
   open: boolean
   onClose: () => void
-  onExport: (format: ExportFormat, options: CustomJsonExportOptions) => void | Promise<void>
+  onExport: (format: ExportFormat, options: CustomJsonExportOptions) => boolean | void | Promise<boolean | void>
   busy?: boolean
   busyText?: string
   jsonOnly?: boolean
   title?: string
   description?: string
+  outputNames?: Partial<Record<ExportFormat, string>>
 }
 
-const FORMATS: { value: ExportFormat; label: string; desc: string }[] = [
-  { value: 'json', label: 'Custom JSON', desc: 'Full annotation plus one video-level sentence summarized from all segments' },
-  { value: 'yolo', label: 'YOLO', desc: 'Images + labels (txt) in ZIP, training-ready' },
-  { value: 'coco', label: 'COCO JSON', desc: 'Standard detection format, compatible with most frameworks' },
-]
+const FORMAT_VALUES: ExportFormat[] = ['json', 'yolo', 'coco']
 
 export function ExportDialog({
   open,
   onClose,
   onExport,
   busy = false,
-  busyText = 'Exporting…',
+  busyText,
   jsonOnly = false,
-  title = 'Export Annotations',
-  description = 'Choose export format for the annotated dataset.',
+  title,
+  description,
+  outputNames,
 }: Props) {
+  const { t } = useLang()
   const [selected, setSelected] = useState<ExportFormat>('json')
+  const [hovered, setHovered] = useState<ExportFormat | null>(null)
   const [includeRecognitionText, setIncludeRecognitionText] = useState(false)
+  const [feedback, setFeedback] = useState<'idle' | 'error' | 'success'>('idle')
+  const titleId = useId()
+  const descriptionId = useId()
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const busyRef = useRef(busy)
+
+  const formats = useMemo(() => jsonOnly ? FORMAT_VALUES.slice(0, 1) : FORMAT_VALUES, [jsonOnly])
+  const selectedFormat = jsonOnly ? 'json' : selected
+  const visualFormat = hovered ?? selectedFormat
+  const visualIndex = Math.max(0, formats.indexOf(visualFormat))
+  const sliderStyle = {
+    '--slide-count': formats.length,
+    '--slide-index': visualIndex,
+  } as CSSProperties
+  const outputName = outputNames?.[selectedFormat] ?? t(`video.export_detail.${selectedFormat}.output`)
+
+  const closeAndReset = useCallback(() => {
+    if (busyRef.current) return
+    setIncludeRecognitionText(false)
+    setFeedback('idle')
+    setHovered(null)
+    onClose()
+  }, [onClose])
+
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
+
+  useEffect(() => {
+    if (!open) return
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    closeRef.current?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busyRef.current) {
+        closeAndReset()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      )
+      if (!focusable?.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+      previouslyFocused?.focus()
+    }
+  }, [open, closeAndReset])
 
   if (!open) return null
 
-  const selectedFormat = jsonOnly ? 'json' : selected
-  const formats = jsonOnly ? FORMATS.filter(format => format.value === 'json') : FORMATS
-  const closeAndReset = () => {
-    setIncludeRecognitionText(false)
-    onClose()
-  }
   const submit = async () => {
-    await onExport(selectedFormat, {
-      includeOcr: includeRecognitionText,
-      includeSpeechTranscript: includeRecognitionText,
-    })
-    setIncludeRecognitionText(false)
+    if (busy || feedback === 'success') return
+    setFeedback('idle')
+    try {
+      const result = await onExport(selectedFormat, {
+        includeOcr: includeRecognitionText,
+        includeSpeechTranscript: includeRecognitionText,
+      })
+      setFeedback(result === false ? 'error' : 'success')
+    } catch {
+      setFeedback('error')
+    }
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
-      onClick={() => { if (!busy) closeAndReset() }}
+      className={styles.overlay}
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) closeAndReset()
+      }}
     >
-      <div className="glass-raised rounded-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-gv-text mb-1">{title}</h3>
-        <p className="text-sm text-gv-text-dim mb-4">{description}</p>
+      <section
+        ref={dialogRef}
+        className={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        aria-busy={busy}
+      >
+        <header className={styles.dialogHeader}>
+          <div>
+            <h2 id={titleId}>{title ?? t('video.export_dialog_title')}</h2>
+            <p id={descriptionId}>{description ?? t('video.export_dialog_desc')}</p>
+          </div>
+          <button ref={closeRef} type="button" onClick={closeAndReset} disabled={busy}>{t('app.close')}</button>
+        </header>
 
-        <div className="space-y-2 mb-6">
-          {formats.map(f => (
-            <label
-              key={f.value}
-              className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                selectedFormat === f.value
-                  ? 'border-gv-pink bg-gv-pink/5'
-                  : 'border-gv-border hover:border-gv-pink/30'
-              }`}
-            >
-              <input
-                type="radio" name="export-format" value={f.value}
-                checked={selectedFormat === f.value}
-                onChange={() => setSelected(f.value)}
-                disabled={busy}
-                className="mt-0.5 h-4 w-4 accent-gv-pink"
-              />
-              <div>
-                <p className="text-sm font-medium text-gv-text">{f.label}</p>
-                <p className="text-xs text-gv-text-dim mt-0.5">{f.desc}</p>
-              </div>
-            </label>
-          ))}
-        </div>
+        <fieldset className={styles.formatGroup} disabled={busy}>
+          <legend>{t('video.export_format')}</legend>
+          <div
+            className={styles.formatSlider}
+            style={sliderStyle}
+            role="group"
+            aria-label={t('video.export_format')}
+            onMouseLeave={() => setHovered(null)}
+          >
+            <span className={styles.formatIndicator} aria-hidden="true" />
+            {formats.map(format => (
+              <button
+                type="button"
+                key={format}
+                aria-pressed={selectedFormat === format}
+                data-visual={visualFormat === format}
+                onMouseEnter={() => setHovered(format)}
+                onClick={() => {
+                  setSelected(format)
+                  setHovered(null)
+                  setFeedback('idle')
+                }}
+              >
+                {t(`video.export_format.${format}`)}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <section className={styles.exportSummary} aria-live="polite">
+          <div>
+            <span>{t('video.export_output_file')}</span>
+            <strong>{outputName}</strong>
+          </div>
+          <div>
+            <span>{t('video.export_includes')}</span>
+            <strong>{t(`video.export_detail.${selectedFormat}.includes`)}</strong>
+          </div>
+          <p>{t(`video.export_detail.${selectedFormat}.description`)}</p>
+        </section>
 
         {selectedFormat === 'json' && (
-          <label className="mb-6 flex cursor-pointer items-start gap-3 rounded-lg border border-gv-border p-3 transition-colors hover:border-gv-pink/30">
+          <label className={styles.recognitionOption}>
             <input
               type="checkbox"
               checked={includeRecognitionText}
-              onChange={event => setIncludeRecognitionText(event.target.checked)}
-              disabled={busy}
-              className="mt-0.5 h-4 w-4 accent-gv-pink"
+              onChange={event => {
+                setIncludeRecognitionText(event.target.checked)
+                setFeedback('idle')
+              }}
+              disabled={busy || feedback === 'success'}
             />
-            <div>
-              <p className="text-sm font-medium text-gv-text">Include OCR &amp; Speech</p>
-              <p className="mt-0.5 text-xs text-gv-text-dim">
-                Adds corrected OCR text objects and the segment speechTranscript. Frames and runtime diagnostics remain excluded.
-              </p>
-            </div>
+            <span>
+              <strong>{t('video.export_include_recognition')}</strong>
+              <small>{t('video.export_include_recognition_desc')}</small>
+            </span>
           </label>
         )}
 
-        <div className="flex gap-2 justify-end">
-          <button onClick={closeAndReset} disabled={busy} className="btn-outline rounded-lg px-4 py-2 text-sm disabled:opacity-50">Cancel</button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy}
-            className="btn-primary rounded-lg px-4 py-2 text-sm disabled:opacity-50"
-          >
-            {busy ? busyText : `Export ${selectedFormat.toUpperCase()}`}
+        {feedback === 'error' && <p className={styles.exportError} role="alert">{t('video.export_inline_error')}</p>}
+        {feedback === 'success' && <p className={styles.exportSuccess} role="status">{t('video.export_inline_success', outputName)}</p>}
+        {busy && (
+          <p className={styles.exportProgress} role="status">
+            <i aria-hidden="true" />
+            <span>{busyText ?? t('video.export_processing')}</span>
+          </p>
+        )}
+
+        <footer className={styles.dialogActions}>
+          <button type="button" onClick={closeAndReset} disabled={busy} className={styles.cancelButton}>
+            {feedback === 'success' ? t('app.close') : t('app.cancel')}
           </button>
-        </div>
-      </div>
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={busy || feedback === 'success'}
+            className={styles.exportButton}
+          >
+            {busy ? (busyText ?? t('video.export_processing')) : t('video.export_submit', t(`video.export_format.${selectedFormat}`))}
+          </button>
+        </footer>
+      </section>
     </div>
   )
 }

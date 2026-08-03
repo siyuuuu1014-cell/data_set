@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import { NextRequest } from 'next/server'
 
 import { isUnsafePathError } from '@/services/server-paths'
@@ -8,7 +8,7 @@ import {
   getUploadDir,
   getVideoIdentityCachePath,
 } from '@/services/video-annotation/server-paths'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import type { AnnotateSet } from '@/services/video-annotation/types'
 import {
   removeVideoFromAnnotationSet,
@@ -44,7 +44,7 @@ export async function DELETE(
       // Commit the project update first. If best-effort cache cleanup is ever
       // blocked by an external process, the deleted video cannot reappear in
       // the project and cleanup can safely be retried.
-      await writeFile(taskPath, JSON.stringify(updated, null, 2))
+      await writeTaskFileAtomic(taskPath, JSON.stringify(updated, null, 2))
       const cleanup = await Promise.allSettled([
         rm(uploadDir, { recursive: true, force: true }),
         rm(identityPath, { force: true }),

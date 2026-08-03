@@ -1,10 +1,17 @@
 import type {
   AnnotateSet,
   AnnotateSetStatus,
+  ReviewStatus,
   SegmentState,
   VideoTaskItem,
   VideoTaskStatus,
 } from '@/services/video-annotation/types'
+
+export interface VideoReviewSummary {
+  total: number
+  approved: number
+  status: ReviewStatus | 'not_ready'
+}
 
 const SUCCESSFUL_SEGMENT_STATUSES = new Set<SegmentState['status']>(['completed', 'skipped'])
 const TERMINAL_SEGMENT_STATUSES = new Set<SegmentState['status']>([
@@ -43,7 +50,11 @@ function normalizeSegmentStatus(segment: SegmentState): SegmentState {
 export function deriveVideoTaskStatus(video: VideoTaskItem): VideoTaskStatus {
   const segments = video.segments || []
 
-  if (Number.isFinite(video.uploadProgress) && video.uploadProgress >= 0 && video.uploadProgress < 100) return 'uploading'
+  // A video is mid-upload only while progress is actively between 0 and 100.
+  // progress 0 means "not yet uploaded" (falls through to pending) and progress
+  // 100 means finished — otherwise a stale 0 from persistence would permanently
+  // mark an uploaded video as uploading.
+  if (Number.isFinite(video.uploadProgress) && video.uploadProgress > 0 && video.uploadProgress < 100) return 'uploading'
   if (segments.some(segment => segment.status === 'processing')) return 'processing'
   if (segments.length > 0 && segments.every(segment => TERMINAL_SEGMENT_STATUSES.has(segment.status))) {
     if (segments.every(segment => segment.status === 'failed')) return 'failed'
@@ -51,6 +62,28 @@ export function deriveVideoTaskStatus(video: VideoTaskItem): VideoTaskStatus {
     if (segments.every(segment => SUCCESSFUL_SEGMENT_STATUSES.has(segment.status))) return 'completed'
   }
   return 'pending'
+}
+
+export function deriveVideoReviewSummary(video: VideoTaskItem): VideoReviewSummary {
+  const reviewableSegments = (video.segments || []).filter(segment => (
+    Boolean(segment.humanAnnotation || segment.modelAnnotation)
+  ))
+  const approved = reviewableSegments.filter(segment => segment.reviewStatus === 'approved').length
+
+  if (reviewableSegments.length === 0) return { total: 0, approved: 0, status: 'not_ready' }
+  if (reviewableSegments.some(segment => segment.reviewStatus === 'rejected')) {
+    return { total: reviewableSegments.length, approved, status: 'rejected' }
+  }
+  if (reviewableSegments.some(segment => segment.reviewStatus === 'needs_review')) {
+    return { total: reviewableSegments.length, approved, status: 'needs_review' }
+  }
+  if (reviewableSegments.some(segment => segment.reviewStatus === 'modified')) {
+    return { total: reviewableSegments.length, approved, status: 'modified' }
+  }
+  if (approved === reviewableSegments.length) {
+    return { total: reviewableSegments.length, approved, status: 'approved' }
+  }
+  return { total: reviewableSegments.length, approved, status: 'unreviewed' }
 }
 
 export function deriveAnnotateSetStatus(set: AnnotateSet): AnnotateSetStatus {
@@ -64,7 +97,11 @@ export function deriveAnnotateSetStatus(set: AnnotateSet): AnnotateSetStatus {
   if (videoStatuses.some(status => status === 'processing')) return 'annotating'
   if (videoStatuses.every(status => status === 'failed')) return 'failed'
   if (videoStatuses.some(status => status === 'failed' || status === 'partial_completed')) return 'partial_completed'
-  if (videoStatuses.every(status => status === 'completed')) return 'completed'
+  if (videoStatuses.every(status => status === 'completed')) {
+    const reviewSummaries = videos.map(deriveVideoReviewSummary).filter(summary => summary.total > 0)
+    if (reviewSummaries.length === 0) return 'completed'
+    return reviewSummaries.every(summary => summary.status === 'approved') ? 'approved' : 'awaiting_review'
+  }
 
   const hasSegments = videos.some(video => (video.segments || []).length > 0)
   return hasSegments ? 'awaiting_segment_review' : 'draft'

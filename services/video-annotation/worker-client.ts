@@ -33,6 +33,10 @@ async function workerJson<T>(path: string, init?: RequestInit, timeoutMs = 10000
 
 export async function workerHealth(): Promise<WorkerHealth> {
   const res = await fetch(`${workerUrl}/health`, { signal: AbortSignal.timeout(5000) })
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null) as { detail?: string } | null
+    throw new Error(payload?.detail || `Worker health check failed (HTTP ${res.status})`)
+  }
   return res.json() as Promise<WorkerHealth>
 }
 
@@ -58,7 +62,11 @@ export async function getJobStatus(jobId: string): Promise<WorkerJobStatus> {
     const error = res.status === 404
       ? 'Worker job not found (HTTP 404). The saved job ID is stale; retry this segment.'
       : `Worker job status request failed (HTTP ${res.status})`
-    return { jobId, status: 'failed', progress: 0, result: null, error }
+    if (res.status === 404) {
+      return { jobId, status: 'failed', progress: 0, result: null, error }
+    }
+    // 5xx/503/429 are transient — keep polling instead of marking the job failed
+    return { jobId, status: 'processing', progress: 0, result: null, error }
   }
   return res.json() as Promise<WorkerJobStatus>
 }
@@ -71,7 +79,11 @@ export async function getPersonAnalysisJobStatus(jobId: string): Promise<PersonA
     const error = res.status === 404
       ? 'Person analysis job is no longer available; run the analysis again.'
       : `Person analysis status request failed (HTTP ${res.status})`
-    return { jobId, status: 'failed', progress: 0, result: null, error }
+    if (res.status === 404) {
+      return { jobId, status: 'failed', progress: 0, result: null, error }
+    }
+    // 5xx/503/429 are transient — keep polling instead of marking the job failed
+    return { jobId, status: 'processing', progress: 0, result: null, error }
   }
   return res.json() as Promise<PersonAnalysisJobStatus>
 }

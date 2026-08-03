@@ -1,10 +1,11 @@
 import { NextRequest } from 'next/server'
-import { readFile, writeFile, mkdir, readdir } from 'fs/promises'
+import { readFile, mkdir, readdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import type { AnnotateSet } from '@/services/video-annotation/types'
 import { withDerivedAnnotationStatuses } from '@/services/video-annotation/status'
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskDir, getTaskPath, TASKS_ROOT } from '@/services/video-annotation/server-paths'
+import { writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 
 async function listTasks(projectId: string): Promise<AnnotateSet[]> {
   if (!existsSync(TASKS_ROOT)) return []
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     const taskDir = getTaskDir(id)
     await mkdir(taskDir, { recursive: true })
-    await writeFile(getTaskPath(id), JSON.stringify(task, null, 2))
+    await writeTaskFileAtomic(getTaskPath(id), JSON.stringify(task, null, 2))
 
     return Response.json({ data: task }, { status: 201 })
   } catch (err) {

@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import type { NextRequest } from 'next/server'
 import type { AddManualTrackInput } from '@/services/video-annotation/manual-track'
 import { addManualTrack, ManualTrackError } from '@/services/video-annotation/manual-track'
 import { getTaskPath } from '@/services/video-annotation/server-paths'
 import { withDerivedAnnotationStatuses } from '@/services/video-annotation/status'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import type { AnnotateSet, BBox, SpatialEntityType } from '@/services/video-annotation/types'
 
 interface ManualTrackBody {
@@ -70,7 +70,7 @@ export async function POST(
         ...result.task,
         updatedAt: new Date().toISOString(),
       })
-      await writeFile(taskPath, JSON.stringify(updated, null, 2))
+      await writeTaskFileAtomic(taskPath, JSON.stringify(updated, null, 2))
       return Response.json({
         data: updated,
         manualTrack: { trackId: result.trackId, personId: result.personId },

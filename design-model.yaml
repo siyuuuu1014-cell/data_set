@@ -1,0 +1,117 @@
+# NUWA formal product design system. Update this file before introducing a new visual rule.
+meta:
+  name: nuwa
+  industry: synthetic-data / video-annotation / local-ai-tools
+  register: product
+  persona: calm technical workspace
+  design_read: "克制、轻盈、专业；SPECTACLE=2；DENSITY=7；反馈型动效"
+  source_surfaces:
+    - /design-demo scheme A layout
+    - / formal home palette
+
+dials:
+  soul: 6
+  spectacle: 2
+  density: 7
+
+color:
+  page: "#FFFFFF"
+  surface: "#FFFFFF"
+  surface_raised: "#FFFAFD"
+  surface_subtle: "#FAF7F9"
+  code_surface: "#FAF7F9"
+  ink: "#514950"
+  ink_secondary: "#686066"
+  ink_muted: "#756B72"
+  border: "rgba(81,73,80,0.11)"
+  border_strong: "rgba(81,73,80,0.18)"
+  accent: "#A94273"
+  accent_hover: "#8F315E"
+  accent_vivid: "#D76396"
+  brand_soft: "#FFADD1"
+  brand_soft_hover: "#FFA3CC"
+  on_brand_soft: "#71324F"
+  accent_soft: "#FFF0F6"
+  icon_accent: "#F766C5"
+  icon_accent_soft: "#FFF6FB"
+  active_indicator: "#F766C5"
+  selection_border: "rgba(255,155,219,0.34)"
+  selection_background: "linear-gradient(135deg, #FFB7E3, #FFF7FC)"
+  action_primary_border: "#F4B9DD"
+  action_primary_border_hover: "#EF9ED0"
+  action_primary_background: "linear-gradient(135deg, #FF9BDB, #FFE6F4)"
+  action_primary_background_hover: "linear-gradient(135deg, #FF86D3, #FFDCEF)"
+  action_primary_foreground: "#71324F"
+  progress_track: "#F1EAF0"
+  progress_gradient: "linear-gradient(90deg, #F766C5, #B8E84A)"
+  success_fill: "#B8E84A"
+  accent_secondary: "#B8E84A"
+  accent_secondary_text: "#477000"
+  accent_secondary_soft: "#F1F9DE"
+  on_accent: "#FFFFFF"
+  success: "#477000"
+  warning: "#935F11"
+  danger: "#A9483F"
+  info: "#2F6C7A"
+  strategy: restrained
+
+type:
+  ui: "Geist, Segoe UI, system-ui, sans-serif"
+  mono: "Geist Mono, Consolas, monospace"
+  scale_px: [12, 14, 16, 18, 20, 24]
+  heading_tracking: "-0.03em"
+  body_leading: 1.5
+  roles_px:
+    metadata: 12
+    control: 12
+    body: 14
+    section: 16
+    page_title: 24
+
+spacing:
+  base_px: 4
+  scale_px: [4, 8, 12, 16, 20, 24, 32, 40, 48]
+  content_width_px:
+    narrow: 768
+    default: 1184
+    wide: "fluid"
+  page_gutter_px: [16, 24]
+
+substrate:
+  radii_px:
+    xs: 8
+    sm: 10
+    md: 12
+    lg: 16
+    xl: 20
+  border_style: translucent-hairline
+  shadow_small: "0 1px 3px rgba(81,55,69,0.06)"
+  shadow_medium: "0 12px 30px -24px rgba(81,55,69,0.28)"
+  shadow_dialog: "0 30px 70px -42px rgba(58,31,49,0.48)"
+  shadow_action_primary: "0 10px 24px -17px rgba(180,58,137,0.56)"
+  shadow_action_primary_hover: "0 14px 28px -17px rgba(180,58,137,0.62)"
+  shadow_selection: "0 7px 16px -12px rgba(95,39,75,0.38)"
+  card_treatment: hairline plus whisper shadow
+  gradients: "only the approved pink-white selection/action treatment and pink-lime data bars"
+  glassmorphism: prohibited in formal product pages
+
+motion:
+  purpose: feedback-only
+  duration_ms: [120, 180, 210, 280]
+  easing: "cubic-bezier(0.16,1,0.3,1)"
+  properties: [transform, opacity]
+  reduced_motion: terminal state with near-zero duration
+
+components:
+  button_variants: [primary, secondary, quiet, danger]
+  button_heights_px: [32, 40, 44]
+  surface_variants: [default, raised, subtle]
+  status_tones: [neutral, accent, success, warning, danger, info]
+  feedback_states: [loading, empty, error, success, disabled]
+
+constraints:
+  preserve_routes: true
+  preserve_api_contracts: true
+  preserve_business_models: true
+  demo_retained_until_final_validation: true
+  no_large_ui_dependency_without_approval: true

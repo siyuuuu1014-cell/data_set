@@ -33,22 +33,26 @@ export function deriveQualityIssues(task: AnnotateSet): QualityIssue[] {
     const identityOccurrences = new Map<string, Set<number>>()
     for (const segment of video.segments || []) {
       const annotation = effectiveAnnotation(segment)
-      const push = (kind: QualityIssueKind, severity: QualityIssueSeverity, title: string, detail: string) => {
-        issues.push({ id: `${video.videoId}:${segment.segmentId}:${kind}`, kind, severity, videoId: video.videoId, videoName: video.fileName, segmentId: segment.segmentId, title, detail })
+      const push = (kind: QualityIssueKind, severity: QualityIssueSeverity, title: string, detail: string, discriminator = '') => {
+        // Discriminate issues that can repeat within one segment (e.g. one
+        // identity issue per track) so keys stay unique for the UI.
+        issues.push({ id: `${video.videoId}:${segment.segmentId}:${kind}${discriminator}`, kind, severity, videoId: video.videoId, videoName: video.fileName, segmentId: segment.segmentId, title, detail })
       }
       if (segment.status === 'failed') push('failed', 'critical', 'Annotation failed', segment.error || 'The Worker did not produce a usable result.')
       if (segment.status === 'partial_completed') push('degraded', 'critical', 'Degraded result', segment.error || annotation?._pipeline_errors?.[0] || 'At least one enabled provider failed.')
       if (annotation && segment.reviewStatus !== 'approved') push('unreviewed', 'info', 'Needs human review', `Review status: ${segment.reviewStatus || 'unreviewed'}.`)
       if (!annotation) continue
+      const persons = annotation.persons || []
+      const objects = annotation.objects || []
       const unknownRatio = unknownPersonRatio(annotation)
-      if (annotation.persons.length > 0 && unknownRatio >= 0.5) push('unknown_fields', 'warning', 'Many person fields are unknown', `${Math.round(unknownRatio * 100)}% of core person attributes are unknown.`)
+      if (persons.length > 0 && unknownRatio >= 0.5) push('unknown_fields', 'warning', 'Many person fields are unknown', `${Math.round(unknownRatio * 100)}% of core person attributes are unknown.`)
       const visualEvents = (annotation.events || []).filter(event => !event.type.startsWith('[Speech]'))
-      if (annotation.persons.length === 0 && annotation.objects.filter(object => !object._textContent && object.category !== 'text').length === 0 && visualEvents.length > 0) {
+      if (persons.length === 0 && objects.filter(object => !object._textContent && object.category !== 'text').length === 0 && visualEvents.length > 0) {
         push('empty_entities', 'warning', 'Description has no localized entities', 'The segment has a visual event but no localized person or object.')
       }
       if (annotation._recognition?.ocr?.status === 'failed' || annotation._recognition?.speech?.status === 'failed') push('recognition', 'warning', 'Text recognition needs attention', 'OCR or speech recognition failed.')
-      for (const person of annotation.persons || []) {
-        if (!person.personId) push('identity', 'warning', 'Person has no video identity', `Track ${person.trackId} has no personId.`)
+      for (const person of persons) {
+        if (!person.personId) push('identity', 'warning', 'Person has no video identity', `Track ${person.trackId} has no personId.`, `:${person.trackId}`)
         else {
           const seen = identityOccurrences.get(person.personId) || new Set<number>()
           seen.add(segment.segmentId)

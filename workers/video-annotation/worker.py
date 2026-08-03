@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 JOBS_FILE = CACHE_DIR / "jobs.json"
 MAX_TERMINAL_JOBS = 200
+JOB_TIMEOUT_SECONDS = float(os.environ.get("NUWA_JOB_TIMEOUT", 30 * 60))
+
+
+class JobCancelledError(Exception):
+    """Raised inside a running job when a cancel request has been observed."""
 
 
 class JobQueue:
@@ -27,6 +32,7 @@ class JobQueue:
         self._jobs: dict[str, dict[str, Any]] = {}
         self._current: str | None = None
         self._thread: threading.Thread | None = None
+        self._watchdog: threading.Thread | None = None
 
     def submit(self, payload: dict) -> str:
         job_id = uuid.uuid4().hex[:12]
@@ -59,7 +65,18 @@ class JobQueue:
                 self._prune_terminal_jobs()
                 self._persist()
                 return True
+            if job["status"] == "processing":
+                # Request cooperative cancellation: the running pipeline observes
+                # the flag at its next progress callback and aborts.
+                job["cancel_requested"] = True
+                job["error"] = "Cancel requested"
+                self._persist()
+                return True
         return False
+
+    def _cancel_requested(self, job_id: str) -> bool:
+        with self._lock:
+            return bool(self._jobs.get(job_id, {}).get("cancel_requested"))
 
     def size(self) -> int:
         with self._lock:
@@ -85,6 +102,7 @@ class JobQueue:
                     if job.get("status") == "processing":
                         job["status"] = "queued"
                         job["error"] = "Worker restarted; job re-queued"
+                        job.pop("cancel_requested", None)
                     if job.get("status") in {"queued", "completed", "failed", "cancelled"}:
                         self._jobs[job_id] = job
                         restored_queued = restored_queued or job.get("status") == "queued"
@@ -114,6 +132,9 @@ class JobQueue:
                 return
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
+            if not self._watchdog or not self._watchdog.is_alive():
+                self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
+                self._watchdog.start()
 
     def _prune_terminal_jobs(self) -> None:
         terminal = [
@@ -139,6 +160,8 @@ class JobQueue:
             with self._lock:
                 self._jobs[job_id]["status"] = "processing"
                 self._jobs[job_id]["progress"] = 0
+                self._jobs[job_id]["started_at"] = time.time()
+                self._jobs[job_id].pop("cancel_requested", None)
                 self._persist()
 
             try:
@@ -147,6 +170,14 @@ class JobQueue:
                     self._jobs[job_id]["status"] = "completed"
                     self._jobs[job_id]["progress"] = 100
                     self._jobs[job_id]["result"] = result
+                    self._jobs[job_id]["error"] = None
+                    self._prune_terminal_jobs()
+                    self._persist()
+            except JobCancelledError:
+                logger.info("Job %s cancelled by user request", job_id)
+                with self._lock:
+                    self._jobs[job_id]["status"] = "cancelled"
+                    self._jobs[job_id]["error"] = "Cancelled by user"
                     self._prune_terminal_jobs()
                     self._persist()
             except Exception as exc:
@@ -159,12 +190,34 @@ class JobQueue:
             finally:
                 self._current = None
 
+    def _watchdog_loop(self) -> None:
+        """Mark a hung job as failed once it exceeds the configured timeout."""
+        while True:
+            time.sleep(10)
+            with self._lock:
+                current = self._current
+                if current is None:
+                    continue
+                job = self._jobs.get(current)
+                if not job or job.get("status") != "processing":
+                    continue
+                started_at = float(job.get("started_at", 0) or 0)
+                if started_at > 0 and time.time() - started_at > JOB_TIMEOUT_SECONDS:
+                    job["cancel_requested"] = True
+                    job["error"] = f"Job timed out after {int(JOB_TIMEOUT_SECONDS)}s"
+                    self._persist()
+                    logger.warning("Job %s exceeded %ss timeout — requesting cancellation", current, JOB_TIMEOUT_SECONDS)
+
     def _next_queued(self) -> tuple[str | None, dict | None]:
         with self._lock:
             for job_id, job in self._jobs.items():
                 if job["status"] == "queued":
                     return job_id, job["payload"]
         return None, None
+
+    def _check_cancel(self, job_id: str) -> None:
+        if self._cancel_requested(job_id):
+            raise JobCancelledError()
 
     def _execute(self, payload: dict, job_id: str) -> dict:
         video_path = Path(payload["video_path"]).expanduser().resolve()
@@ -182,6 +235,7 @@ class JobQueue:
                 if job_id in self._jobs:
                     self._jobs[job_id]["progress"] = 10
                     self._jobs[job_id]["progressDetail"] = "Extracting selected person"
+            self._check_cancel(job_id)
             result = run_person_analysis(
                 video_path=video_path,
                 timestamp=float(payload["segment_start"]),
@@ -189,6 +243,7 @@ class JobQueue:
                 image_width=float(options.get("image_width", 0)),
                 image_height=float(options.get("image_height", 0)),
             )
+            self._check_cancel(job_id)
             with self._lock:
                 if job_id in self._jobs:
                     self._jobs[job_id]["progress"] = 95
@@ -200,7 +255,9 @@ class JobQueue:
 
             threshold = options.get("scene_threshold", SCENE_THRESHOLD)
             logger.info("Running scene detection for %s (threshold=%.2f)", video_path, threshold)
-            return run_scene_detection(video_path, threshold=threshold)
+            result = run_scene_detection(video_path, threshold=threshold)
+            self._check_cancel(job_id)
+            return result
 
         from pipeline import run_annotation_pipeline
 
@@ -214,6 +271,7 @@ class JobQueue:
         )
 
         def _update_progress(phase: str, pct: int) -> None:
+            self._check_cancel(job_id)
             with self._lock:
                 if job_id in self._jobs:
                     self._jobs[job_id]["progress"] = pct

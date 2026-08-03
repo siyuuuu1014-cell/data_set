@@ -12,10 +12,11 @@ function sqlEscape(val: unknown): string {
 export function exportSql(table: TableDef): string {
   if (table.rows.length === 0) return `-- No data in table "${table.name}"\n`
   const cols = table.columns.map(c => c.name)
+  const quotedCols = cols.map(c => `"${c.replace(/"/g, '""')}"`)
   const lines = [`-- Table: ${table.name}`, `-- Generated ${table.rows.length} rows`, '']
   for (const row of table.rows) {
     const values = cols.map(c => sqlEscape(row[c])).join(', ')
-    lines.push(`INSERT INTO ${table.name} (${cols.join(', ')}) VALUES (${values});`)
+    lines.push(`INSERT INTO "${table.name.replace(/"/g, '""')}" (${quotedCols.join(', ')}) VALUES (${values});`)
   }
   return lines.join('\n')
 }
@@ -40,7 +41,10 @@ export function exportAllJson(tables: TableDef[]): string {
 
 function csvEscape(val: unknown): string {
   if (val === null || val === undefined) return ''
-  const s = String(val)
+  let s = String(val)
+  // Formula injection guard: prefix cells starting with =, +, -, @ with a
+  // single quote so spreadsheet apps treat them as literal text
+  if (/^[=+\-@]/.test(s)) s = `'${s}`
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`
   }

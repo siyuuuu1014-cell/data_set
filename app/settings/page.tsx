@@ -1,11 +1,14 @@
 'use client'
 
 import { useLang } from '@/services/i18n'
-import Link from 'next/link'
 import { useState, useEffect } from 'react'
+import type { CSSProperties } from 'react'
 import type { ApiFormat } from '@/services/types'
 import { VideoDeploymentSettings } from '@/components/video-annotation/VideoDeploymentSettings'
 import { VideoSemanticApiSettings } from '@/components/video-annotation/VideoSemanticApiSettings'
+import { WorkspaceHeader } from '@/components/WorkspaceHeader'
+import { SlidingControl } from '@/components/ui'
+import styles from './settings.module.css'
 
 const PROVIDERS = [
   { name: 'DeepSeek (Anthropic)', baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', apiFormat: 'anthropic' as ApiFormat },
@@ -15,6 +18,8 @@ const PROVIDERS = [
   { name: 'Ollama', baseUrl: 'http://localhost:11434/v1', model: 'llama3', apiFormat: 'openai' as ApiFormat },
 ]
 
+type SettingsSection = 'synthetic' | 'semantic' | 'deployment'
+
 export default function SettingsPage() {
   const { t } = useLang()
   const [apiKey, setApiKey] = useState('')
@@ -22,16 +27,26 @@ export default function SettingsPage() {
   const [model, setModel] = useState('deepseek-chat')
   const [apiFormat, setApiFormat] = useState<ApiFormat>('anthropic')
   const [hasApiKey, setHasApiKey] = useState(false)
+  const [llmConfigured, setLlmConfigured] = useState(false)
+  const [configAvailable, setConfigAvailable] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null)
   const [testError, setTestError] = useState('')
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [activeSection, setActiveSection] = useState<SettingsSection>('synthetic')
+  const [semanticMode, setSemanticMode] = useState<'local' | 'remote' | null>(null)
+  const [deploymentMode, setDeploymentMode] = useState<'standard' | 'enhanced' | null>(null)
 
   useEffect(() => {
     fetch('/api/llm/config')
-      .then(r => r.json())
+      .then(response => {
+        if (!response.ok) throw new Error('Configuration service unavailable')
+        return response.json()
+      })
       .then(data => {
+        setConfigAvailable(true)
+        setLlmConfigured(Boolean(data.configured))
         if (data.configured) {
           setBaseUrl(data.baseUrl)
           setModel(data.model)
@@ -39,7 +54,28 @@ export default function SettingsPage() {
           setHasApiKey(data.hasApiKey)
         }
       })
+      .catch(() => setConfigAvailable(false))
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void fetch('/api/video-annotation/semantic/config', { cache: 'no-store' })
+      .then(response => response.ok ? response.json() as Promise<{ mode?: 'local' | 'remote' }> : null)
+      .then(payload => {
+        if (!cancelled && payload?.mode) setSemanticMode(payload.mode)
+      })
+      .catch(() => undefined)
+
+    void fetch('/api/video-annotation/deployment', { cache: 'no-store' })
+      .then(response => response.ok ? response.json() as Promise<{ mode?: 'standard' | 'enhanced' }> : null)
+      .then(payload => {
+        if (!cancelled && payload?.mode) setDeploymentMode(payload.mode)
+      })
+      .catch(() => undefined)
+
+    return () => { cancelled = true }
   }, [])
 
   const buildConfig = () => ({
@@ -58,6 +94,8 @@ export default function SettingsPage() {
     })
     if (res.ok) {
       if (cfg.apiKey) setHasApiKey(true)
+      setConfigAvailable(true)
+      setLlmConfigured(true)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     }
@@ -93,159 +131,166 @@ export default function SettingsPage() {
 
   const endpointPath = apiFormat === 'anthropic' ? '/messages' : '/chat/completions'
 
-  if (loading) return null
+  const sections = [
+    { id: 'synthetic' as const, label: t('settings.nav_synthetic'), description: t('settings.nav_synthetic_desc') },
+    { id: 'semantic' as const, label: t('settings.nav_semantic'), description: t('settings.nav_semantic_desc') },
+    { id: 'deployment' as const, label: t('settings.nav_deployment'), description: t('settings.nav_deployment_desc') },
+  ]
+  const activeSectionIndex = sections.findIndex(section => section.id === activeSection)
+  const activeMeta = sections[activeSectionIndex] ?? sections[0]
+  const navStyle = { '--settings-index': activeSectionIndex } as CSSProperties
+
+  if (loading) return (
+    <div className={styles.page} aria-busy="true">
+      <WorkspaceHeader />
+      <main className={styles.main}>
+        <header className={styles.pageHeader}>
+          <div className={styles.pageCopy}>
+            <div className={styles.skeletonTitle} />
+            <div className={styles.skeletonText} />
+          </div>
+        </header>
+        <div className={styles.settingsWorkbench}>
+          <aside className={styles.settingsRail}>
+            <div className={styles.railHeading}><div className={styles.skeletonLabel} /><div className={styles.skeletonRailText} /></div>
+            <div className={styles.skeletonRailNav} />
+          </aside>
+          <section className={styles.settingsCanvas}>
+            <div className={styles.settingsCanvasBar}><div className={styles.skeletonLabel} /></div>
+            <div className={styles.settingsLoading}><div className={styles.skeletonCard} /></div>
+          </section>
+        </div>
+      </main>
+    </div>
+  )
 
   return (
-    <div className="flex-1 flex flex-col">
-      <header className="border-b border-gv-border/50">
-        <div className="px-8 py-5 flex items-center gap-3">
-          <Link href="/" className="text-gv-text-dim hover:text-gv-pink transition-colors">
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
-          <h1 className="text-lg font-semibold text-gv-text">{t('settings.title')}</h1>
-        </div>
-      </header>
+    <div className={styles.page}>
+      <WorkspaceHeader />
 
-      <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-6">
-        <p className="text-sm text-gv-text-dim mb-6">
-          {t('settings.description')}
-        </p>
+      <main className={styles.main}>
+        <header className={styles.pageHeader}>
+          <div className={styles.pageCopy}>
+            <h1 className={styles.pageTitle}>{t('settings.title')}</h1>
+            <p className={styles.pageDescription}>{t('settings.description')}</p>
+          </div>
+          <span className={styles.serviceStatus} data-tone={configAvailable ? 'success' : 'danger'}><i aria-hidden="true" />{configAvailable ? t('settings.local_config_available') : t('settings.config_unavailable')}</span>
+        </header>
 
-        <div className="space-y-6">
-          <section className="card p-5 sm:p-6">
-            <div className="mb-5">
-              <h2 className="text-base font-semibold text-gv-text">{t('settings.llm_section')}</h2>
-              <p className="text-sm text-gv-text-dim mt-1">{t('settings.llm_description')}</p>
+        <div className={styles.settingsWorkbench}>
+          <aside className={styles.settingsRail}>
+            <div className={styles.railHeading}>
+              <strong>{t('settings.directory')}</strong>
+              <small>{t('settings.directory_hint')}</small>
             </div>
-
-            <div className="space-y-5">
-          {/* Provider presets */}
-          <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.select_provider')}</label>
-            <div className="flex flex-wrap gap-2">
-              {PROVIDERS.map(p => (
+            <nav className={styles.sectionNav} aria-label={t('settings.title')} aria-orientation="vertical" role="tablist" style={navStyle}>
+              <span className={styles.navIndicator} aria-hidden="true" />
+              {sections.map(section => (
                 <button
-                  key={p.name}
-                  onClick={() => {
-                    setBaseUrl(p.baseUrl)
-                    setModel(p.model)
-                    setApiFormat(p.apiFormat)
-                    saveConfig({ baseUrl: p.baseUrl, model: p.model, apiFormat: p.apiFormat })
-                  }}
-                  className={`rounded-lg border px-3 py-1.5 text-sm transition-all duration-200 ${
-                    baseUrl === p.baseUrl
-                      ? 'border-gv-pink bg-gv-pink/10 text-gv-pink font-medium shadow-[0_0_8px_var(--color-gv-pink-glow)]'
-                      : 'border-gv-border text-gv-text-dim hover:border-gv-pink/40 hover:text-gv-pink'
-                  }`}
+                  id={`settings-tab-${section.id}`}
+                  key={section.id}
+                  type="button"
+                  aria-selected={activeSection === section.id}
+                  aria-controls={`settings-panel-${section.id}`}
+                  role="tab"
+                  onClick={() => setActiveSection(section.id)}
                 >
-                  {p.name}
+                  <strong>{section.label}</strong>
+                  <small>{section.description}</small>
                 </button>
               ))}
-            </div>
-          </div>
+            </nav>
+            <dl className={styles.railStatus}>
+              <div><dt>{t('settings.nav_synthetic_short')}</dt><dd>{llmConfigured ? t('settings.available') : t('settings.not_configured')}</dd></div>
+              <div><dt>{t('settings.nav_semantic_short')}</dt><dd>{semanticMode ? t(`semantic.${semanticMode}`) : '—'}</dd></div>
+              <div><dt>{t('settings.nav_deployment_short')}</dt><dd>{deploymentMode ? t(`deployment.${deploymentMode}`) : '—'}</dd></div>
+            </dl>
+          </aside>
 
-          {/* API Format */}
-          <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.api_format')}</label>
-            <div className="flex gap-2">
-              {([
-                { value: 'openai' as ApiFormat, label: t('settings.format_openai') },
-                { value: 'anthropic' as ApiFormat, label: t('settings.format_anthropic') },
-              ]).map(f => (
-                <button
-                  key={f.value}
-                  onClick={() => {
-                    setApiFormat(f.value)
-                    saveConfig({ apiFormat: f.value })
-                  }}
-                  className={`rounded-lg border px-3 py-1.5 text-sm transition-all duration-200 ${
-                    apiFormat === f.value
-                      ? 'border-gv-pink bg-gv-pink/10 text-gv-pink font-medium shadow-[0_0_8px_var(--color-gv-pink-glow)]'
-                      : 'border-gv-border text-gv-text-dim hover:border-gv-pink/40 hover:text-gv-pink'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          <section className={styles.settingsCanvas}>
+            <header className={styles.settingsCanvasBar}>
+              <div><span>{t('settings.current_config')}</span><strong>{activeMeta.label}</strong></div>
+              <small>{activeMeta.description} · {t('settings.switch_hint')}</small>
+            </header>
 
-          {/* API Key */}
-          <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.api_key')}</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={hasApiKey ? t('settings.api_key_saved') : 'sk-...'}
-              className="input-field w-full py-3 text-sm font-mono"
-            />
-            <p className="text-xs text-gv-text-muted mt-1">
-              {hasApiKey ? t('settings.key_saved_hint') : t('settings.key_not_saved_hint')}
-            </p>
-          </div>
+            <div className={styles.settingsCanvasBody}>
+              <div id="settings-panel-synthetic" role="tabpanel" aria-labelledby="settings-tab-synthetic" hidden={activeSection !== 'synthetic'}>
+                <section className={styles.settingsSection} aria-busy={testing}>
+                  <header className={styles.sectionHeader}>
+                    <div><h2>{t('settings.llm_section')}</h2><p>{t('settings.llm_description')}</p></div>
+                    <span className={styles.statusLabel} data-tone={llmConfigured ? 'success' : 'warning'}>{llmConfigured ? t('settings.connected') : t('settings.not_configured')}</span>
+                  </header>
 
-          {/* Base URL */}
-          <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.base_url')}</label>
-            <input
-              type="text"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              className="input-field w-full py-3 text-sm font-mono"
-            />
-            <p className="text-xs text-gv-text-muted mt-1">
-              {t('settings.request_url')} <code className="text-gv-text-dim bg-gv-bg px-1.5 py-0.5 rounded">{baseUrl.replace(/\/$/, '')}{endpointPath}</code>
-            </p>
-          </div>
+                  <div className={styles.settingsFormGrid}>
+                    <fieldset className={styles.settingsWideField}>
+                      <legend>{t('settings.select_provider')}</legend>
+                      <SlidingControl
+                        value={baseUrl}
+                        options={PROVIDERS.map(provider => ({ value: provider.baseUrl, label: provider.name }))}
+                        onChange={nextBaseUrl => {
+                          const provider = PROVIDERS.find(item => item.baseUrl === nextBaseUrl)
+                          if (!provider) return
+                          setBaseUrl(provider.baseUrl)
+                          setModel(provider.model)
+                          setApiFormat(provider.apiFormat)
+                          void saveConfig({ baseUrl: provider.baseUrl, model: provider.model, apiFormat: provider.apiFormat })
+                        }}
+                        label={t('settings.select_provider')}
+                        className={styles.settingsSlider}
+                      />
+                    </fieldset>
 
-          {/* Model */}
-          <div>
-            <label className="block text-sm font-medium text-gv-text mb-2">{t('settings.model')}</label>
-            <input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="input-field w-full py-3 text-sm font-mono"
-            />
-          </div>
+                    <fieldset className={styles.settingsWideField}>
+                      <legend>{t('settings.api_format')}</legend>
+                      <SlidingControl
+                        value={apiFormat}
+                        options={([
+                          { value: 'anthropic' as ApiFormat, label: t('settings.format_anthropic') },
+                          { value: 'openai' as ApiFormat, label: t('settings.format_openai') },
+                        ])}
+                        onChange={format => { setApiFormat(format); void saveConfig({ apiFormat: format }) }}
+                        label={t('settings.api_format')}
+                        className={styles.settingsSlider}
+                      />
+                    </fieldset>
 
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={handleTest}
-              disabled={testing || (!apiKey.trim() && !hasApiKey)}
-              className="btn-outline rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {testing ? t('app.testing') : t('settings.test_btn')}
-            </button>
-            <button
-              onClick={() => saveConfig()}
-              className="btn-primary rounded-lg px-4 py-2.5 text-sm"
-            >
-              {saved ? t('settings.saved') : t('settings.save_btn')}
-            </button>
-          </div>
+                    <label className={styles.field} htmlFor="synthetic-llm-api-key">
+                      <span>{t('settings.api_key')}</span>
+                      <input id="synthetic-llm-api-key" type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={hasApiKey ? t('settings.api_key_saved') : 'sk-...'} aria-describedby="synthetic-llm-api-key-hint" autoComplete="off" spellCheck={false} />
+                      <small id="synthetic-llm-api-key-hint">{hasApiKey ? t('settings.key_saved_hint') : t('settings.key_not_saved_hint')}</small>
+                    </label>
 
-          {testResult === 'success' && (
-            <div className="rounded-lg bg-gv-green-deep/10 border border-gv-green-deep/30 p-3 text-sm text-gv-green-deep">
-              {t('settings.test_success')}
-            </div>
-          )}
-          {testResult === 'fail' && (
-            <div className="rounded-lg bg-gv-pink/10 border border-gv-pink/30 p-3 text-sm text-gv-pink-dark">
-              {testError || t('settings.test_fail')}
-              <div className="mt-1 text-xs text-gv-pink/70 break-all">
-                {baseUrl.replace(/\/$/, '')}{endpointPath}
+                    <label className={styles.field} htmlFor="synthetic-llm-model">
+                      <span>{t('settings.model')}</span>
+                      <input id="synthetic-llm-model" type="text" value={model} onChange={event => setModel(event.target.value)} spellCheck={false} />
+                    </label>
+
+                    <label className={`${styles.field} ${styles.settingsWideField}`} htmlFor="synthetic-llm-base-url">
+                      <span>{t('settings.base_url')}</span>
+                      <input id="synthetic-llm-base-url" type="url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} aria-describedby="synthetic-llm-base-url-hint" spellCheck={false} />
+                      <small id="synthetic-llm-base-url-hint">{t('settings.request_url')} <code className={styles.endpoint}>{baseUrl.replace(/\/$/, '')}{endpointPath}</code></small>
+                    </label>
+                  </div>
+
+                  {testResult === 'success' && <p className={styles.notice} data-tone="success" role="status" aria-live="polite">{t('settings.test_success')}</p>}
+                  {testResult === 'fail' && <div className={styles.notice} data-tone="danger" role="alert">{testError || t('settings.test_fail')}<small>{baseUrl.replace(/\/$/, '')}{endpointPath}</small></div>}
+
+                  <footer className={styles.actions}>
+                    <button type="button" onClick={handleTest} disabled={testing || (!apiKey.trim() && !hasApiKey)} className="btn-outline">{testing ? t('app.testing') : t('settings.test_btn')}</button>
+                    <button type="button" onClick={() => saveConfig()} className="btn-primary">{saved ? t('settings.saved') : t('settings.save_btn')}</button>
+                  </footer>
+                </section>
+              </div>
+
+              <div id="settings-panel-semantic" className={styles.embeddedPanel} role="tabpanel" aria-labelledby="settings-tab-semantic" hidden={activeSection !== 'semantic'}>
+                <VideoSemanticApiSettings onModeChange={setSemanticMode} />
+              </div>
+
+              <div id="settings-panel-deployment" className={styles.embeddedPanel} role="tabpanel" aria-labelledby="settings-tab-deployment" hidden={activeSection !== 'deployment'}>
+                <VideoDeploymentSettings onModeChange={setDeploymentMode} />
               </div>
             </div>
-          )}
-            </div>
           </section>
-
-          <VideoSemanticApiSettings />
-          <VideoDeploymentSettings />
         </div>
       </main>
     </div>

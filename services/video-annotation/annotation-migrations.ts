@@ -164,7 +164,10 @@ function copyMissingModelOcr(
     ])
     const targetTrackId = donor.trackId >= OCR_TRACK_ID_BASE && !usedIds.has(donor.trackId)
       ? donor.trackId
-      : nextTrackId++
+      : nextTrackId
+    // Always advance past the allocated id so a later donor can never reuse it,
+    // even when the current donor reused its own id (no counter bump above).
+    nextTrackId = Math.max(nextTrackId, targetTrackId + 1)
     copiedObjects.push({
       ...donor,
       trackId: targetTrackId,

@@ -1,0 +1,56 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--ui-text) 18%, transparent);
+  padding: var(--ui-space-6);
+  backdrop-filter: blur(3px);
+  animation: confirm-backdrop-in var(--ui-duration-normal) var(--ui-ease-standard);
+}
+
+.dialog {
+  width: min(100%, 31rem);
+  display: grid;
+  gap: var(--ui-space-5);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface-raised);
+  box-shadow: var(--ui-shadow-lg);
+  padding: var(--ui-space-6);
+  animation: confirm-dialog-in var(--ui-duration-normal) var(--ui-ease-standard);
+}
+
+.copy { min-width: 0; }
+.copy h2 { margin: 0; color: var(--ui-text); font-size: var(--ui-text-lg); font-weight: 700; line-height: var(--ui-leading-tight); }
+.copy p { margin: var(--ui-space-2) 0 0; color: var(--ui-text-secondary); font-size: var(--ui-text-sm); line-height: var(--ui-leading-normal); text-wrap: pretty; }
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+  padding-top: var(--ui-space-2);
+}
+.actions button {
+  min-height: var(--ui-control-md);
+  border-radius: var(--ui-radius-sm);
+  padding-inline: var(--ui-space-4);
+  font: inherit;
+  font-size: var(--ui-text-sm);
+  font-weight: 650;
+  cursor: pointer;
+}
+.actions button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ui-focus-ring); }
+.cancel { border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text-secondary); }
+.cancel:hover { border-color: var(--ui-border-strong); background: var(--ui-surface-subtle); }
+.confirm { border: 1px solid var(--ui-action-primary-border); background: var(--ui-action-primary-background); color: var(--ui-action-primary-foreground); }
+.confirm:hover { background: var(--ui-action-primary-background-hover); }
+
+@keyframes confirm-backdrop-in { from { opacity: 0; } }
+@keyframes confirm-dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .dialog { animation: none; }
+}

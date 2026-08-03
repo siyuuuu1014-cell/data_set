@@ -197,6 +197,69 @@ export function nextTrackId(annotation: SegmentAnnotation): number {
   return Math.max(0, ...ids) + 1
 }
 
+/**
+ * Merge a server-returned segment annotation into a local optimistic one.
+ * Local pending edits (per-track person/object summaries and frame
+ * observations) win; server-side additions that the local copy does not know
+ * about (e.g. a freshly allocated manual track) are adopted. This prevents a
+ * stale server snapshot from clobbering edits made while the request was
+ * in flight.
+ */
+export function mergeSegmentAnnotationFromServer(
+  local: SegmentAnnotation,
+  server: SegmentAnnotation,
+): SegmentAnnotation {
+  const localPersons = new Map(local.persons.map(item => [item.trackId, item] as const))
+  const serverPersons = new Map(server.persons.map(item => [item.trackId, item] as const))
+  // Local pending edits win; server-only tracks (freshly drawn) are adopted.
+  const personsById = new Map(serverPersons)
+  for (const [trackId, item] of localPersons) {
+    personsById.set(trackId, item)
+  }
+
+  const localObjects = new Map(local.objects.map(item => [item.trackId, item] as const))
+  const serverObjects = new Map(server.objects.map(item => [item.trackId, item] as const))
+  const objectsById = new Map(serverObjects)
+  for (const [trackId, item] of localObjects) {
+    objectsById.set(trackId, item)
+  }
+
+  // Merge frame observations: local observations win per track; server-only
+  // observations (e.g. the new track) are appended.
+  const localFrames = new Map((local.frames || []).map(frame => [frame.frameIndex, frame] as const))
+  const serverFrames = new Map((server.frames || []).map(frame => [frame.frameIndex, frame] as const))
+  const frames: FrameAnnotation[] = []
+  for (const [frameIndex, serverFrame] of serverFrames) {
+    const localFrame = localFrames.get(frameIndex)
+    if (!localFrame) {
+      frames.push(serverFrame)
+      continue
+    }
+    const localObs = new Map(localFrame.observations.map(o => [o.trackId, o] as const))
+    const mergedObs = new Map(serverFrame.observations.map(o => [o.trackId, o] as const))
+    for (const [trackId, observation] of localObs) {
+      mergedObs.set(trackId, observation)
+    }
+    frames.push({
+      ...serverFrame,
+      observations: [...mergedObs.values()].sort((a, b) => a.trackId - b.trackId),
+    })
+  }
+  // Frames that exist only locally are kept as-is.
+  for (const [frameIndex, localFrame] of localFrames) {
+    if (!serverFrames.has(frameIndex)) frames.push(localFrame)
+  }
+  frames.sort((left, right) => left.timestamp - right.timestamp || left.frameIndex - right.frameIndex)
+
+  return {
+    ...local,
+    persons: [...personsById.values()],
+    objects: [...objectsById.values()],
+    frames,
+    _humanEdited: true,
+  }
+}
+
 export type ObjectLabelRenameScope = 'frame' | 'track' | 'matching_segment'
 
 function objectLabelKey(value: string): string {

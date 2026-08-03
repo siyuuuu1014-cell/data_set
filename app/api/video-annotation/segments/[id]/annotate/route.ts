@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server'
-import { readFile, writeFile, readdir } from 'fs/promises'
+import { readFile, readdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { submitJob, getJobStatus, workerDeployment } from '@/services/video-annotation/worker-client'
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskPath, getUploadDir, getUploadFile } from '@/services/video-annotation/server-paths'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/services/video-annotation/model-result'
 import { applyManualIdentityReview } from '@/services/video-annotation/identity-review'
 import {
@@ -13,6 +13,13 @@ import {
   precisionAvailabilityError,
 } from '@/services/video-annotation/annotation-options'
 import type { AnnotateSet, AnnotationExecutionMode, SegmentState } from '@/services/video-annotation/types'
+
+class SegmentBusyError extends Error {
+  constructor() {
+    super('Segment is already being annotated')
+    this.name = 'SegmentBusyError'
+  }
+}
 
 // POST /api/video-annotation/segments/[id]/annotate — trigger annotation
 export async function POST(
@@ -65,6 +72,30 @@ export async function POST(
     if (!existsSync(taskPath)) {
       return Response.json({ error: { code: 'NOT_FOUND', message: 'Task not found' } }, { status: 404 })
     }
+    // Validate boundaries before touching the worker: non-finite or inverted
+    // ranges would otherwise produce corrupt jobs.
+    if (!Number.isFinite(body.start) || !Number.isFinite(body.end) || body.start < 0 || body.end <= body.start) {
+      return Response.json({ error: { code: 'VALIDATION', message: 'Invalid segment range' } }, { status: 400 })
+    }
+
+    // Pre-check segment existence and status under the lock so a missing or
+    // already-processing segment never produces an orphan worker job.
+    let segmentExists = false
+    await withTaskFileLock(taskPath, async () => {
+      const raw = await readFile(taskPath, 'utf-8')
+      const task = JSON.parse(raw) as AnnotateSet
+      const segment = task.videos
+        ?.find(video => video.videoId === body.videoId)
+        ?.segments?.find(item => item.segmentId === parseInt(segmentId, 10)) as SegmentState | undefined
+      segmentExists = Boolean(segment)
+      if (segment?.status === 'processing') {
+        throw new SegmentBusyError()
+      }
+    })
+    if (!segmentExists) {
+      return Response.json({ error: { code: 'NOT_FOUND', message: 'Segment not found' } }, { status: 404 })
+    }
+
     const reviewCandidates = await withTaskFileLock(taskPath, async () => {
       const raw = await readFile(taskPath, 'utf-8')
       const task = JSON.parse(raw) as AnnotateSet
@@ -113,13 +144,16 @@ export async function POST(
           seg.processingMode = mode
           delete seg.error
           delete seg.progressPhase
-          await writeFile(taskPath, JSON.stringify(task, null, 2))
+          await writeTaskFileAtomic(taskPath, JSON.stringify(task, null, 2))
         }
       }
     })
 
     return Response.json({ data: { jobId, segmentId, mode } }, { status: 202 })
   } catch (err) {
+    if (err instanceof SegmentBusyError) {
+      return Response.json({ error: { code: 'SEGMENT_BUSY', message: err.message } }, { status: 409 })
+    }
     if (isUnsafePathError(err)) return Response.json({ error: { code: 'VALIDATION', message: err.message } }, { status: 400 })
     return Response.json({ error: { code: 'INTERNAL', message: String(err) } }, { status: 500 })
   }
@@ -178,7 +212,7 @@ export async function GET(
             applyCompletedModelResult(seg, status.result)
             applyIdentityAliasesToVideo(vid, status.result._identity_aliases)
             applyManualIdentityReview(vid)
-            await writeFile(taskPath, JSON.stringify(task, null, 2))
+            await writeTaskFileAtomic(taskPath, JSON.stringify(task, null, 2))
           }
         }
       } else if (status.status === 'failed' && existsSync(taskPath)) {
@@ -193,7 +227,7 @@ export async function GET(
             seg.status = 'failed'
             seg.error = status.error || 'Unknown error'
             delete seg.processingMode
-            await writeFile(taskPath, JSON.stringify(task, null, 2))
+            await writeTaskFileAtomic(taskPath, JSON.stringify(task, null, 2))
           }
         }
       }

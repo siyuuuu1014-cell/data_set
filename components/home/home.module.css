@@ -1,0 +1,318 @@
+.page {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  min-height: 100dvh;
+  background: linear-gradient(180deg, #fffafd 0%, #fcfafb 280px, #fcfafb 100%);
+  color: var(--ui-text);
+}
+
+.skipLink {
+  position: fixed;
+  top: var(--ui-space-3);
+  left: var(--ui-space-4);
+  z-index: 100;
+  min-height: var(--ui-control-md);
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--ui-radius-sm);
+  padding-inline: var(--ui-space-4);
+  background: var(--ui-text);
+  color: var(--ui-surface);
+  font-size: var(--ui-text-sm);
+  transform: translateY(-180%);
+  transition: transform var(--ui-duration-normal) var(--ui-ease-standard);
+}
+.skipLink:focus { transform: translateY(0); }
+
+.header {
+  position: relative;
+  z-index: 1;
+  min-height: var(--ui-nav-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-6);
+  border-bottom: 1px solid var(--ui-border);
+  padding-inline: var(--ui-page-gutter);
+  background: var(--ui-surface);
+}
+
+.brand {
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  color: inherit;
+  text-decoration: none;
+}
+.brandMark {
+  width: 42px;
+  height: 42px;
+  display: block;
+  flex: 0 0 auto;
+}
+.brandSymbol {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+.brandCopy { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.brandWordmark {
+  width: 84px;
+  height: auto;
+  display: block;
+}
+.brandCopy small { color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
+
+.utilityNav { display: flex; align-items: center; gap: var(--ui-space-1); }
+.utilityNav a,
+.languageToggle {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--ui-radius-xs);
+  border: 0;
+  padding-inline: var(--ui-space-3);
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-sm);
+  font-weight: 620;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--ui-duration-normal) var(--ui-ease-standard), color var(--ui-duration-normal) var(--ui-ease-standard);
+}
+.utilityNav a:hover,
+.languageToggle:hover { background: var(--ui-surface-subtle); color: var(--ui-accent-hover); }
+
+.content {
+  position: relative;
+  z-index: 0;
+  width: min(calc(100% - 2rem), var(--ui-content-wide));
+  margin-inline: auto;
+  padding: clamp(2.125rem, 5vw, 4.75rem) 0 3.375rem;
+}
+
+.homeThesis {
+  width: min(100%, 89.5rem);
+  min-height: clamp(42rem, 80vh, 58rem);
+  display: grid;
+  grid-template-columns: minmax(30rem, 42rem) minmax(30rem, 46rem);
+  justify-content: center;
+  align-items: stretch;
+  column-gap: clamp(0.75rem, 1.5vw, 1.5rem);
+  margin-inline: auto;
+}
+.homeIntroduction {
+  min-width: 0;
+  height: min(46.4rem, calc((100vw - 3.5rem) / 2 + 0.35rem));
+  display: grid;
+  align-self: center;
+  align-content: space-between;
+  gap: 0;
+  padding-left: clamp(1rem, 2vw, 2rem);
+}
+.homeStatement h1 {
+  max-width: 44rem;
+  margin: 0 0 var(--ui-space-5);
+  color: var(--ui-text);
+  font-size: clamp(3rem, 4.75vw, 4.5rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+.homeStatement h1 span {
+  display: block;
+  white-space: nowrap;
+}
+.homeStatement p {
+  max-width: 50ch;
+  margin: 0;
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-md);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.heroWorkspaces {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-block: 1px solid var(--ui-border);
+}
+.heroWorkspace {
+  min-width: 0;
+  min-height: 9.25rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: var(--ui-space-2) var(--ui-space-4);
+  padding: var(--ui-space-5);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--ui-duration-normal) var(--ui-ease-standard), color var(--ui-duration-normal) var(--ui-ease-standard);
+}
+.heroWorkspace:first-child { border-right: 1px solid var(--ui-border); }
+.heroWorkspace > span,
+.heroWorkspace > small { grid-column: 1 / -1; }
+.heroWorkspace > span {
+  color: var(--ui-text-muted);
+  font-size: var(--ui-text-xs);
+  font-weight: 680;
+  letter-spacing: 0.04em;
+}
+.heroWorkspace > strong {
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: clamp(1.05rem, 1.45vw, 1.25rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.heroWorkspace > small {
+  overflow: hidden;
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-xs);
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.heroWorkspace > b {
+  align-self: center;
+  color: var(--ui-accent-hover);
+  font-size: var(--ui-text-xs);
+  font-weight: 680;
+  white-space: nowrap;
+}
+.heroWorkspace:hover { background: color-mix(in srgb, var(--ui-accent-soft) 54%, transparent); }
+.heroWorkspace:hover > strong { color: var(--ui-accent-hover); }
+
+.pipelineProof {
+  width: 100%;
+  min-height: 13rem;
+  justify-self: end;
+  display: grid;
+  grid-template-columns: 0.76fr 1.1fr 0.76fr;
+  align-items: stretch;
+  border: 0;
+  background: transparent;
+}
+.pipelineProof > div {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: var(--ui-space-4);
+  padding: var(--ui-space-6);
+}
+.pipelineProof > div:not(:last-child) { border-right: 1px solid var(--ui-border); }
+.pipelineProof span,
+.pipelineProof small {
+  color: var(--ui-text-muted);
+  font-size: var(--ui-text-sm);
+  font-weight: 680;
+  letter-spacing: 0.05em;
+}
+.pipelineProof strong {
+  font-size: var(--ui-text-md);
+  font-weight: 680;
+}
+.pipelineCore {
+  background: linear-gradient(145deg, #ffd4ed 0%, #fff8fc 74%);
+  color: var(--ui-text);
+}
+.pipelineCore small { color: var(--ui-text-secondary); }
+.pipelineInput strong,
+.pipelineOutput strong {
+  width: fit-content;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.brandStage {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+  background: transparent;
+}
+.heroBrandSymbol {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 46rem);
+  height: auto;
+  display: block;
+}
+
+.manualLink {
+  position: fixed;
+  right: var(--ui-page-gutter);
+  bottom: var(--ui-space-5);
+  z-index: 3;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 1px solid var(--ui-border-strong);
+  padding-inline: var(--ui-space-2);
+  background: color-mix(in srgb, var(--ui-surface) 82%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-sm);
+  font-weight: 640;
+  text-decoration: none;
+  transition: border-color var(--ui-duration-normal) var(--ui-ease-standard), color var(--ui-duration-normal) var(--ui-ease-standard);
+}
+.manualLink:hover { border-color: var(--ui-accent); color: var(--ui-accent-hover); }
+
+.brand:focus-visible,
+.utilityNav a:focus-visible,
+.languageToggle:focus-visible,
+.heroWorkspace:focus-visible,
+.manualLink:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 1080px) {
+  .homeThesis { grid-template-columns: 1fr; min-height: auto; }
+  .homeIntroduction {
+    height: auto;
+    align-content: center;
+    gap: clamp(2.25rem, 5vh, 4rem);
+    padding-left: 0;
+  }
+  .homeStatement { max-width: 46rem; }
+  .brandStage { min-height: 28rem; }
+}
+
+@media (max-width: 720px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0;
+    padding-block: var(--ui-space-3);
+  }
+  .utilityNav { width: 100%; }
+  .utilityNav a,
+  .languageToggle { flex: 1; justify-content: center; padding-inline: var(--ui-space-2); }
+  .content { width: min(calc(100% - 1.5rem), var(--ui-content-wide)); padding-top: var(--ui-space-10); }
+  .homeStatement h1 { font-size: clamp(2.25rem, 12vw, 3.25rem); }
+  .homeStatement h1 span { white-space: normal; }
+  .heroWorkspaces { grid-template-columns: 1fr; }
+  .heroWorkspace:first-child { border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  .pipelineProof { width: 100%; }
+  .brandStage { min-height: 24rem; }
+  .manualLink { position: static; width: fit-content; margin: 0 var(--ui-page-gutter) var(--ui-space-5) auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skipLink,
+  .utilityNav a,
+  .languageToggle,
+  .heroWorkspace,
+  .manualLink { transition-duration: 1ms !important; }
+}

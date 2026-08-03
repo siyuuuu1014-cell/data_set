@@ -1,11 +1,12 @@
 import { NextRequest } from 'next/server'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { readdir } from 'fs/promises'
 import { submitJob, getJobStatus } from '@/services/video-annotation/worker-client'
 import { getVideoMetadata } from '@/services/video-annotation/segment-service'
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskPath, getUploadDir, getUploadFile } from '@/services/video-annotation/server-paths'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 
 // POST /api/video-annotation/segments — detect scenes for a video
 export async function POST(req: NextRequest) {
@@ -47,17 +48,22 @@ export async function POST(req: NextRequest) {
       options: { mode: 'scene_detect', scene_threshold: safeThreshold },
     })
 
-    // Poll for result
+    // Poll for result. Transient worker errors (restart, network blip) are
+    // retried instead of failing the whole detection.
     let result: Record<string, unknown> | null = null
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 2000))
-      const status = await getJobStatus(jobId)
-      if (status.status === 'completed') {
-        result = status.result as Record<string, unknown> | null
-        break
-      }
-      if (status.status === 'failed') {
-        return Response.json({ error: { code: 'SCENE_DETECTION_FAILED', message: status.error || 'Scene detection failed' } }, { status: 500 })
+      try {
+        const status = await getJobStatus(jobId)
+        if (status.status === 'completed') {
+          result = status.result as Record<string, unknown> | null
+          break
+        }
+        if (status.status === 'failed') {
+          return Response.json({ error: { code: 'SCENE_DETECTION_FAILED', message: status.error || 'Scene detection failed' } }, { status: 500 })
+        }
+      } catch (pollErr) {
+        console.error('[segments] scene detection poll error (retrying):', pollErr)
       }
     }
 
@@ -74,33 +80,32 @@ export async function POST(req: NextRequest) {
     // Update annotate set with segments and metadata
     const taskPath = getTaskPath(body.annotateSetId)
     if (existsSync(taskPath)) {
-      const raw = await readFile(taskPath, 'utf-8')
-      let task: Record<string, unknown>
-      try {
-        task = JSON.parse(raw) as Record<string, unknown>
-      } catch {
-        return Response.json(
-          { error: { code: 'INTERNAL', message: 'Annotation task file is corrupted and cannot be read' } },
-          { status: 500 },
-        )
-      }
-      const videos = task.videos as Array<Record<string, unknown>> | undefined
-      const vid = videos?.find((v: Record<string, unknown>) => v.videoId === body.videoId)
-      if (vid) {
-        vid.segments = segments.map((s) => ({
-          segmentId: s.segment_id,
-          start: s.start,
-          end: s.end,
-          status: 'draft',
-          modelAnnotation: null,
-          humanAnnotation: null,
-        }))
-        vid.duration = metadata.duration
-        vid.fps = metadata.fps
-        vid.width = metadata.width
-        vid.height = metadata.height
-        await writeFile(taskPath, JSON.stringify(task, null, 2))
-      }
+      await withTaskFileLock(taskPath, async () => {
+        const raw = await readFile(taskPath, 'utf-8')
+        let task: Record<string, unknown>
+        try {
+          task = JSON.parse(raw) as Record<string, unknown>
+        } catch {
+          throw new Error('Annotation task file is corrupted and cannot be read')
+        }
+        const videos = task.videos as Array<Record<string, unknown>> | undefined
+        const vid = videos?.find((v: Record<string, unknown>) => v.videoId === body.videoId)
+        if (vid) {
+          vid.segments = segments.map((s) => ({
+            segmentId: s.segment_id,
+            start: s.start,
+            end: s.end,
+            status: 'draft',
+            modelAnnotation: null,
+            humanAnnotation: null,
+          }))
+          vid.duration = metadata.duration
+          vid.fps = metadata.fps
+          vid.width = metadata.width
+          vid.height = metadata.height
+          await writeTaskFileAtomic(taskPath, JSON.stringify(task, null, 2))
+        }
+      })
     }
 
     return Response.json({ data: segments })

@@ -1,7 +1,16 @@
 'use client'
 
 import { useParams, useSearchParams } from 'next/navigation'
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { useStore } from '@/services/store'
 import Link from 'next/link'
 import { VideoPlayer } from '@/components/video-annotation/VideoPlayer'
@@ -16,13 +25,16 @@ import { ExportDialog } from '@/components/video-annotation/ExportDialog'
 import { IdentityManager } from '@/components/video-annotation/IdentityManager'
 import { TimelineEditor } from '@/components/video-annotation/TimelineEditor'
 import { WorkspaceHeader } from '@/components/WorkspaceHeader'
+import { useConfirm } from '@/components/ui'
 import { useLang } from '@/services/i18n'
+import styles from './annotation-workbench.module.css'
 import {
   downloadAsFile,
   exportCurrentFrameJson,
   exportCustomJson,
   downloadYoloZip,
   exportCoco,
+  invalidVideoDimensions,
   generateVideoDescription,
   generateSemanticVideoDescription,
   type CustomJsonExportOptions,
@@ -36,6 +48,7 @@ import {
   frameDisplayEntities,
   legacyFrame,
   nearestFrame,
+  mergeSegmentAnnotationFromServer,
   personDisplayId,
   renameObjectLabel,
   replaceObservation,
@@ -48,10 +61,30 @@ import type {
   AnnotateSet, BBox, ExportFormat,
   SegmentState, VideoTaskItem, VideoAnnotation, SegmentAnnotation,
   PersonAnnotation, ObjectAnnotation, SceneAnnotation, CameraAnnotation, EventAnnotation,
-  AnnotationExecutionMode, FrameAnnotation, SpatialEntityType, PersonAnalysisResult
+  AnnotationExecutionMode, FrameAnnotation, SpatialEntityType, PersonAnalysisResult, ReviewStatus,
 } from '@/services/video-annotation/types'
 
 type PagePhase = 'no_videos' | 'uploading' | 'ready_uploaded' | 'detecting' | 'segments_pending' | 'annotating' | 'completed'
+type InspectorPanel = 'object' | 'scene' | 'text' | 'json' | 'identity' | 'timeline'
+
+const DEFAULT_SPLIT_RATIO = 70
+const SPLIT_HANDLE_WIDTH = 12
+const MIN_PRIMARY_PANE_WIDTH = 480
+const MIN_SECONDARY_PANE_WIDTH = 496
+const SPLIT_PREFERENCE_KEY = 'nuwa:annotation-workbench-split'
+
+function splitRatioBounds(containerWidth: number): { min: number; max: number } {
+  const availableWidth = Math.max(1, containerWidth - SPLIT_HANDLE_WIDTH)
+  return {
+    min: Math.min(50, (MIN_PRIMARY_PANE_WIDTH / availableWidth) * 100),
+    max: Math.max(50, 100 - (MIN_SECONDARY_PANE_WIDTH / availableWidth) * 100),
+  }
+}
+
+function clampSplitRatio(ratio: number, containerWidth: number): number {
+  const { min, max } = splitRatioBounds(containerWidth)
+  return Math.round(Math.min(max, Math.max(min, ratio)) * 10) / 10
+}
 
 function deepClone<T>(obj: T): T { return JSON.parse(JSON.stringify(obj)) as T }
 
@@ -150,6 +183,8 @@ function TrackReviewEditor({
   onSave: (updated: PersonAnnotation | ObjectAnnotation, scope: ObjectLabelRenameScope, sourceLabels?: string[], frameIndex?: number) => void
   onConvert: (scope: 'frame' | 'track', targetType: SpatialEntityType, objectLabel?: string) => void
 }) {
+  const { t } = useLang()
+  const confirmAction = useConfirm()
   const summary = selectedEntityType === 'person'
     ? annotation.persons?.find(item => item.trackId === selectedTrackId)
     : annotation.objects?.find(item => item.trackId === selectedTrackId)
@@ -172,11 +207,11 @@ function TrackReviewEditor({
       <h4 className="text-sm font-semibold text-gv-text mb-2 flex items-center justify-between">
         <span>
           {'gender' in edits
-            ? `Person ${personDisplayId((edits as PersonAnnotation).personId, selectedTrackId)}`
-            : `Object Track ${selectedTrackId}`}
+            ? t('annotation.person_title', personDisplayId((edits as PersonAnnotation).personId, selectedTrackId))
+            : t('annotation.object_track_title', selectedTrackId)}
           {'gender' in edits && (
             <span className="ml-2 text-xs text-gv-text-muted font-normal">
-              (segment Track {selectedTrackId})
+              ({t('annotation.segment_track', selectedTrackId)})
             </span>
           )}
           {('_className' in edits) && (
@@ -188,9 +223,9 @@ function TrackReviewEditor({
         <button
           onClick={() => onDelete(selectedTrackId, selectedEntityType)}
           className="text-xs text-gv-pink-dark hover:text-gv-pink px-2 py-0.5 rounded hover:bg-gv-pink/10 transition-colors"
-          title="Delete track (Delete key)"
+          title={t('annotation.delete_track')}
         >
-          Delete
+          {t('annotation.delete')}
         </button>
       </h4>
       <TrackEditor
@@ -222,16 +257,16 @@ function TrackReviewEditor({
               }}
               className="rounded bg-gv-pink/10 px-3 py-1.5 text-xs font-medium text-gv-pink hover:bg-gv-pink/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {analysisStatus === 'running' ? 'Analyzing Selected Person…' : 'Analyze Selected Person'}
+              {analysisStatus === 'running' ? t('annotation.analyzing_person') : t('annotation.analyze_person')}
             </button>
             <span className="text-xs text-gv-text-muted">
-              Preview only; existing reviewed values are never overwritten.
+              {t('annotation.analysis_preview_desc')}
             </span>
           </div>
           {analysisResult && (
             <div className="mt-3 space-y-2 text-xs">
               <p className="text-gv-text-muted">
-                Suggested by {analysisResult.source === 'remote_api' ? 'Remote API' : 'Local Qwen'} at {analysisResult.timestamp.toFixed(3)}s
+                {t('annotation.analysis_source', analysisResult.source === 'remote_api' ? 'Remote API' : 'Local Qwen', analysisResult.timestamp.toFixed(3))}
               </p>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-gv-surface p-2 text-gv-text">
                 {JSON.stringify(analysisResult.person, null, 2)}
@@ -244,9 +279,9 @@ function TrackReviewEditor({
                 }}
                 className="rounded bg-gv-green/20 px-3 py-1.5 font-medium text-gv-green-deep hover:bg-gv-green/30"
               >
-                Fill Empty Fields (Not Saved Yet)
+                {t('annotation.fill_empty_fields')}
               </button>
-              <p className="text-gv-gold-dark">Review the fields, then click Save Changes.</p>
+              <p className="text-gv-gold-dark">{t('annotation.review_then_save')}</p>
             </div>
           )}
           {analysisError && <p className="mt-2 text-xs text-gv-pink">{analysisError}</p>}
@@ -254,13 +289,14 @@ function TrackReviewEditor({
       )}
       <div className="mt-3 border-t border-gv-border/60 pt-3">
         <p className="mb-2 text-xs font-medium text-gv-text">
-          Wrong type? Convert {selectedEntityType === 'person' ? 'Person → Object' : 'Object → Person'}
+          {t('annotation.convert_type', selectedEntityType === 'person' ? t('annotation.person_to_object') : t('annotation.object_to_person'))}
         </p>
         {selectedEntityType === 'person' && (
           <input
             value={conversionLabel}
             onChange={event => setConversionLabel(event.target.value)}
-            placeholder="Required object label"
+            placeholder={t('video.object_label_required')}
+            aria-label={t('video.object_label_required')}
             className="mb-2 w-full rounded border border-gv-border bg-gv-bg px-2 py-1.5 text-xs text-gv-text"
           />
         )}
@@ -271,19 +307,19 @@ function TrackReviewEditor({
             onClick={() => onConvert('frame', selectedEntityType === 'person' ? 'object' : 'person', conversionLabel)}
             className="rounded bg-gv-green/20 px-2 py-1 text-xs text-gv-green-deep hover:bg-gv-green/30 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Convert This Frame
+            {t('annotation.convert_frame')}
           </button>
           <button
             type="button"
             disabled={selectedEntityType === 'person' && !conversionLabel.trim()}
-            onClick={() => {
-              if (confirm(`Convert this ${selectedEntityType} track across all annotated segments in the video?`)) {
+            onClick={async () => {
+              if (await confirmAction(t('annotation.convert_track_confirm', selectedEntityType === 'person' ? t('video.person_label') : t('video.object_label')))) {
                 onConvert('track', selectedEntityType === 'person' ? 'object' : 'person', conversionLabel)
               }
             }}
             className="rounded bg-gv-gold/15 px-2 py-1 text-xs text-gv-gold-dark hover:bg-gv-gold/25 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Convert Entire Track
+            {t('annotation.convert_track')}
           </button>
         </div>
       </div>
@@ -298,6 +334,7 @@ function SegmentReviewEditor({
   annotation: SegmentAnnotation
   onSave: (scene: SceneAnnotation, camera: CameraAnnotation, events: EventAnnotation[]) => void
 }) {
+  const { t } = useLang()
   const [scene, setScene] = useState<SceneAnnotation>(() => deepClone(annotation.scene || defaultScene()))
   const [camera, setCamera] = useState<CameraAnnotation>(() => deepClone(annotation.camera || defaultCamera()))
   const [events, setEvents] = useState<EventAnnotation[]>(() => deepClone(visualEventsFor(annotation)))
@@ -305,7 +342,7 @@ function SegmentReviewEditor({
 
   return (
     <div className="mb-4 p-3 rounded-lg border border-gv-border bg-gv-surface">
-      <h4 className="text-sm font-semibold text-gv-text mb-2">Scene &amp; Camera</h4>
+      <h4 className="text-sm font-semibold text-gv-text mb-2">{t('annotation.scene_camera_title')}</h4>
       <SceneCameraEditor
         scene={scene}
         camera={camera}
@@ -325,6 +362,7 @@ function SegmentReviewEditor({
 
 export default function AnnotateDetailPage() {
   const { t, lang } = useLang()
+  const confirmAction = useConfirm()
   const { id: routeProjectId, annotateId, videoId: routeVideoId } = useParams<{ id?: string; annotateId: string; videoId?: string }>()
   const searchParams = useSearchParams()
   const routeSegmentId = Number(searchParams.get('segment'))
@@ -339,6 +377,75 @@ export default function AnnotateDetailPage() {
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null)
   const [selectedSegmentId, setSelectedSegmentId] = useState<number | null>(null)
   const [selectedFrameIndex, setSelectedFrameIndex] = useState<number | null>(null)
+  const [splitRatio, setSplitRatio] = useState(DEFAULT_SPLIT_RATIO)
+  const [isResizingSplit, setIsResizingSplit] = useState(false)
+  const splitGridRef = useRef<HTMLDivElement | null>(null)
+  const splitRatioRef = useRef(DEFAULT_SPLIT_RATIO)
+  const preferredSplitRatioRef = useRef(DEFAULT_SPLIT_RATIO)
+  const resizingSplitRef = useRef(false)
+
+  useEffect(() => {
+    const storedValue = window.localStorage.getItem(SPLIT_PREFERENCE_KEY)
+    if (storedValue === null) return
+    const storedRatio = Number(storedValue)
+    if (!Number.isFinite(storedRatio)) return
+    const containerWidth = splitGridRef.current?.getBoundingClientRect().width || window.innerWidth
+    const nextRatio = clampSplitRatio(storedRatio, containerWidth)
+    preferredSplitRatioRef.current = storedRatio
+    splitRatioRef.current = nextRatio
+    setSplitRatio(nextRatio)
+  }, [])
+
+  const updateSplitRatio = useCallback((ratio: number, persist = false) => {
+    const containerWidth = splitGridRef.current?.getBoundingClientRect().width || window.innerWidth
+    const nextRatio = clampSplitRatio(ratio, containerWidth)
+    preferredSplitRatioRef.current = nextRatio
+    splitRatioRef.current = nextRatio
+    setSplitRatio(nextRatio)
+    if (persist) window.localStorage.setItem(SPLIT_PREFERENCE_KEY, String(nextRatio))
+  }, [])
+
+  const handleSplitPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!window.matchMedia('(min-width: 1141px)').matches) return
+    resizingSplitRef.current = true
+    setIsResizingSplit(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }, [])
+
+  const handleSplitPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizingSplitRef.current || !splitGridRef.current) return
+    const rect = splitGridRef.current.getBoundingClientRect()
+    const availableWidth = Math.max(1, rect.width - SPLIT_HANDLE_WIDTH)
+    updateSplitRatio(((event.clientX - rect.left) / availableWidth) * 100)
+    event.preventDefault()
+  }, [updateSplitRatio])
+
+  const finishSplitResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizingSplitRef.current) return
+    resizingSplitRef.current = false
+    setIsResizingSplit(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    window.localStorage.setItem(SPLIT_PREFERENCE_KEY, String(preferredSplitRatioRef.current))
+  }, [])
+
+  const handleSplitKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 5 : 2
+    let nextRatio: number | null = null
+    if (event.key === 'ArrowLeft') nextRatio = splitRatioRef.current - step
+    if (event.key === 'ArrowRight') nextRatio = splitRatioRef.current + step
+    if (event.key === 'Home') nextRatio = splitRatioBounds(splitGridRef.current?.getBoundingClientRect().width || window.innerWidth).min
+    if (event.key === 'End') nextRatio = splitRatioBounds(splitGridRef.current?.getBoundingClientRect().width || window.innerWidth).max
+    if (nextRatio === null) return
+    event.preventDefault()
+    updateSplitRatio(nextRatio, true)
+  }, [updateSplitRatio])
+
+  const resetSplitRatio = useCallback(() => {
+    updateSplitRatio(DEFAULT_SPLIT_RATIO, true)
+  }, [updateSplitRatio])
 
   const requestSet = useCallback(async (): Promise<AnnotateSet | null> => {
     try {
@@ -383,6 +490,9 @@ export default function AnnotateDetailPage() {
   const [canvasMode, setCanvasMode] = useState<'view' | 'draw'>('view')
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null)
   const [selectedEntityType, setSelectedEntityType] = useState<SpatialEntityType | null>(null)
+  const [inspectorPanel, setInspectorPanel] = useState<InspectorPanel>('object')
+  const [segmentPreviewIndex, setSegmentPreviewIndex] = useState<number | null>(null)
+  const [inspectorPreviewIndex, setInspectorPreviewIndex] = useState<number | null>(null)
   const [drawEntityType, setDrawEntityType] = useState<SpatialEntityType | null>(null)
   const [drawObjectName, setDrawObjectName] = useState('')
   const [spatialSaveStatus, setSpatialSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
@@ -393,6 +503,8 @@ export default function AnnotateDetailPage() {
   const [showSegmentExport, setShowSegmentExport] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
+  const [reviewSaving, setReviewSaving] = useState<ReviewStatus | null>(null)
+  const [reviewError, setReviewError] = useState('')
   const [annotatingSegments, setAnnotatingSegments] = useState<Set<string>>(new Set())
   const [selectedFailedSegments, setSelectedFailedSegments] = useState<Set<string>>(new Set())
   const [retryingSelected, setRetryingSelected] = useState(false)
@@ -428,7 +540,7 @@ export default function AnnotateDetailPage() {
     const vids = scopedVideos
     if (vids.length === 0) return 'no_videos'
     const hasSegments = vids.some(v => (v.segments || []).length > 0)
-    const allDone = vids.every(v => (v.segments || []).every(s => (
+    const allDone = hasSegments && vids.every(v => (v.segments || []).every(s => (
       s.status === 'completed' || s.status === 'partial_completed' || s.status === 'failed'
     )))
     const someDone = vids.some(v => (v.segments || []).some(s => (
@@ -441,6 +553,18 @@ export default function AnnotateDetailPage() {
     if (hasSegments) return 'segments_pending'
     return 'ready_uploaded'
   }, [set, scopedVideos, transition, viewMode])
+
+  useEffect(() => {
+    const grid = splitGridRef.current
+    if (!grid) return
+    const observer = new ResizeObserver(() => {
+      const nextRatio = clampSplitRatio(preferredSplitRatioRef.current, grid.getBoundingClientRect().width)
+      splitRatioRef.current = nextRatio
+      setSplitRatio(nextRatio)
+    })
+    observer.observe(grid)
+    return () => observer.disconnect()
+  }, [phase])
 
   useEffect(() => {
     fetch('/api/video-annotation/worker/health')
@@ -470,14 +594,20 @@ export default function AnnotateDetailPage() {
             status: 'pending' as const, segments: [], uploadProgress: 100,
           })
           setUploadProgress(prev => ({ ...prev, [file.name]: 100 }))
+        } else {
+          // Upload or metadata extraction failed — surface it instead of silently dropping the file
+          setUploadProgress(prev => ({ ...prev, [file.name]: -1 }))
         }
       } catch { setUploadProgress(prev => ({ ...prev, [file.name]: -1 })) }
     }
     if (uploadedVideos.length > 0) {
-      await fetch(`/api/video-annotation/annotate-sets/${annotateId}`, {
+      const res = await fetch(`/api/video-annotation/annotate-sets/${annotateId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ videos: [...(set.videos || []), ...uploadedVideos] }),
       })
+      if (!res.ok) {
+        console.error('[upload] failed to persist uploaded videos:', res.status)
+      }
       await fetchSet()
     }
     setTransition(null)
@@ -573,7 +703,7 @@ export default function AnnotateDetailPage() {
   }, [set, scopedVideos, selectedFailedSegments, retryingSelected, handleAnnotateSegment, fetchSet])
 
   const handleExport = useCallback(async (format: ExportFormat, options: CustomJsonExportOptions) => {
-    if (!set || exporting) return
+    if (!set || exporting) return false
     setExporting(true)
     try {
       const annotations: VideoAnnotation[] = []
@@ -604,29 +734,36 @@ export default function AnnotateDetailPage() {
           alert(t('video.export_summary_fallback'))
         }
       } else if (format === 'yolo') {
+        const invalid = invalidVideoDimensions(annotations)
+        if (invalid.length > 0) {
+          alert(t('video.export_invalid_dimensions', invalid.length))
+        }
         await downloadYoloZip(annotations, `${set.name}_yolo_labels.zip`)
       } else if (format === 'coco') {
+        const invalid = invalidVideoDimensions(annotations)
+        if (invalid.length > 0) {
+          alert(t('video.export_invalid_dimensions', invalid.length))
+        }
         await downloadAsFile(exportCoco(annotations), `${set.name}_coco.json`)
       }
-      setShowExport(false)
+      return true
     } catch (error) {
       console.error('[video export] export failed', error)
-      alert(t('video.export_failed'))
+      return false
     } finally {
       setExporting(false)
     }
   }, [set, scopedVideos, exporting, lang, t])
 
   const handleExportCurrentSegment = useCallback(async (options: CustomJsonExportOptions) => {
-    if (!set || !selectedVideoId || selectedSegmentId == null || exporting) return
+    if (!set || !selectedVideoId || selectedSegmentId == null || exporting) return false
     const video = (set.videos || []).find(item => item.videoId === selectedVideoId)
     const segment = video?.segments?.find(item => item.segmentId === selectedSegmentId)
-    if (!video || !segment) return
+    if (!video || !segment) return false
 
     const annotation = getEffectiveAnnotation(segment)
     if (!annotation) {
-      alert(t('video.export_segment_unavailable'))
-      return
+      return false
     }
 
     setExporting(true)
@@ -659,10 +796,10 @@ export default function AnnotateDetailPage() {
         `${video.videoId}_segment_${segment.segmentId}.json`,
       )
       if (summary.source === 'fallback') alert(t('video.export_summary_fallback'))
-      setShowSegmentExport(false)
+      return true
     } catch (error) {
       console.error('[video export] current segment export failed', error)
-      alert(t('video.export_failed'))
+      return false
     } finally {
       setExporting(false)
     }
@@ -673,9 +810,25 @@ export default function AnnotateDetailPage() {
     videoId: string,
     updates: Array<{ segmentId: number; annotation: SegmentAnnotation }>,
   ) => {
-    setRef.current = nextSet
-    setSet(nextSet)
-    updateAnnotateSet(id, annotateId, nextSet)
+    // Re-base on the freshest snapshot so a queued save never clobbers edits
+    // from a newer in-flight save built from a stale closure.
+    const base = setRef.current ?? nextSet
+    const merged: AnnotateSet = {
+      ...base,
+      videos: (base.videos || []).map(v => {
+        if (v.videoId !== videoId) return v
+        return {
+          ...v,
+          segments: (v.segments || []).map(s => {
+            const update = updates.find(u => u.segmentId === s.segmentId)
+            return update ? { ...s, humanAnnotation: update.annotation } : s
+          }),
+        }
+      }),
+    }
+    setRef.current = merged
+    setSet(merged)
+    updateAnnotateSet(id, annotateId, merged)
     setSpatialSaveStatus('saving')
     const revision = ++spatialSaveRevisionRef.current
     spatialSaveQueueRef.current = spatialSaveQueueRef.current.catch(() => {}).then(async () => {
@@ -750,9 +903,40 @@ export default function AnnotateDetailPage() {
         throw new Error(apiErrorMessage(payload, `HTTP ${response.status}`))
       }
       const trackId = payload.manualTrack!.trackId!
-      setRef.current = payload.data
-      setSet(payload.data)
-      updateAnnotateSet(id, annotateId, payload.data)
+      // Merge instead of wholesale-replacing: a concurrent optimistic edit
+      // (resize/delete made while this request was in flight) must survive.
+      const localSet = setRef.current
+      const serverVideo = payload.data.videos.find(v => v.videoId === videoId)
+      const serverSegment = serverVideo?.segments.find(s => s.segmentId === segmentId)
+      if (localSet && serverSegment) {
+        const merged: AnnotateSet = {
+          ...localSet,
+          videos: (localSet.videos || []).map(v => {
+            if (v.videoId !== videoId) return v
+            return {
+              ...v,
+              segments: (v.segments || []).map(s => {
+                if (s.segmentId !== segmentId) return s
+                const localAnn = getEffectiveAnnotation(s)
+                const serverAnn = getEffectiveAnnotation(serverSegment)
+                if (!localAnn || !serverAnn) return s
+                return {
+                  ...s,
+                  humanAnnotation: mergeSegmentAnnotationFromServer(localAnn, serverAnn),
+                  nextManualTrackId: serverSegment.nextManualTrackId ?? s.nextManualTrackId,
+                }
+              }),
+            }
+          }),
+        }
+        setRef.current = merged
+        setSet(merged)
+        updateAnnotateSet(id, annotateId, merged)
+      } else {
+        setRef.current = payload.data
+        setSet(payload.data)
+        updateAnnotateSet(id, annotateId, payload.data)
+      }
       setSelectedFrameIndex(frame.frameIndex)
       setSelectedTrackId(trackId)
       setSelectedEntityType(entityType)
@@ -890,9 +1074,10 @@ export default function AnnotateDetailPage() {
     }
   }, [pendingDeletes, commitPendingDelete])
 
-  const handleDeleteSegment = useCallback((segVideoId: string, segSegmentId: number) => {
+  const handleDeleteSegment = useCallback(async (segVideoId: string, segSegmentId: number) => {
     if (!set) return
-    if (!confirm(`Delete segment ${segSegmentId}?`)) return
+    if (!await confirmAction({ message: t('video.delete_segment_confirm', segSegmentId), confirmLabel: t('app.delete'), tone: 'danger' })) return
+    const prevSet = set
     const newSet: AnnotateSet = {
       ...set,
       videos: (set.videos || []).map(v => {
@@ -909,8 +1094,16 @@ export default function AnnotateDetailPage() {
       setSelectedTrackId(null)
     }
     updateAnnotateSet(id, annotateId, newSet)
-    fetch(`/api/video-annotation/annotate-sets/${annotateId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newSet) }).catch(() => {})
-  }, [set, selectedVideoId, selectedSegmentId, id, annotateId, updateAnnotateSet])
+    try {
+      const res = await fetch(`/api/video-annotation/annotate-sets/${annotateId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newSet) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } catch (err) {
+      console.error('[segment] delete failed', err)
+      setSet(prevSet)
+      updateAnnotateSet(id, annotateId, prevSet)
+      alert(t('video.delete_segment_failed'))
+    }
+  }, [set, selectedVideoId, selectedSegmentId, id, annotateId, updateAnnotateSet, t, confirmAction])
 
   const handleSaveSegEdits = useCallback((
     scene: SceneAnnotation,
@@ -1096,6 +1289,7 @@ export default function AnnotateDetailPage() {
 
   const selectedVideo: VideoTaskItem | undefined = scopedVideos.find(v => v.videoId === selectedVideoId) || scopedVideos[0]
   const selectedSegment = (selectedVideo?.segments || []).find(s => s.segmentId === selectedSegmentId) || selectedVideo?.segments?.[0]
+  const currentReviewStatus: ReviewStatus = selectedSegment?.reviewStatus || 'unreviewed'
   const activeAnnotation: SegmentAnnotation | null = getEffectiveAnnotation(selectedSegment || { humanAnnotation: null, modelAnnotation: null })
   const recognitionStatus = activeAnnotation?._recognition || selectedSegment?.modelAnnotation?._recognition
   const pipelineErrors = activeAnnotation?._pipeline_errors || selectedSegment?.modelAnnotation?._pipeline_errors || []
@@ -1140,7 +1334,7 @@ export default function AnnotateDetailPage() {
       !set || !selectedVideo || !selectedSegment || manualSplitSnappedTime == null
       || !manualSplitCanCommit || manualSplitSaving
     ) return
-    if (!confirm(t(
+    if (!await confirmAction(t(
       'video.manual_split_confirm',
       formatSplitTime(manualSplitSnappedTime),
       formatSplitTime(selectedSegment.start),
@@ -1180,7 +1374,7 @@ export default function AnnotateDetailPage() {
     }
   }, [
     set, selectedVideo, selectedSegment, manualSplitSnappedTime, manualSplitCanCommit,
-    manualSplitSaving, t, annotateId,
+    manualSplitSaving, t, annotateId, confirmAction,
   ])
 
   const selectedFrame = useMemo(() => {
@@ -1321,7 +1515,7 @@ export default function AnnotateDetailPage() {
   ), [activeAnnotation, selectedFrame])
   const ocrTrackIds = useMemo(() => new Set(
     (activeAnnotation?.objects || [])
-      .filter(object => object._textContent || object.category.trim().toLowerCase() === 'text')
+      .filter(object => object._textContent || object.category?.trim().toLowerCase() === 'text')
       .map(object => object.trackId),
   ), [activeAnnotation])
   const visibleFramePersonCount = useMemo(() => (
@@ -1360,12 +1554,16 @@ export default function AnnotateDetailPage() {
     [frameEntities, activePendingTrackKeys]
   )
 
-  const handleFrameSeek = useCallback((timestamp: number) => {
+  const handleFrameSeek = useCallback((timestamp: number, manual?: boolean) => {
     const frame = nearestFrame(activeAnnotation?.frames, timestamp)
     if (frame) setSelectedFrameIndex(frame.frameIndex)
-    setSelectedTrackId(null)
-    setSelectedEntityType(null)
-    setCanvasMode('view')
+    if (manual) {
+      // Only user-initiated seeks leave the editing context; plain playback
+      // must keep the current track selection so edits are not dropped.
+      setSelectedTrackId(null)
+      setSelectedEntityType(null)
+      setCanvasMode('view')
+    }
   }, [activeAnnotation])
 
   const handleExportCurrentFrame = useCallback(async () => {
@@ -1381,7 +1579,7 @@ export default function AnnotateDetailPage() {
     frameIndex: number,
   ): Promise<PersonAnalysisResult> => {
     if (!selectedVideoId || selectedSegmentId == null) {
-      throw new Error('Select a video segment before analyzing a person.')
+      throw new Error(t('annotation.select_segment_for_analysis'))
     }
     const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/person-analysis`, {
       method: 'POST',
@@ -1398,7 +1596,7 @@ export default function AnnotateDetailPage() {
       error?: unknown
     } | null
     if (!response.ok || !submitted?.data?.jobId) {
-      throw new Error(apiErrorMessage(submitted, `Person analysis failed (HTTP ${response.status})`))
+      throw new Error(apiErrorMessage(submitted, t('annotation.analysis_failed_http', response.status)))
     }
 
     for (let attempt = 0; attempt < 180; attempt += 1) {
@@ -1416,24 +1614,28 @@ export default function AnnotateDetailPage() {
         error?: unknown
       } | null
       if (!statusResponse.ok || !statusPayload?.data) {
-        throw new Error(apiErrorMessage(statusPayload, `Person analysis status failed (HTTP ${statusResponse.status})`))
+        throw new Error(apiErrorMessage(statusPayload, t('annotation.analysis_status_failed_http', statusResponse.status)))
       }
       if (statusPayload.data.status === 'completed' && statusPayload.data.result) {
         return statusPayload.data.result
       }
       if (statusPayload.data.status === 'failed' || statusPayload.data.status === 'cancelled') {
-        throw new Error(statusPayload.data.error || 'Person analysis did not complete.')
+        throw new Error(statusPayload.data.error || t('annotation.analysis_incomplete'))
       }
     }
-    throw new Error('Person analysis timed out after 3 minutes.')
-  }, [annotateId, selectedVideoId, selectedSegmentId])
+    throw new Error(t('annotation.analysis_timeout'))
+  }, [annotateId, selectedVideoId, selectedSegmentId, t])
 
   // ── Keyboard delete ────────────────────────────────
 
   useEffect(() => {
     if (selectedTrackId == null || selectedEntityType == null) return
     const h = (e: KeyboardEvent) => {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName || ''
+      const editable = target?.isContentEditable || false
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(tag) && !editable) {
+        e.preventDefault()
         handleDeleteTrack(selectedTrackId, selectedEntityType)
       }
     }
@@ -1441,65 +1643,87 @@ export default function AnnotateDetailPage() {
     return () => window.removeEventListener('keydown', h)
   }, [selectedTrackId, selectedEntityType, handleDeleteTrack])
 
-  // Flush pending deletes when switching video or segment
-  const prevVideoSegRef = useRef(`${selectedVideoId || ''}_${selectedSegmentId ?? ''}_${selectedFrame?.frameIndex ?? ''}`)
+  // Flush pending deletes when switching video or segment (not on frame step)
+  const prevVideoSegRef = useRef(`${selectedVideoId || ''}_${selectedSegmentId ?? ''}`)
   useEffect(() => {
-    const key = `${selectedVideoId || ''}_${selectedSegmentId ?? ''}_${selectedFrame?.frameIndex ?? ''}`
+    const key = `${selectedVideoId || ''}_${selectedSegmentId ?? ''}`
     if (prevVideoSegRef.current !== key) {
       prevVideoSegRef.current = key
       flushPendingDeletes()
     }
-  }, [selectedVideoId, selectedSegmentId, selectedFrame?.frameIndex, flushPendingDeletes])
+  }, [selectedVideoId, selectedSegmentId, flushPendingDeletes])
 
   const handleReviewStatus = useCallback(async (status: 'needs_review' | 'approved' | 'rejected') => {
-    if (!selectedVideo || !selectedSegment) return
-    const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/segments/review`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId: selectedVideo.videoId, segmentId: selectedSegment.segmentId, status }),
-    })
-    const payload = await response.json().catch(() => null) as { data?: AnnotateSet } | null
-    if (response.ok && payload?.data) setSet(payload.data)
-  }, [annotateId, selectedVideo, selectedSegment])
+    if (!selectedVideo || !selectedSegment || reviewSaving) return
+    setReviewSaving(status)
+    setReviewError('')
+    try {
+      const response = await fetch(`/api/video-annotation/annotate-sets/${annotateId}/segments/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoId: selectedVideo.videoId, segmentId: selectedSegment.segmentId, status }),
+      })
+      const payload = await response.json().catch(() => null) as { data?: AnnotateSet; error?: { message?: string } } | null
+      if (!response.ok || !payload?.data) throw new Error(payload?.error?.message || t('video.review_save_error'))
+      setSet(payload.data)
+    } catch (caught) {
+      setReviewError(caught instanceof Error ? caught.message : t('video.review_save_error'))
+    } finally {
+      setReviewSaving(null)
+    }
+  }, [annotateId, selectedVideo, selectedSegment, reviewSaving, t])
 
   // ── Render ─────────────────────────────────────────
 
-  if (loading) return <div className="flex-1 flex items-center justify-center"><p className="text-gv-text-dim">Loading...</p></div>
+  if (loading) return (
+    <div className={styles.stateShell}>
+      <WorkspaceHeader />
+      <main className={styles.routeState} role="status" aria-live="polite"><div><p>{t('annotation.loading')}</p></div></main>
+    </div>
+  )
   if (!set) return (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="text-center"><p className="text-lg text-gv-text-dim">Annotation set not found</p>
-        <Link href="/annotations" className="text-sm text-gv-pink hover:underline mt-2 inline-block">Back</Link>
-      </div>
+    <div className={styles.stateShell}>
+      <WorkspaceHeader />
+      <main className={styles.routeState}>
+        <div><h1>{t('annotation.set_not_found')}</h1><p>{t('project.not_found_desc')}</p>
+          <Link href="/annotations">{t('annotation.back')}</Link>
+        </div>
+      </main>
     </div>
   )
   if (routeVideoId && scopedVideos.length === 0) return (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="text-center"><p className="text-lg text-gv-text-dim">{t('video.video_not_found')}</p>
-        <Link href={`/annotations/${annotateId}`} className="text-sm text-gv-pink hover:underline mt-2 inline-block">{t('video.back_to_project')}</Link>
-      </div>
+    <div className={styles.stateShell}>
+      <WorkspaceHeader />
+      <main className={styles.routeState}>
+        <div><h1>{t('video.video_not_found')}</h1><p>{t('state.not_found_desc')}</p>
+          <Link href={`/annotations/${annotateId}`}>{t('video.back_to_project')}</Link>
+        </div>
+      </main>
     </div>
   )
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className={`flex-1 flex flex-col min-h-0 ${routeVideoId ? styles.formalWorkbench : ''}`}>
       <WorkspaceHeader />
-      <main className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-gv-border/50 bg-gv-surface">
-        <Link href={routeVideoId ? `/annotations/${annotateId}` : '/annotations'} className="text-gv-text-dim hover:text-gv-pink transition-colors">
+      <main
+        className={`flex-1 flex flex-col min-h-0 ${styles.workbenchMain}`}
+        aria-busy={phase === 'uploading' || phase === 'detecting' || phase === 'annotating'}
+      >
+      <div className={`flex items-center gap-4 px-4 py-3 border-b border-gv-border/50 bg-gv-surface ${styles.contextBar}`}>
+        <Link href={routeVideoId ? `/annotations/${annotateId}` : '/annotations'} className={`text-gv-text-dim hover:text-gv-pink transition-colors ${styles.backButton}`} aria-label={routeVideoId ? t('video.back_to_project') : 'Back'}>
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
         </Link>
         {routeVideoId ? (
-          <div className="flex-1 min-w-0">
+          <div className={`flex-1 min-w-0 ${styles.contextCopy}`}>
             <p className="text-xs text-gv-text-muted truncate">{set.name}</p>
             <h1 className="text-lg font-semibold text-gv-text truncate">{selectedVideo?.fileName || set.name}</h1>
           </div>
         ) : (
           <h1 className="text-lg font-semibold text-gv-text flex-1 truncate">{set.name}</h1>
         )}
-        <span className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-full ${
-          workerStatus === 'ok' ? 'bg-gv-green-deep/10 text-gv-green-deep' : workerStatus === 'checking' ? 'bg-gv-gold/10 text-gv-gold' : 'bg-gv-pink/10 text-gv-pink'
-        }`}>
-          <span className={`w-1.5 h-1.5 rounded-full ${workerStatus === 'ok' ? 'bg-gv-green-deep' : workerStatus === 'checking' ? 'bg-gv-gold' : 'bg-gv-pink'}`} />
-          Worker: {workerStatus}
+        <span className={styles.taskStatus} data-phase={phase}>
+          <span aria-hidden="true" />
+          {t(`video.task_phase.${phase}`)}
         </span>
         {!routeVideoId && (set.videos?.length || 0) > 0 && (
           <button
@@ -1507,56 +1731,59 @@ export default function AnnotateDetailPage() {
             disabled={transition === 'uploading'}
             className="btn-outline rounded-lg px-4 py-2 text-sm disabled:opacity-50"
           >
-            + {t('video.add_videos')}
+            <svg className="mr-1 inline-block h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+            {t('video.add_videos')}
           </button>
         )}
         {allSegments.some(s => s.status === 'completed') && (
-          <>
+          <div className={styles.contextActionGroup} role="group" aria-label={t('video.export_group')}>
             {selectedSegmentId != null && (
               <button
                 onClick={() => setShowSegmentExport(true)}
                 disabled={exporting}
-                title="Exports the current segment; corrected OCR and speech can be included from the export dialog."
+                title={t('video.export_current_segment_hint')}
                 className="btn-outline rounded-lg px-4 py-2 text-sm disabled:opacity-50"
               >
                 {exporting ? t('video.generating_summary') : t('video.export_current_segment')}
               </button>
             )}
-            <button onClick={() => setShowExport(true)} disabled={exporting} className="btn-outline rounded-lg px-4 py-2 text-sm disabled:opacity-50">
+            <button onClick={() => setShowExport(true)} disabled={exporting} className={`btn-outline rounded-lg px-4 py-2 text-sm disabled:opacity-50 ${styles.primaryContextAction}`}>
               {t('video.export_all_annotations')}
             </button>
-          </>
+          </div>
         )}
       </div>
 
       {!routeVideoId && phase === 'no_videos' && (
-        <div className="flex-1 flex items-center justify-center p-8">
+        <div className={`flex-1 flex items-center justify-center p-8 ${styles.setupViewport}`}>
           <div className="w-full max-w-2xl">
-            <h2 className="text-lg font-semibold text-gv-text mb-2">Upload Videos</h2>
-            <p className="text-sm text-gv-text-dim mb-6">Upload videos to begin the annotation pipeline.</p>
+            <h2 className="text-lg font-semibold text-gv-text mb-2">{t('video.upload_workspace_title')}</h2>
+            <p className="text-sm text-gv-text-dim mb-6">{t('video.upload_workspace_desc')}</p>
             <VideoBatchUploader onFiles={handleUpload} />
           </div>
         </div>
       )}
 
       {scopedVideos.length > 0 && allSegments.length === 0 && phase !== 'uploading' && phase !== 'detecting' && phase !== 'annotating' && (
-        <div className="flex-1 p-6 overflow-auto">
-          <div className="max-w-4xl mx-auto">
-            <h2 className="text-lg font-semibold text-gv-text mb-4">{selectedVideo?.fileName || `Videos (${scopedVideos.length})`}</h2>
+        <div className={`flex-1 p-6 overflow-auto ${styles.setupViewport}`}>
+          <div className={`max-w-4xl mx-auto ${styles.setupPanel}`}>
+            <h2 className="text-lg font-semibold text-gv-text mb-4">{selectedVideo?.fileName || t('video.video_count', scopedVideos.length)}</h2>
             <div className="flex items-center gap-3 mb-4 p-3 rounded-lg border border-gv-border bg-gv-bg-deep">
-              <span className="text-xs text-gv-text-dim shrink-0">Scene sensitivity:</span>
-              <input type="range" min="0.15" max="0.8" step="0.05" value={sceneThreshold} onChange={e => setSceneThreshold(parseFloat(e.target.value))} className="flex-1 accent-gv-pink h-2" />
+              <span className="text-xs text-gv-text-dim shrink-0">{t('video.scene_sensitivity')}：</span>
+              <input type="range" min="0.15" max="0.8" step="0.05" value={sceneThreshold} onChange={e => setSceneThreshold(parseFloat(e.target.value))} className="flex-1 accent-gv-pink h-2" aria-label={t('video.scene_sensitivity')} />
               <span className="text-xs text-gv-pink font-mono min-w-[3ch]">{sceneThreshold.toFixed(2)}</span>
-              <span className="text-xs text-gv-text-muted">(lower = more segments)</span>
+              <span className="text-xs text-gv-text-muted">（{t('video.scene_sensitivity_hint')}）</span>
             </div>
             <div className="space-y-3">
               {scopedVideos.map(v => (
                 <div key={v.videoId} className="card p-4 flex items-center gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gv-text truncate">{v.fileName}</p>
-                    <p className="text-xs text-gv-text-dim mt-0.5">{v.duration ? `${v.duration.toFixed(1)}s` : 'Processing...'}{v.width ? ` | ${v.width}x${v.height}` : ''}</p>
+                    <p className="text-xs text-gv-text-dim mt-0.5">{v.duration ? `${v.duration.toFixed(1)}s` : t('video.processing_video')}{v.width ? ` · ${v.width}×${v.height}` : ''}</p>
                   </div>
-                  <button onClick={() => handleDetectScenes(v.videoId)} className="rounded-lg px-4 py-2 text-sm bg-gv-green/20 text-gv-green-deep hover:bg-gv-green/30 transition-colors font-medium">Detect Scenes</button>
+                  <button onClick={() => handleDetectScenes(v.videoId)} className="rounded-lg px-4 py-2 text-sm bg-gv-green/20 text-gv-green-deep hover:bg-gv-green/30 transition-colors font-medium">{t('video.detect_scenes')}</button>
                 </div>
               ))}
             </div>
@@ -1565,14 +1792,14 @@ export default function AnnotateDetailPage() {
       )}
 
       {phase === 'uploading' && (
-        <div className="flex-1 flex items-center justify-center p-8">
+        <div className={`flex-1 flex items-center justify-center p-8 ${styles.centerState}`}>
           <div className="w-full max-w-md text-center">
             <div className="animate-spin w-8 h-8 border-2 border-gv-pink border-t-transparent rounded-full mx-auto mb-4" />
-            <p className="text-sm text-gv-text-dim">Uploading videos...</p>
+            <p className="text-sm text-gv-text-dim">{t('video.uploading_progress')}</p>
             {Object.entries(uploadProgress).map(([name, pct]) => (
               <div key={name} className="flex items-center gap-2 mt-2 text-xs text-gv-text-dim">
                 <span className="truncate flex-1 text-left">{name}</span>
-                <span className={`w-12 text-right ${pct < 0 ? 'text-gv-pink' : ''}`}>{pct < 0 ? 'Failed' : `${pct}%`}</span>
+                <span className={`w-12 text-right ${pct < 0 ? 'text-gv-pink' : ''}`}>{pct < 0 ? t('video.upload_failed') : `${pct}%`}</span>
               </div>
             ))}
           </div>
@@ -1580,8 +1807,12 @@ export default function AnnotateDetailPage() {
       )}
 
       {phase === 'segments_pending' && (
-        <div className="flex-1 flex overflow-hidden">
-          <div className="w-1/2 border-r border-gv-border/50 flex flex-col">
+        <div
+          ref={splitGridRef}
+          className={`flex-1 flex overflow-hidden ${styles.workspaceGrid} ${isResizingSplit ? styles.isResizingSplit : ''}`}
+          style={{ gridTemplateColumns: `minmax(${MIN_PRIMARY_PANE_WIDTH}px, ${splitRatio}fr) ${SPLIT_HANDLE_WIDTH}px minmax(${MIN_SECONDARY_PANE_WIDTH}px, ${100 - splitRatio}fr)` }}
+        >
+          <div id="annotation-primary-pane" className={`w-1/2 border-r border-gv-border/50 flex flex-col ${styles.previewColumn}`}>
             {selectedVideo && (
               <>
                 <div className="flex-1 flex items-center justify-center p-4"><VideoPlayer
@@ -1591,13 +1822,13 @@ export default function AnnotateDetailPage() {
                   fps={selectedVideo.fps || 30}
                   onFrameSeek={handleSplitCursorSeek}
                 /></div>
-                <div className="border-t border-gv-border/50 px-4 py-3">
-                  <div className="relative flex h-8 overflow-hidden rounded-lg border border-gv-border bg-gv-bg-deep">
+                <div className={`border-t border-gv-border/50 px-4 py-3 ${styles.splitTimeline}`}>
+                  <div className="relative flex h-8 overflow-hidden rounded-lg border border-gv-border bg-gv-bg-deep/40">
                     {(selectedVideo.segments || []).map(segment => (
                       <button
                         key={segment.segmentId}
                         type="button"
-                        title={`Segment ${segment.segmentId}: ${formatSplitTime(segment.start)} - ${formatSplitTime(segment.end)}`}
+                        title={`${t('video.segment_label', segment.segmentId)}：${formatSplitTime(segment.start)} - ${formatSplitTime(segment.end)}`}
                         onClick={() => {
                           setSelectedVideoId(selectedVideo.videoId)
                           setSelectedSegmentId(segment.segmentId)
@@ -1608,20 +1839,20 @@ export default function AnnotateDetailPage() {
                         style={{ flexGrow: Math.max(segment.end - segment.start, 0.001), flexBasis: 0 }}
                         className={`min-w-px border-r border-gv-surface transition-colors ${
                           selectedSegment?.segmentId === segment.segmentId
-                            ? 'bg-gv-pink/25'
-                            : 'bg-gv-green/15 hover:bg-gv-green/25'
+                            ? 'bg-gv-pink/14'
+                            : 'bg-gv-green/8 hover:bg-gv-green/14'
                         }`}
                       />
                     ))}
                     {manualSplitMode && manualSplitTime != null && selectedVideo.duration > 0 && (
                       <span
-                        className="pointer-events-none absolute inset-y-0 w-0.5 bg-gv-pink shadow-[0_0_6px_rgba(255,94,180,0.8)]"
+                        className={`pointer-events-none absolute inset-y-0 w-0.5 bg-gv-pink ${styles.splitCursor}`}
                         style={{ left: `${Math.min(100, Math.max(0, manualSplitTime / selectedVideo.duration * 100))}%` }}
                       />
                     )}
                   </div>
                   <div className="mt-2 flex items-center gap-2 text-xs text-gv-text-muted">
-                    <span>{selectedSegment ? `Segment ${selectedSegment.segmentId}: ${formatSplitTime(selectedSegment.start)} - ${formatSplitTime(selectedSegment.end)}` : t('video.manual_split_select_segment')}</span>
+                    <span>{selectedSegment ? `${t('video.segment_label', selectedSegment.segmentId)}：${formatSplitTime(selectedSegment.start)} - ${formatSplitTime(selectedSegment.end)}` : t('video.manual_split_select_segment')}</span>
                     <span className="flex-1" />
                     <span>{selectedVideo.segments.length} {t('video.manual_split_segments')}</span>
                   </div>
@@ -1677,39 +1908,61 @@ export default function AnnotateDetailPage() {
                     <p className="mt-2 text-xs text-gv-text-muted">{t('video.manual_split_draft_only')}</p>
                   )}
                 </div>
-                <div className="border-t border-gv-border/50 p-3 flex items-center justify-between">
+                <div className={`border-t border-gv-border/50 p-3 flex items-center justify-between ${styles.primaryActionBar}`}>
                   <span className="text-sm text-gv-text-dim truncate">{selectedVideo.fileName}</span>
-                  {workerStatus === 'ok' && <button onClick={handleAnnotateAll} className="btn-primary rounded-lg px-4 py-2 text-sm">Annotate All Segments</button>}
+                  {workerStatus === 'ok' && <button onClick={handleAnnotateAll} className="btn-primary rounded-lg px-4 py-2 text-sm">{t('video.annotate_all_segments')}</button>}
                 </div>
               </>
             )}
           </div>
-          <div className="w-1/2 flex flex-col overflow-auto p-4">
-            <h3 className="text-sm font-semibold text-gv-text mb-3 flex items-center gap-2">
-              Segments ({allSegments.length})
-              {allSegments.filter(s => s.status === 'completed' || s.status === 'partial_completed').length > 0 && <span className="text-xs text-gv-text-muted font-normal">({allSegments.filter(s => s.status === 'completed' || s.status === 'partial_completed').length} done)</span>}
-              <span className="flex-1" />
+          <div
+            className={styles.splitHandle}
+            role="separator"
+            aria-label="调整视频区域与片段列表的宽度"
+            aria-controls="annotation-primary-pane annotation-secondary-pane"
+            aria-orientation="vertical"
+            aria-valuemin={25}
+            aria-valuemax={75}
+            aria-valuenow={Math.round(splitRatio)}
+            aria-valuetext={`左侧 ${Math.round(splitRatio)}%，右侧 ${Math.round(100 - splitRatio)}%`}
+            tabIndex={0}
+            title="拖动调整左右宽度；双击恢复默认比例"
+            onPointerDown={handleSplitPointerDown}
+            onPointerMove={handleSplitPointerMove}
+            onPointerUp={finishSplitResize}
+            onPointerCancel={finishSplitResize}
+            onKeyDown={handleSplitKeyDown}
+            onDoubleClick={resetSplitRatio}
+          >
+            <span aria-hidden="true" />
+          </div>
+          <div id="annotation-secondary-pane" className={`w-1/2 flex flex-col overflow-auto p-4 ${styles.queueColumn}`}>
+            <div className={styles.segmentQueueHeader}>
+              <div className={styles.segmentQueueTitle}>
+                <h3>{t('video.segments')} ({allSegments.length})</h3>
+                {allSegments.filter(s => s.status === 'completed' || s.status === 'partial_completed').length > 0 && <span>{t('video.completed_segments', allSegments.filter(s => s.status === 'completed' || s.status === 'partial_completed').length)}</span>}
+              </div>
               {selectedVideo && (
-                <>
-                  <input type="range" min="0.15" max="0.8" step="0.05" value={sceneThreshold} onChange={e => setSceneThreshold(parseFloat(e.target.value))} className="w-20 accent-gv-pink h-1.5" />
-                  <span className="text-xs text-gv-text-muted font-mono w-8 text-right">{sceneThreshold.toFixed(2)}</span>
-                  <button onClick={() => handleDetectScenes(selectedVideo.videoId)} className="px-2 py-0.5 rounded text-xs bg-gv-pink/10 text-gv-pink hover:bg-gv-pink/20" title="Re-detect scenes">Re-detect</button>
+                <div className={styles.segmentQueueTools}>
+                  <label className={styles.sceneThresholdControl}>
+                    <span>{t('video.scene_threshold')}</span>
+                    <input type="range" min="0.15" max="0.8" step="0.05" value={sceneThreshold} onChange={e => setSceneThreshold(parseFloat(e.target.value))} aria-label={t('video.scene_threshold')} />
+                    <output>{sceneThreshold.toFixed(2)}</output>
+                  </label>
+                  <button type="button" onClick={() => handleDetectScenes(selectedVideo.videoId)} className={styles.queueToolButton} title={t('video.redetect_scenes')}>{t('video.redetect_scenes')}</button>
                   <button
                     type="button"
                     onClick={handleToggleManualSplit}
                     disabled={!manualSplitEligible || manualSplitSaving}
                     title={manualSplitEligible ? t('video.manual_split_title') : t('video.manual_split_draft_only')}
-                    className={`px-2 py-0.5 rounded text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
-                      manualSplitMode
-                        ? 'bg-gv-pink text-white'
-                        : 'bg-gv-green/15 text-gv-green-deep hover:bg-gv-green/25'
-                    }`}
+                    data-active={manualSplitMode || undefined}
+                    className={styles.queueToolButton}
                   >
                     {t('video.manual_split_title')}
                   </button>
-                </>
+                </div>
               )}
-            </h3>
+            </div>
             {failedSegments.length > 0 && (
               <div className="mb-3 flex items-center gap-2 rounded-lg border border-gv-pink/25 bg-gv-pink/5 px-3 py-2">
                 <span className="text-xs text-gv-pink">{t('video.retryable_segments', failedSegments.length)}</span>
@@ -1737,11 +1990,11 @@ export default function AnnotateDetailPage() {
                 </button>
               </div>
             )}
-            <div className="space-y-2">
+            <div className={styles.segmentList}>
               {allSegments.map(seg => (
                 <div
                   key={`${seg.videoId}_${seg.segmentId}`}
-                  className={`card p-3 flex items-center gap-3 transition-all ${selectedSegmentId === seg.segmentId && selectedVideoId === seg.videoId ? 'border-gv-pink' : ''}`}
+                  className={`card p-3 flex items-center gap-3 transition-all ${styles.segmentItem} ${selectedSegmentId === seg.segmentId && selectedVideoId === seg.videoId ? 'border-gv-pink' : ''}`}
                 >
                   {(seg.status === 'failed' || seg.status === 'partial_completed') && (
                     <input
@@ -1760,9 +2013,12 @@ export default function AnnotateDetailPage() {
                       className="h-3.5 w-3.5 accent-gv-pink"
                     />
                   )}
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                    seg.status === 'completed' ? 'bg-gv-green-deep' : seg.status === 'partial_completed' ? 'bg-gv-gold' : seg.status === 'processing' ? 'bg-gv-gold animate-pulse' : seg.status === 'failed' ? 'bg-gv-pink' : 'bg-gv-text-muted'
-                  }`} />
+                  <div
+                    className={styles.segmentStatusDot}
+                    data-status={seg.status}
+                    data-review-status={seg.reviewStatus || 'unreviewed'}
+                    aria-hidden="true"
+                  />
                   <button
                     type="button"
                     onClick={() => {
@@ -1773,16 +2029,23 @@ export default function AnnotateDetailPage() {
                       setSelectedEntityType(null)
                       setManualSplitError(null)
                     }}
-                    className="flex-1 min-w-0 text-left"
+                    className={styles.segmentSummary}
                   >
-                    <p className="text-sm font-medium text-gv-text">Segment {seg.segmentId}</p>
-                    <p className="text-xs text-gv-text-dim">{seg.start.toFixed(1)}s – {seg.end.toFixed(1)}s ({seg.videoName})</p>
+                    <strong>{t('video.segment_label', seg.segmentId)}</strong>
+                    <small title={`${seg.start.toFixed(1)}s - ${seg.end.toFixed(1)}s (${seg.videoName})`}>
+                      {seg.start.toFixed(1)}s - {seg.end.toFixed(1)}s ({seg.videoName})
+                    </small>
                   </button>
-                  <span className="text-xs text-gv-text-muted capitalize">
+                  <span className={styles.segmentPipelineStatus}>
                     {seg.status === 'processing' && seg.processingMode === 'precision'
                       ? t('video.precision_running')
-                      : seg.status}
+                      : t(`video.status.${seg.status}`)}
                   </span>
+                  {(seg.humanAnnotation || seg.modelAnnotation) && (
+                    <span className={styles.segmentReviewBadge} data-status={seg.reviewStatus || 'unreviewed'}>
+                      {t(`video.review_value.${seg.reviewStatus || 'unreviewed'}`)}
+                    </span>
+                  )}
                   {(seg.status === 'completed' || seg.status === 'partial_completed') && seg.lastCompletedMode && (
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${
                       seg.lastCompletedMode === 'precision'
@@ -1796,31 +2059,40 @@ export default function AnnotateDetailPage() {
                   )}
                   {seg.status === 'failed' && (
                     <>
-                      <span className="text-xs text-gv-gold truncate max-w-[140px]" title={(seg as unknown as Record<string,string>).error}>{(seg as unknown as Record<string,string>).error || 'Pipeline error'}</span>
+                      <span className="text-xs text-gv-gold truncate max-w-[140px]" title={(seg as unknown as Record<string,string>).error}>{(seg as unknown as Record<string,string>).error || t('video.pipeline_error')}</span>
                       {((seg as unknown as Record<string,unknown>).modelAnnotation as Record<string,unknown>) && (
-                        <button onClick={(e) => { e.stopPropagation(); setSelectedVideoId(seg.videoId); setSelectedSegmentId(seg.segmentId); setSelectedFrameIndex(null); setSelectedTrackId(null); setSelectedEntityType(null); setViewMode('completed') }} className="rounded px-2 py-0.5 text-xs bg-gv-gold/10 text-gv-gold-dark hover:bg-gv-gold/20 ml-2">Review Partial</button>
+                        <button aria-label={t('video.review_partial_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); setSelectedVideoId(seg.videoId); setSelectedSegmentId(seg.segmentId); setSelectedFrameIndex(null); setSelectedTrackId(null); setSelectedEntityType(null); setViewMode('completed') }} className="rounded px-2 py-0.5 text-xs bg-gv-gold/10 text-gv-gold-dark hover:bg-gv-gold/20 ml-2">{t('video.review_degraded')}</button>
                       )}
-                      <button onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20">Retry</button>
+                      <button aria-label={t('video.retry_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20">{t('video.retry_degraded')}</button>
                     </>
                   )}
                   {seg.status === 'partial_completed' && (
                     <>
-                      <button onClick={(e) => { e.stopPropagation(); setSelectedVideoId(seg.videoId); setSelectedSegmentId(seg.segmentId); setSelectedFrameIndex(null); setSelectedTrackId(null); setSelectedEntityType(null); setViewMode('completed') }} className="rounded px-2 py-0.5 text-xs bg-gv-gold/10 text-gv-gold-dark hover:bg-gv-gold/20 ml-2">{t('video.review_degraded')}</button>
-                      <button onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20">{t('video.retry_degraded')}</button>
+                      <button aria-label={t('video.review_partial_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); setSelectedVideoId(seg.videoId); setSelectedSegmentId(seg.segmentId); setSelectedFrameIndex(null); setSelectedTrackId(null); setSelectedEntityType(null); setViewMode('completed') }} className="rounded px-2 py-0.5 text-xs bg-gv-gold/10 text-gv-gold-dark hover:bg-gv-gold/20 ml-2">{t('video.review_degraded')}</button>
+                      <button aria-label={t('video.rerun_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20">{t('video.retry_degraded')}</button>
                     </>
                   )}
                   {seg.status === 'completed' && (
                     <>
-                      <button onClick={(e) => { e.stopPropagation(); setSelectedVideoId(seg.videoId); setSelectedSegmentId(seg.segmentId); setSelectedFrameIndex(null); setSelectedTrackId(null); setSelectedEntityType(null); setViewMode('completed') }} className="rounded px-2 py-0.5 text-xs bg-gv-pink/10 text-gv-pink hover:bg-gv-pink/20 ml-2">Review</button>
-                      <button onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20" title="Re-annotate">Re-run</button>
+                      <button aria-label={t('video.review_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); setSelectedVideoId(seg.videoId); setSelectedSegmentId(seg.segmentId); setSelectedFrameIndex(null); setSelectedTrackId(null); setSelectedEntityType(null); setViewMode('completed') }} className="rounded px-2 py-0.5 text-xs bg-gv-pink/10 text-gv-pink hover:bg-gv-pink/20 ml-2">{t('video.review_action')}</button>
+                      <button aria-label={t('video.rerun_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20" title={t('video.rerun_segment', seg.segmentId)}>{t('video.rerun_action')}</button>
                     </>
                   )}
                   {seg.status !== 'completed' && seg.status !== 'partial_completed' && seg.status !== 'processing' && seg.status !== 'failed' && workerStatus === 'ok' && (
-                    <button onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} disabled={annotatingSegments.has(`${seg.videoId}_${seg.segmentId}`)} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20 disabled:opacity-50 ml-2">
-                      {annotatingSegments.has(`${seg.videoId}_${seg.segmentId}`) ? '...' : 'Annotate'}
+                    <button aria-label={t('video.annotate_segment', seg.segmentId)} onClick={(e) => { e.stopPropagation(); handleAnnotateSegment(seg.videoId, seg) }} disabled={annotatingSegments.has(`${seg.videoId}_${seg.segmentId}`)} className="rounded px-2 py-0.5 text-xs bg-gv-green/10 text-gv-green-deep hover:bg-gv-green/20 disabled:opacity-50 ml-2">
+                      {annotatingSegments.has(`${seg.videoId}_${seg.segmentId}`) ? '...' : t('video.annotate_action')}
                     </button>
                   )}
-                  <button onClick={(e) => { e.stopPropagation(); handleDeleteSegment(seg.videoId, seg.segmentId) }} className="rounded px-2 py-0.5 text-xs text-gv-text-muted hover:text-gv-pink hover:bg-gv-pink/5 ml-auto" title="Delete segment">✕</button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteSegment(seg.videoId, seg.segmentId) }}
+                    className="rounded px-2 py-0.5 text-xs text-gv-text-muted hover:text-gv-pink hover:bg-gv-pink/5 ml-auto"
+                    aria-label={t('video.delete_segment', seg.segmentId)}
+                    title={t('video.delete_segment', seg.segmentId)}
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
                 </div>
               ))}
             </div>
@@ -1829,30 +2101,34 @@ export default function AnnotateDetailPage() {
       )}
 
       {phase === 'detecting' && (
-        <div className="flex-1 flex items-center justify-center p-8">
+        <div className={`flex-1 flex items-center justify-center p-8 ${styles.centerState}`}>
           <div className="text-center">
             <div className="animate-spin w-8 h-8 border-2 border-gv-pink border-t-transparent rounded-full mx-auto mb-4" />
-            <p className="text-sm text-gv-text-dim">Detecting scenes...</p>
+            <p className="text-sm text-gv-text-dim">{t('annotation.detecting_scenes')}</p>
           </div>
         </div>
       )}
 
       {phase === 'annotating' && (
-        <div className="flex-1 flex items-center justify-center p-8">
+        <div className={`flex-1 flex items-center justify-center p-8 ${styles.centerState}`}>
           <div className="text-center max-w-md">
             <div className="animate-spin w-10 h-10 border-3 border-gv-pink border-t-transparent rounded-full mx-auto mb-4" />
-            <p className="text-base font-medium text-gv-text">Annotating...</p>
-            <p className="text-sm text-gv-text-dim mt-1">{pipelinePhase ? <span className="text-gv-pink">{pipelinePhase}</span> : 'Starting pipeline...'}</p>
-            <div className="mt-4 bg-gv-bg-deep rounded-full h-2 overflow-hidden"><div className="h-full bg-gradient-to-r from-gv-pink to-gv-green rounded-full transition-all duration-500" style={{ width: `${Math.max(5, annotationProgress)}%` }} /></div>
-            <div className="mt-4 space-y-1 text-xs text-gv-text-dim">{allSegments.filter(s => s.status === 'completed' || s.status === 'partial_completed').length} / {allSegments.length} segments done</div>
-            <div className="flex flex-wrap gap-1 mt-2">{allSegments.map(s => (<span key={`${s.videoId}_${s.segmentId}`} className={`w-3 h-3 rounded ${s.status === 'completed' ? 'bg-gv-green-deep' : s.status === 'partial_completed' ? 'bg-gv-gold' : s.status === 'processing' ? 'bg-gv-gold animate-pulse' : s.status === 'failed' ? 'bg-gv-pink' : 'bg-gv-border'}`} />))}</div>
+            <p className="text-base font-medium text-gv-text">{t('annotation.annotating')}</p>
+            <p className="text-sm text-gv-text-dim mt-1">{pipelinePhase ? <span className={styles.pipelinePhase}>{pipelinePhase}</span> : t('annotation.starting_pipeline')}</p>
+            <div className={`mt-4 bg-gv-bg-deep rounded-full h-2 overflow-hidden ${styles.pipelineTrack}`}><div className={`h-full bg-gv-pink rounded-full transition-all duration-500 ${styles.pipelineProgress}`} style={{ width: `${Math.max(5, annotationProgress)}%` }} /></div>
+            <div className="mt-4 space-y-1 text-xs text-gv-text-dim">{t('annotation.segments_done', allSegments.filter(s => s.status === 'completed' || s.status === 'partial_completed').length, allSegments.length)}</div>
+            <div className="flex flex-wrap gap-1 mt-2">{allSegments.map(s => (<span key={`${s.videoId}_${s.segmentId}`} className={`w-3 h-3 rounded ${s.status === 'completed' ? 'bg-ui-secondary' : s.status === 'partial_completed' ? 'bg-gv-gold' : s.status === 'processing' ? 'bg-ui-icon-accent animate-pulse' : s.status === 'failed' ? 'bg-ui-danger' : 'bg-gv-border'}`} />))}</div>
           </div>
         </div>
       )}
 
       {phase === 'completed' && (
-        <div className="flex-1 flex overflow-hidden">
-          <div className="w-[45%] min-w-[400px] flex flex-col border-r border-gv-border/50">
+        <div
+          ref={splitGridRef}
+          className={`flex-1 flex overflow-hidden ${styles.editorGrid} ${isResizingSplit ? styles.isResizingSplit : ''}`}
+          style={{ gridTemplateColumns: `minmax(${MIN_PRIMARY_PANE_WIDTH}px, ${splitRatio}fr) ${SPLIT_HANDLE_WIDTH}px minmax(${MIN_SECONDARY_PANE_WIDTH}px, ${100 - splitRatio}fr)` }}
+        >
+          <div id="annotation-primary-pane" className={`w-[45%] min-w-[400px] flex flex-col border-r border-gv-border/50 ${styles.canvasColumn}`}>
             {selectedVideo && <div className="flex-shrink-0"><VideoPlayer
               src={`/api/video-annotation/files/${selectedVideo.videoId}`}
               startTime={selectedSegment?.start || 0}
@@ -1861,9 +2137,14 @@ export default function AnnotateDetailPage() {
               frameTimes={activeAnnotation?.frames?.map(frame => frame.timestamp)}
               onFrameSeek={handleFrameSeek}
             /></div>}
-            <div className="flex-shrink-0 bg-gv-surface border-t border-gv-border/50 px-3 py-1.5 flex items-center gap-2">
+            <div className={`flex-shrink-0 bg-gv-surface border-t border-gv-border/50 px-3 py-1.5 flex items-center gap-2 ${styles.canvasToolbar}`}>
               {allSegments.length > 0 && (
-                <button onClick={() => setViewMode(null)} className="px-2 py-0.5 rounded text-xs bg-gv-bg text-gv-text-dim hover:bg-gv-pink/10">← Segments</button>
+                <button onClick={() => setViewMode(null)} className="px-2 py-0.5 rounded text-xs bg-gv-bg text-gv-text-dim hover:bg-gv-pink/10 inline-flex items-center gap-1">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="m15 18-6-6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {t('video.back_to_segments')}
+                </button>
               )}
               <span className="flex-1" />
               {selectedSegment && selectedVideoId && (
@@ -1880,17 +2161,29 @@ export default function AnnotateDetailPage() {
                     onClick={() => handleAnnotateSegment(selectedVideoId, selectedSegment)}
                     disabled={annotatingSegments.has(`${selectedVideoId}_${selectedSegment.segmentId}`)}
                     className="px-2 py-0.5 rounded text-xs bg-gv-green/20 text-gv-green-deep hover:bg-gv-green/30 disabled:opacity-50 mr-1"
-                    title="Re-annotate current segment"
+                    title={t('video.rerun_current_segment')}
                   >
-                    Re-run Segment
+                    {t('video.rerun_current_segment')}
                   </button>
                 </>
               )}
-              <button onClick={handleAnnotateAll} className="px-3 py-1 rounded text-xs font-medium bg-gv-green/20 text-gv-green-deep hover:bg-gv-green/30" title="Re-annotate all segments">Re-run All</button>
+              <button onClick={handleAnnotateAll} className="px-3 py-1 rounded text-xs font-medium bg-gv-green/20 text-gv-green-deep hover:bg-gv-green/30" title={t('video.rerun_all_segments')}>{t('video.rerun_all_segments')}</button>
             </div>
-            <div className="p-1.5 flex gap-1 overflow-x-auto bg-gv-surface flex-shrink-0 border-t border-gv-border/30">
-              {allSegments.map(seg => (
-                <button key={`${seg.videoId}_${seg.segmentId}`} onClick={() => {
+            <div className={`p-1.5 flex gap-1 overflow-x-auto bg-gv-surface flex-shrink-0 border-t border-gv-border/30 ${styles.segmentTabs}`} aria-label={t('video.segment_directory')}>
+              <div className={styles.segmentRailHeader}>
+                <strong>{t('video.segments')}</strong>
+                <span>{allSegments.length}</span>
+              </div>
+              <div
+                className={styles.segmentTabOptions}
+                style={{
+                  '--segment-slide-index': segmentPreviewIndex ?? Math.max(0, allSegments.findIndex(seg => selectedSegmentId === seg.segmentId && selectedVideoId === seg.videoId)),
+                } as CSSProperties}
+                onPointerLeave={() => setSegmentPreviewIndex(null)}
+              >
+                <span className={styles.segmentSlideIndicator} aria-hidden="true" />
+              {allSegments.map((seg, index) => (
+                <button key={`${seg.videoId}_${seg.segmentId}`} onPointerEnter={() => setSegmentPreviewIndex(index)} onClick={() => {
                   setSelectedVideoId(seg.videoId)
                   setSelectedSegmentId(seg.segmentId)
                   setSelectedFrameIndex(null)
@@ -1898,44 +2191,53 @@ export default function AnnotateDetailPage() {
                   setSelectedEntityType(null)
                   setCanvasMode('view')
                 }}
-                  className={`flex-shrink-0 px-2 py-0.5 rounded text-xs transition-colors ${selectedSegmentId === seg.segmentId && selectedVideoId === seg.videoId ? 'bg-gv-pink/20 text-gv-pink font-medium' : 'bg-gv-bg text-gv-text-dim hover:bg-gv-bg-deep'}`}>S{seg.segmentId}</button>
+                  aria-current={selectedSegmentId === seg.segmentId && selectedVideoId === seg.videoId ? 'true' : undefined}
+                  data-status={seg.status}
+                  data-review-status={seg.reviewStatus || 'unreviewed'}
+                  title={`${t('video.review_status')}: ${t(`video.review_value.${seg.reviewStatus || 'unreviewed'}`)}`}
+                  className={`flex-shrink-0 px-2 py-0.5 rounded text-xs transition-colors ${selectedSegmentId === seg.segmentId && selectedVideoId === seg.videoId ? 'bg-gv-pink/20 text-gv-pink font-medium' : 'bg-gv-bg text-gv-text-dim hover:bg-gv-bg-deep'}`}>
+                  <strong>S{seg.segmentId}</strong>
+                  <small>{formatSplitTime(seg.start)}–{formatSplitTime(seg.end)}</small>
+                  <span aria-hidden="true" />
+                </button>
               ))}
+              </div>
             </div>
             {selectedVideo && selectedSegment && (
-              <div className="flex-1 overflow-auto p-2 min-h-0">
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gv-text-muted">
-                  <span>{selectedFrame ? `Frame ${selectedFrame.frameIndex} · ${selectedFrame.timestamp.toFixed(3)}s` : 'No frame selected'}</span>
+              <div className={`flex-1 overflow-auto p-2 min-h-0 ${styles.canvasWorkspace}`}>
+                <div className={`mb-2 flex flex-wrap items-center gap-2 text-xs text-gv-text-muted ${styles.frameMeta}`}>
+                  <span>{selectedFrame ? t('video.frame_label', selectedFrame.frameIndex, selectedFrame.timestamp.toFixed(3)) : t('video.no_frame_selected')}</span>
                   {selectedFrame && (
                     <span>
-                      Current frame: {visibleFramePersonCount} people · {visibleFrameObjectCount} objects · {visibleFrameOcrCount} OCR
+                      {t('video.current_frame_summary', visibleFramePersonCount, visibleFrameObjectCount, visibleFrameOcrCount)}
                       {' · '}
-                      Segment: {segmentPersonTrackCount} people · {segmentObjectTrackCount} objects · {segmentOcrTrackCount} OCR
+                      {t('video.segment_summary_counts', segmentPersonTrackCount, segmentObjectTrackCount, segmentOcrTrackCount)}
                     </span>
                   )}
                   {!activeAnnotation?.frames?.length && activeAnnotation && (
-                    <span className="rounded bg-gv-gold/10 px-2 py-0.5 text-gv-gold-dark">Legacy segment box · edit creates a frame record</span>
+                    <span className="rounded bg-gv-gold/10 px-2 py-0.5 text-gv-gold-dark">{t('video.legacy_frame_hint')}</span>
                   )}
                   <span className="flex-1" />
                   {selectedFrame && <button
                     type="button"
                     onClick={() => void handleExportCurrentFrame()}
-                    title="Exports people and non-OCR objects visible in this selected sampled frame."
+                    title={t('video.export_current_frame')}
                     className="rounded bg-gv-bg px-2 py-1 text-gv-text-dim hover:bg-gv-pink/10"
-                  >Export Current Frame JSON</button>}
+                  >{t('video.export_current_frame')}</button>}
                   {spatialSaveStatus !== 'idle' && (
                     <span className={spatialSaveStatus === 'failed' ? 'text-gv-pink' : spatialSaveStatus === 'saved' ? 'text-gv-green-deep' : ''}>
-                      {spatialSaveStatus === 'saving' ? 'Saving…' : spatialSaveStatus === 'saved' ? 'Saved' : 'Save failed'}
+                      {spatialSaveStatus === 'saving' ? t('video.save_saving') : spatialSaveStatus === 'saved' ? t('video.save_saved') : t('video.save_failed')}
                     </span>
                   )}
                 </div>
                 {canvasMode === 'draw' && (
-                  <div className="mb-2 flex items-center gap-2 rounded-lg border border-gv-border bg-gv-surface p-2 text-xs">
-                    <span className="text-gv-text-muted">Choose label:</span>
-                    <button type="button" disabled={spatialSaveStatus === 'saving'} onClick={() => setDrawEntityType('person')} className={`rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${drawEntityType === 'person' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>Person</button>
-                    <button type="button" disabled={spatialSaveStatus === 'saving'} onClick={() => setDrawEntityType('object')} className={`rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${drawEntityType === 'object' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>Object</button>
-                    {drawEntityType === 'object' && <input autoFocus value={drawObjectName} onChange={event => setDrawObjectName(event.target.value)} placeholder="Required object label" className="min-w-40 rounded border border-gv-border bg-gv-bg px-2 py-1 text-gv-text" />}
-                    {drawEntityType === null && <span className="text-gv-gold-dark">Select a type before drawing.</span>}
-                    {drawEntityType === 'object' && !drawObjectName.trim() && <span className="text-gv-gold-dark">Enter an object label.</span>}
+                  <div className={`mb-2 flex items-center gap-2 rounded-lg border border-gv-border bg-gv-surface p-2 text-xs ${styles.drawPanel}`}>
+                    <span className="text-gv-text-muted">{t('video.choose_draw_label')}</span>
+                    <button type="button" disabled={spatialSaveStatus === 'saving'} onClick={() => setDrawEntityType('person')} className={`rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${drawEntityType === 'person' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>{t('video.person_label')}</button>
+                    <button type="button" disabled={spatialSaveStatus === 'saving'} onClick={() => setDrawEntityType('object')} className={`rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${drawEntityType === 'object' ? 'bg-gv-pink/15 text-gv-pink' : 'bg-gv-bg text-gv-text-dim'}`}>{t('video.object_label')}</button>
+                    {drawEntityType === 'object' && <input autoFocus value={drawObjectName} onChange={event => setDrawObjectName(event.target.value)} placeholder={t('video.object_label_required')} aria-label={t('video.object_label_required')} className="min-w-40 rounded border border-gv-border bg-gv-bg px-2 py-1 text-gv-text" />}
+                    {drawEntityType === null && <span className="text-gv-gold-dark">{t('video.select_draw_type')}</span>}
+                    {drawEntityType === 'object' && !drawObjectName.trim() && <span className="text-gv-gold-dark">{t('video.enter_object_label')}</span>}
                   </div>
                 )}
                 {selectedFrame && <FrameTrackList
@@ -1952,7 +2254,11 @@ export default function AnnotateDetailPage() {
                   pendingHiddenTrackKeys={activePendingTrackKeys}
                   onModeChange={handleCanvasModeChange}
                   onDrawBox={handleDrawBox}
-                  onSelectTrack={(trackId, entityType) => { setSelectedTrackId(trackId); setSelectedEntityType(entityType) }}
+                  onSelectTrack={(trackId, entityType) => {
+                    setSelectedTrackId(trackId)
+                    setSelectedEntityType(entityType)
+                    setInspectorPanel('object')
+                  }}
                   onResizeBox={handleResizeBox}
                   onDeleteTrack={handleDeleteTrack}
                   selectedTrackId={selectedTrackId}
@@ -1961,13 +2267,34 @@ export default function AnnotateDetailPage() {
               </div>
             )}
           </div>
-          <div className="flex-1 min-w-[350px] flex flex-col overflow-auto p-4">
+          <div
+            className={styles.splitHandle}
+            role="separator"
+            aria-label="调整标注区域与审查面板的宽度"
+            aria-controls="annotation-primary-pane annotation-secondary-pane"
+            aria-orientation="vertical"
+            aria-valuemin={25}
+            aria-valuemax={75}
+            aria-valuenow={Math.round(splitRatio)}
+            aria-valuetext={`左侧 ${Math.round(splitRatio)}%，右侧 ${Math.round(100 - splitRatio)}%`}
+            tabIndex={0}
+            title="拖动调整左右宽度；双击恢复默认比例"
+            onPointerDown={handleSplitPointerDown}
+            onPointerMove={handleSplitPointerMove}
+            onPointerUp={finishSplitResize}
+            onPointerCancel={finishSplitResize}
+            onKeyDown={handleSplitKeyDown}
+            onDoubleClick={resetSplitRatio}
+          >
+            <span aria-hidden="true" />
+          </div>
+          <div id="annotation-secondary-pane" className={`flex-1 min-w-[350px] flex flex-col overflow-auto p-4 ${styles.inspectorColumn}`}>
             {(!activeAnnotation && selectedSegment) ? (
               <div className="text-sm text-gv-text-dim space-y-4">
                 <div className="p-4 rounded-lg border border-gv-gold/30 bg-gv-gold/5">
-                  <p className="font-medium text-gv-gold-dark mb-1">Partial annotation</p>
-                  <p className="text-xs text-gv-text-muted">{(selectedSegment as unknown as Record<string,string>).error || 'Some pipeline phases failed.'}</p>
-                  <p className="text-xs text-gv-text-muted mt-2">Switch to <strong>Draw</strong> mode to add boxes manually, or edit JSON below.</p>
+                  <p className="font-medium text-gv-gold-dark mb-1">{t('annotation.partial_title')}</p>
+                  <p className="text-xs text-gv-text-muted">{(selectedSegment as unknown as Record<string,string>).error || t('annotation.partial_failed')}</p>
+                  <p className="text-xs text-gv-text-muted mt-2">{t('annotation.partial_hint')}</p>
                 </div>
                 <JsonEditor
                   annotation={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end, scene: { tags: [], place: { type: 'unknown', indoor: true, weather: null, lighting: 'unknown', timeOfDay: 'unknown' } }, camera: { shot: 'unknown', angle: 'unknown', movement: [], lens: 'unknown', stabilization: 'unknown' }, persons: [], objects: [], events: [] }}
@@ -1977,83 +2304,167 @@ export default function AnnotateDetailPage() {
               </div>
             ) : activeAnnotation ? (
               <>
-                {selectedVideo && selectedSegment && <>
-                  <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-gv-border bg-white/30 p-2">
-                    <span className="mr-auto text-xs text-gv-text-muted">Review: <strong className="text-gv-text">{selectedSegment.reviewStatus || 'unreviewed'}</strong></span>
-                    <button type="button" onClick={() => void handleReviewStatus('needs_review')} className="rounded bg-gv-gold/10 px-2 py-1 text-xs text-gv-gold-dark">Needs Review</button>
-                    <button type="button" onClick={() => void handleReviewStatus('approved')} className="rounded bg-gv-green/15 px-2 py-1 text-xs text-gv-green-deep">Approve</button>
-                    <button type="button" onClick={() => void handleReviewStatus('rejected')} className="rounded bg-gv-pink/10 px-2 py-1 text-xs text-gv-pink">Reject</button>
+                <nav
+                  className={styles.inspectorTabs}
+                  aria-label={t('video.inspector_navigation')}
+                  style={{
+                    '--inspector-slide-index': inspectorPreviewIndex ?? (['object', 'scene', 'text', 'json', 'identity', 'timeline'] as InspectorPanel[]).indexOf(inspectorPanel),
+                  } as CSSProperties}
+                  onPointerLeave={() => setInspectorPreviewIndex(null)}
+                >
+                  <span className={styles.inspectorSlideIndicator} aria-hidden="true" />
+                  {([
+                    ['object', t('video.inspector.object')],
+                    ['scene', t('video.inspector.scene')],
+                    ['text', t('video.inspector.text')],
+                    ['json', 'JSON'],
+                    ['identity', t('video.inspector.identity')],
+                    ['timeline', t('video.inspector.timeline')],
+                  ] as const).map(([panel, label], index) => (
+                    <button
+                      type="button"
+                      key={panel}
+                      aria-pressed={inspectorPanel === panel}
+                      onPointerEnter={() => setInspectorPreviewIndex(index)}
+                      onClick={() => setInspectorPanel(panel)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </nav>
+
+                {selectedVideo && selectedSegment && (
+                  <div className={`mb-3 rounded-lg border border-ui-border bg-ui-surface p-2 ${styles.reviewBar}`}>
+                    <div className={styles.reviewActions}>
+                      <span className="mr-auto text-xs text-gv-text-muted">
+                        {t('video.review_status')}: <strong className="text-gv-text">
+                          {reviewSaving ? t('video.review_saving') : t(`video.review_value.${currentReviewStatus}`)}
+                        </strong>
+                      </span>
+                      <button type="button" aria-pressed={currentReviewStatus === 'needs_review'} disabled={reviewSaving !== null} onClick={() => void handleReviewStatus('needs_review')} className="rounded bg-gv-gold/10 px-2 py-1 text-xs text-gv-gold-dark">{t('video.review_needs_review')}</button>
+                      <button type="button" aria-pressed={currentReviewStatus === 'approved'} disabled={reviewSaving !== null} onClick={() => void handleReviewStatus('approved')} className="rounded bg-gv-green/15 px-2 py-1 text-xs text-gv-green-deep">{t('video.review_approve')}</button>
+                      <button type="button" aria-pressed={currentReviewStatus === 'rejected'} disabled={reviewSaving !== null} onClick={() => void handleReviewStatus('rejected')} className="rounded bg-gv-pink/10 px-2 py-1 text-xs text-gv-pink">{t('video.review_reject')}</button>
+                    </div>
+                    {reviewError && <p role="alert" className={styles.reviewError}>{reviewError}</p>}
                   </div>
-                  <IdentityManager annotateSetId={annotateId} video={selectedVideo} selectedSegmentId={selectedSegment.segmentId} selectedTrackId={selectedEntityType === 'person' ? selectedTrackId : null} onUpdate={setSet} />
-                  <TimelineEditor key={`${selectedSegment.segmentId}:${selectedFrame?.frameIndex ?? 'mid'}`} annotateSetId={annotateId} video={selectedVideo} segment={selectedSegment} initialTime={selectedFrame?.timestamp ?? (selectedSegment.start + selectedSegment.end) / 2} onUpdate={task => { setSet(task); setSelectedTrackId(null); setSelectedEntityType(null); setSelectedFrameIndex(null) }} />
-                </>}
+                )}
                 {selectedSegment?.status === 'partial_completed' && (
                   <div className="mb-4 rounded-lg border border-gv-gold/30 bg-gv-gold/5 p-3">
                     <p className="text-sm font-medium text-gv-gold-dark">{t('video.degraded_result')}</p>
                     <p className="mt-1 text-xs text-gv-text-muted">{pipelineErrors[0] || t('video.degraded_result_desc')}</p>
                   </div>
                 )}
-                {selectedTrackId !== null && selectedEntityType !== null && activeAnnotation && (
-                  <TrackReviewEditor
-                    key={`${selectedVideoId}_${selectedSegmentId}_${selectedFrame?.frameIndex}_${selectedEntityType}_${selectedTrackId}_${selectedFrame?.observations.find(observation => (
-                      observation.trackId === selectedTrackId
-                      && observation.entityType === selectedEntityType
-                    ))?.className || ''}_${JSON.stringify(
-                      selectedEntityType === 'person'
-                        ? activeAnnotation.persons?.find(item => item.trackId === selectedTrackId)
-                        : activeAnnotation.objects?.find(item => item.trackId === selectedTrackId)
-                      || null,
-                    )}`}
-                    annotation={activeAnnotation}
-                    selectedTrackId={selectedTrackId}
-                    selectedEntityType={selectedEntityType}
-                    selectedFrameIndex={selectedFrame?.frameIndex ?? 0}
-                    selectedFrameLabel={selectedFrame?.observations.find(observation => (
-                      observation.trackId === selectedTrackId
-                      && observation.entityType === selectedEntityType
-                    ))?.className}
-                    selectedSourceLabels={selectedObjectSourceLabels}
-                    onAnalyzePerson={handleAnalyzeSelectedPerson}
-                    onDelete={handleDeleteTrack}
-                    onSave={handleSaveEdits}
-                    onConvert={handleConvertEntityType}
-                  />
-                )}
-                <TextContent
-                  key={`${selectedVideoId}_${selectedSegmentId}_${selectedSegment?.workerJobId || 'saved'}`}
-                  objects={activeAnnotation.objects || []}
-                  events={activeAnnotation.events || []}
-                  speechTranscript={activeAnnotation.speechTranscript}
-                  recognition={recognitionStatus}
-                  pipelineErrors={pipelineErrors}
-                  completed={selectedSegment?.status === 'completed' || selectedSegment?.status === 'partial_completed'}
-                  onSave={handleSaveTextContent}
-                />
-                <SegmentReviewEditor
-                  key={`${selectedVideoId}_${selectedSegmentId}_${JSON.stringify([
-                    activeAnnotation.scene,
-                    activeAnnotation.camera,
-                    visualEventsFor(activeAnnotation),
-                  ])}`}
-                  annotation={activeAnnotation}
-                  onSave={handleSaveSegEdits}
-                />
-                <JsonEditor
-                  annotation={activeAnnotation}
-                  segmentMetadata={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end }}
-                  onSave={handleJsonSave}
-                />
+
+                <div className={styles.inspectorContent}>
+                  {inspectorPanel === 'object' && (
+                    selectedTrackId !== null && selectedEntityType !== null ? (
+                      <TrackReviewEditor
+                        key={`${selectedVideoId}_${selectedSegmentId}_${selectedFrame?.frameIndex}_${selectedEntityType}_${selectedTrackId}_${selectedFrame?.observations.find(observation => (
+                          observation.trackId === selectedTrackId
+                          && observation.entityType === selectedEntityType
+                        ))?.className || ''}_${JSON.stringify(
+                          selectedEntityType === 'person'
+                            ? activeAnnotation.persons?.find(item => item.trackId === selectedTrackId)
+                            : activeAnnotation.objects?.find(item => item.trackId === selectedTrackId)
+                          || null,
+                        )}`}
+                        annotation={activeAnnotation}
+                        selectedTrackId={selectedTrackId}
+                        selectedEntityType={selectedEntityType}
+                        selectedFrameIndex={selectedFrame?.frameIndex ?? 0}
+                        selectedFrameLabel={selectedFrame?.observations.find(observation => (
+                          observation.trackId === selectedTrackId
+                          && observation.entityType === selectedEntityType
+                        ))?.className}
+                        selectedSourceLabels={selectedObjectSourceLabels}
+                        onAnalyzePerson={handleAnalyzeSelectedPerson}
+                        onDelete={handleDeleteTrack}
+                        onSave={handleSaveEdits}
+                        onConvert={handleConvertEntityType}
+                      />
+                    ) : (
+                      <div className={styles.inspectorPrompt}>
+                        <strong>{t('video.inspector_select_track')}</strong>
+                        <span>{t('video.inspector_select_track_desc')}</span>
+                      </div>
+                    )
+                  )}
+
+                  {inspectorPanel === 'scene' && (
+                    <SegmentReviewEditor
+                      key={`${selectedVideoId}_${selectedSegmentId}_${JSON.stringify([
+                        activeAnnotation.scene,
+                        activeAnnotation.camera,
+                        visualEventsFor(activeAnnotation),
+                      ])}`}
+                      annotation={activeAnnotation}
+                      onSave={handleSaveSegEdits}
+                    />
+                  )}
+
+                  {inspectorPanel === 'text' && (
+                    <TextContent
+                      key={`${selectedVideoId}_${selectedSegmentId}_${selectedSegment?.workerJobId || 'saved'}`}
+                      objects={activeAnnotation.objects || []}
+                      events={activeAnnotation.events || []}
+                      speechTranscript={activeAnnotation.speechTranscript}
+                      recognition={recognitionStatus}
+                      pipelineErrors={pipelineErrors}
+                      completed={selectedSegment?.status === 'completed' || selectedSegment?.status === 'partial_completed'}
+                      onSave={handleSaveTextContent}
+                    />
+                  )}
+
+                  {inspectorPanel === 'json' && (
+                    <JsonEditor
+                      annotation={activeAnnotation}
+                      segmentMetadata={{ segmentId: selectedSegment.segmentId, start: selectedSegment.start, end: selectedSegment.end }}
+                      onSave={handleJsonSave}
+                    />
+                  )}
+
+                  {inspectorPanel === 'identity' && selectedVideo && selectedSegment && (
+                    <IdentityManager
+                      embedded
+                      annotateSetId={annotateId}
+                      video={selectedVideo}
+                      selectedSegmentId={selectedSegment.segmentId}
+                      selectedTrackId={selectedEntityType === 'person' ? selectedTrackId : null}
+                      onUpdate={task => {
+                        setRef.current = task
+                        setSet(task)
+                      }}
+                    />
+                  )}
+
+                  {inspectorPanel === 'timeline' && selectedVideo && selectedSegment && (
+                    <TimelineEditor
+                      key={`${selectedSegment.segmentId}:${selectedFrame?.frameIndex ?? 'mid'}`}
+                      annotateSetId={annotateId}
+                      video={selectedVideo}
+                      segment={selectedSegment}
+                      initialTime={selectedFrame?.timestamp ?? (selectedSegment.start + selectedSegment.end) / 2}
+                      onUpdate={task => {
+                        setRef.current = task
+                        setSet(task)
+                        setSelectedTrackId(null)
+                        setSelectedEntityType(null)
+                        setSelectedFrameIndex(null)
+                      }}
+                    />
+                  )}
+                </div>
               </>
             ) : (
-              <div className="flex items-center justify-center h-full text-gv-text-dim text-sm">Select a segment to view annotations</div>
+              <div className={`flex items-center justify-center h-full text-gv-text-dim text-sm ${styles.inspectorEmpty}`}>{t('annotation.inspector_empty')}</div>
             )}
           </div>
         </div>
       )}
 
       {showUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm" onClick={() => setShowUpload(false)}>
-          <div className="glass-raised rounded-xl w-full max-w-2xl mx-4 p-6" onClick={event => event.stopPropagation()}>
+        <div className={`fixed inset-0 z-50 flex items-center justify-center ${styles.modalOverlay}`} onClick={() => setShowUpload(false)}>
+          <div className={`glass-raised rounded-xl w-full max-w-2xl mx-4 p-6 ${styles.modalPanel}`} onClick={event => event.stopPropagation()}>
             <h2 className="text-lg font-semibold text-gv-text mb-1">{t('video.upload_title')}</h2>
             <p className="text-sm text-gv-text-dim mb-5">{t('video.upload_desc')}</p>
             <VideoBatchUploader
@@ -2075,6 +2486,11 @@ export default function AnnotateDetailPage() {
         onExport={handleExport}
         busy={exporting}
         busyText={t('video.generating_summary')}
+        outputNames={{
+          json: `${set.name}_annotations.json`,
+          yolo: `${set.name}_yolo_labels.zip`,
+          coco: `${set.name}_coco.json`,
+        }}
       />
       <ExportDialog
         open={showSegmentExport}
@@ -2083,8 +2499,11 @@ export default function AnnotateDetailPage() {
         busy={exporting}
         busyText={t('video.generating_summary')}
         jsonOnly
-        title="Export Current Segment JSON"
-        description="Choose whether to include corrected OCR and speech transcript content."
+        title={t('video.export_segment_title')}
+        description={t('video.export_segment_desc')}
+        outputNames={{
+          json: `${selectedVideoId}_segment_${selectedSegmentId}.json`,
+        }}
       />
       <UndoToast
         toasts={toasts}

@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useLang } from '@/services/i18n'
 
 interface Props {
   src: string
   poster?: string
-  onFrameSeek?: (time: number) => void
+  onFrameSeek?: (time: number, manual?: boolean) => void
   currentTime?: number
   startTime?: number
   fps?: number
@@ -13,9 +14,15 @@ interface Props {
 }
 
 export function VideoPlayer({ src, poster, onFrameSeek, currentTime, startTime = 0, fps = 30, frameTimes }: Props) {
+  const { t } = useLang()
   const videoRef = useRef<HTMLVideoElement>(null)
   const [time, setTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const onFrameSeekRef = useRef(onFrameSeek)
+
+  useEffect(() => {
+    onFrameSeekRef.current = onFrameSeek
+  }, [onFrameSeek])
 
   const displayTime = currentTime ?? time
 
@@ -27,12 +34,12 @@ export function VideoPlayer({ src, poster, onFrameSeek, currentTime, startTime =
       const bounded = Number.isFinite(video.duration) ? Math.min(video.duration, target) : target
       video.currentTime = bounded
       setTime(bounded)
-      onFrameSeek?.(bounded)
+      onFrameSeekRef.current?.(bounded, true)
     }
     if (video.readyState >= 1) seekToSegment()
     else video.addEventListener('loadedmetadata', seekToSegment, { once: true })
     return () => video.removeEventListener('loadedmetadata', seekToSegment)
-  }, [src, startTime, onFrameSeek])
+  }, [src, startTime])
 
   useEffect(() => {
     const video = videoRef.current
@@ -59,7 +66,7 @@ export function VideoPlayer({ src, poster, onFrameSeek, currentTime, startTime =
     target = Math.max(0, Math.min(video.duration || target, target))
     video.currentTime = target
     setTime(target)
-    onFrameSeek?.(target)
+    onFrameSeek?.(target, true)
   }
 
   function formatTime(sec: number): string {
@@ -93,14 +100,24 @@ export function VideoPlayer({ src, poster, onFrameSeek, currentTime, startTime =
             className="px-2 py-0.5 rounded bg-gv-bg hover:bg-gv-pink/10 transition-colors"
             onClick={() => stepFrame(-1)}
           >
-            ← Frame
+            <span className="inline-flex items-center gap-1">
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m15 18-6-6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {t('video.previous_frame')}
+            </span>
           </button>
           <button
             type="button"
             className="px-2 py-0.5 rounded bg-gv-bg hover:bg-gv-pink/10 transition-colors"
             onClick={() => stepFrame(1)}
           >
-            Frame →
+            <span className="inline-flex items-center gap-1">
+              {t('video.next_frame')}
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m9 18 6-6-6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
           </button>
         </div>
       </div>

@@ -8,10 +8,15 @@ import { useState, useEffect, useRef } from 'react'
 import type { ColumnDef, ColumnType, IdFormat, PhoneCountry, DateFormat, DateRange } from '@/services/types'
 import Link from 'next/link'
 import { previewGenerationExpression } from '@/services/expression-preview'
+import styles from '../table-workflow.module.css'
 
 let _colIdCounter = Date.now()
 function genColId(): string {
   return 'col_' + (_colIdCounter++).toString(36)
+}
+let _tableIdCounter = Date.now()
+function genTableId(): string {
+  return 'tbl_' + (_tableIdCounter++).toString(36)
 }
 
 const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
@@ -88,6 +93,15 @@ function emptyColumn(): ColumnDef {
   return { id: genColId(), name: '', type: 'text', llmPrompt: '', generationCode: '' }
 }
 
+type BuilderSection = 'identity' | 'relations' | 'fields' | 'check'
+
+const BUILDER_SECTIONS: { value: BuilderSection; labelKey: string; descriptionKey: string }[] = [
+  { value: 'identity', labelKey: 'table.builder_identity', descriptionKey: 'table.builder_identity_desc' },
+  { value: 'relations', labelKey: 'table.builder_relations', descriptionKey: 'table.builder_relations_desc' },
+  { value: 'fields', labelKey: 'table.builder_fields', descriptionKey: 'table.builder_fields_desc' },
+  { value: 'check', labelKey: 'table.builder_check', descriptionKey: 'table.builder_check_desc' },
+]
+
 const VISION_SYSTEM_PROMPT = `You are a data table column analyzer. Analyze the screenshot to identify all table columns.
 
 For each column, determine:
@@ -112,6 +126,7 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => {
+      URL.revokeObjectURL(img.src)
       let { width, height } = img
       if (width <= maxPx && height <= maxPx) {
         const reader = new FileReader()
@@ -130,7 +145,10 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
       ctx.drawImage(img, 0, 0, width, height)
       resolve(canvas.toDataURL('image/jpeg', quality))
     }
-    img.onerror = () => reject(new Error('图片加载失败'))
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src)
+      reject(new Error('图片加载失败'))
+    }
     img.src = URL.createObjectURL(file)
   })
 }
@@ -157,12 +175,23 @@ export default function NewTablePage() {
   const [relatedTableIds, setRelatedTableIds] = useState<string[]>([])
   const [importedColMap, setImportedColMap] = useState<Record<string, Record<string, string>>>({})
   const [fkModeCols, setFkModeCols] = useState<Set<string>>(new Set())
+  const [activeSection, setActiveSection] = useState<BuilderSection>('identity')
+  const [expandedColumnId, setExpandedColumnId] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/llm/config').then(r => r.json()).then(d => setLlmConfigured(d.configured)).catch(() => {})
   }, [])
 
   const hasTextCols = columns.some(c => c.type === 'text')
+  const tableNameReady = Boolean(tableName.trim())
+  const columnNamesReady = columns.every(column => Boolean(column.name.trim()))
+  const generationRulesReady = columns.every(column => {
+    if (column.type === 'text' && !column.nullable) return Boolean(column.llmPrompt?.trim())
+    if (column.type === 'foreign_key') return Boolean(column.foreignTable)
+    return true
+  })
+  const readyChecks = [tableNameReady, columnNamesReady, generationRulesReady, !hasTextCols || llmConfigured]
+  const completion = Math.round((readyChecks.filter(Boolean).length / readyChecks.length) * 100)
 
   if (!project) return null
 
@@ -171,17 +200,26 @@ export default function NewTablePage() {
   }
 
   const addColumn = (afterIndex?: number) => {
+    const nextColumn = emptyColumn()
+    setExpandedColumnId(nextColumn.id)
     setColumns(prev => {
       if (afterIndex !== undefined && afterIndex >= 0 && afterIndex < prev.length) {
-        return [...prev.slice(0, afterIndex + 1), emptyColumn(), ...prev.slice(afterIndex + 1)]
+        return [...prev.slice(0, afterIndex + 1), nextColumn, ...prev.slice(afterIndex + 1)]
       }
-      return [...prev, emptyColumn()]
+      return [...prev, nextColumn]
     })
+  }
+
+  const openBuilderSection = (section: BuilderSection) => {
+    setActiveSection(section)
+    document.getElementById(`builder-${section}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const removeColumn = (colId: string) => {
     if (columns.length <= 1) return
-    setColumns(prev => prev.filter(c => c.id !== colId))
+    const nextColumns = columns.filter(c => c.id !== colId)
+    setColumns(nextColumns)
+    if (expandedColumnId === colId) setExpandedColumnId(nextColumns[0]?.id ?? null)
   }
 
   const toggleRelatedTable = (tableId: string) => {
@@ -332,6 +370,7 @@ export default function NewTablePage() {
       if (newCols.length > 0) {
         if (firstName && !tableName.trim()) setName(firstName)
         setColumns(newCols)
+        setExpandedColumnId(newCols[0].id)
         setImportedRows(fileRows)
         const rowMsg = fileRows.length > 0 ? `，含 ${fileRows.length} 行数据` : ''
         setError(`已导入 ${newCols.length} 个列定义${rowMsg}`)
@@ -373,6 +412,7 @@ export default function NewTablePage() {
         generationCode: '',
       }))
       setColumns(newCols)
+      setExpandedColumnId(newCols[0]?.id ?? null)
       if (fileInputRef.current) fileInputRef.current.value = ''
     } catch (err) {
       setError(err instanceof Error ? err.message : '图片识别失败')
@@ -383,8 +423,13 @@ export default function NewTablePage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!tableName.trim()) {
+    const finalName = tableName.trim()
+    if (!finalName) {
       setError(t('table.name_required'))
+      return
+    }
+    if (existingTables.some(t => t.name === finalName)) {
+      setError(t('table.name_exists'))
       return
     }
     const invalidCol = columns.find(c => !c.name.trim())
@@ -405,11 +450,11 @@ export default function NewTablePage() {
       }
     }
 
-    const tableId = 'tbl_' + Date.now().toString(36)
+    const tableId = genTableId()
     const rows = importedRows.length > 0 ? importedRows : []
     addTable(id, {
       id: tableId,
-      name: tableName.trim(),
+      name: finalName,
       columns,
       rows,
     })
@@ -418,16 +463,16 @@ export default function NewTablePage() {
       fetch('/api/data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: id, tableName: tableName.trim(), columns, rows }),
+        body: JSON.stringify({ projectId: id, tableName: finalName, columns, rows }),
       }).catch(() => {})
     }
     router.push(`/project/${id}/table/${tableId}`)
   }
 
   return (
-    <main className="flex-1 max-w-3xl mx-auto w-full px-6 py-8">
-      <div className="flex items-center gap-3 mb-6">
-        <Link href={`/project/${id}`} className="text-gv-text-dim hover:text-gv-pink transition-colors">
+    <main className={styles.builderPage}>
+      <div className={styles.builderHeader}>
+        <Link href={`/project/${id}`} className={styles.backLink} aria-label={t('table.back_to_project')}>
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
@@ -435,7 +480,42 @@ export default function NewTablePage() {
         <h2 className="text-lg font-semibold text-gv-text">{t('table.new_title')}</h2>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <div className={styles.builderLayout}>
+        <aside className={styles.builderRail} aria-label={t('table.builder_navigation')}>
+          <div>
+            <span className={styles.railKicker}>{t('table.builder_workspace')}</span>
+            <strong className={styles.railTableName}>{tableName.trim() || t('table.builder_unnamed')}</strong>
+            <small className={styles.railProjectName}>{project.name}</small>
+          </div>
+
+          <nav className={styles.builderNavigation} aria-label={t('table.builder_navigation')}>
+            {BUILDER_SECTIONS.map(section => (
+              <button
+                key={section.value}
+                type="button"
+                onClick={() => openBuilderSection(section.value)}
+                aria-current={activeSection === section.value ? 'step' : undefined}
+              >
+                <span>{t(section.labelKey)}</span>
+                <small>{t(section.descriptionKey)}</small>
+              </button>
+            ))}
+          </nav>
+
+          <div className={styles.builderProgress}>
+            <div><span>{t('table.builder_completion')}</span><strong>{completion}%</strong></div>
+            <div className={styles.progressTrack} aria-hidden="true"><span style={{ transform: `scaleX(${completion / 100})` }} /></div>
+            <ul>
+              <li data-ready={tableNameReady}>{t('table.builder_check_name')}</li>
+              <li data-ready={columnNamesReady}>{t('table.builder_check_columns')}</li>
+              <li data-ready={generationRulesReady}>{t('table.builder_check_rules')}</li>
+              <li data-ready={!hasTextCols || llmConfigured}>{t('table.builder_check_llm')}</li>
+            </ul>
+            <button type="button" onClick={() => openBuilderSection('check')}>{t('table.builder_view_check')}</button>
+          </div>
+        </aside>
+
+      <form onSubmit={handleSubmit} className={styles.builderForm}>
         {/* LLM status */}
         {hasTextCols && (
           <div className={`rounded-lg border p-3 text-sm ${
@@ -451,7 +531,11 @@ export default function NewTablePage() {
         )}
 
         {/* Table name */}
-        <div>
+        <section id="builder-identity" className={styles.identitySection} onFocusCapture={() => setActiveSection('identity')}>
+          <header className={styles.sectionHeading}>
+            <div><span>{t('table.builder_identity')}</span><h2>{t('table.builder_identity_title')}</h2></div>
+            <p>{t('table.builder_identity_help')}</p>
+          </header>
           <label className="block text-sm font-medium text-gv-text mb-2">{t('table.name')}</label>
           <div className="flex gap-2">
             <input
@@ -471,11 +555,15 @@ export default function NewTablePage() {
               {importingNuwa ? '...' : '导入 .nuwa'}
             </button>
           </div>
-        </div>
+        </section>
 
         {/* Related Tables */}
         {existingTables.length > 0 && (
-          <div>
+          <section id="builder-relations" className={styles.relatedSection} onFocusCapture={() => setActiveSection('relations')}>
+            <header className={styles.sectionHeading}>
+              <div><span>{t('table.builder_relations')}</span><h2>{t('table.related_tables')}</h2></div>
+              <p>{t('table.related_hint')}</p>
+            </header>
             <label className="block text-sm font-medium text-gv-text mb-2">{t('table.related_tables')}</label>
             <p className="text-xs text-gv-text-muted mb-3">{t('table.related_hint')}</p>
             <div className="space-y-2">
@@ -514,8 +602,8 @@ export default function NewTablePage() {
                               key={col.id}
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs cursor-pointer border transition-all duration-200 ${
                                 isImported
-                                  ? 'bg-gv-pink/10 border-gv-pink/30 text-gv-pink font-medium'
-                                  : 'bg-white border-gv-border text-gv-text-dim hover:border-gv-pink/30'
+                                  ? 'bg-ui-icon-accent-soft border-ui-active-indicator text-ui-accent font-medium'
+                                  : 'bg-ui-surface border-ui-border text-gv-text-dim hover:border-ui-border-strong'
                               }`}
                             >
                               <input
@@ -548,22 +636,31 @@ export default function NewTablePage() {
                 )
               })}
             </div>
-          </div>
+          </section>
         )}
 
         {/* Columns */}
-        <div>
+        <section id="builder-fields" className={styles.columnSection} onFocusCapture={() => setActiveSection('fields')}>
           <div className="flex items-center justify-between mb-3">
-            <label className="text-sm font-medium text-gv-text">{t('table.col_def')}</label>
+            <div className={styles.sectionHeadingCompact}>
+              <span>{t('table.builder_fields')}</span>
+              <h2>{t('table.col_def')}</h2>
+              <p>{t('table.builder_fields_help', columns.length)}</p>
+            </div>
           </div>
 
           <div className="space-y-4">
-            {columns.map((col, i) => (
+            {columns.map((col, i) => {
+              const isExpanded = expandedColumnId === col.id || (expandedColumnId === null && i === 0)
+              const isReady = Boolean(col.name.trim()) && (
+                col.type !== 'text' || col.nullable || Boolean(col.llmPrompt?.trim())
+              ) && (
+                col.type !== 'foreign_key' || Boolean(col.foreignTable)
+              )
+              return (
               <React.Fragment key={col.id}>
-              <div
-                className="card p-4 space-y-3"
-              >
-                <div className="flex items-center gap-3">
+              <div className={`card p-4 space-y-3 ${styles.columnCard}`} data-expanded={isExpanded || undefined}>
+                <div className={styles.columnHeader}>
                   <span className="w-6 h-6 rounded-full bg-gradient-to-br from-gv-pink/20 to-gv-green/20 flex items-center justify-center text-xs text-gv-text-muted font-mono border border-gv-border/50">
                     {i + 1}
                   </span>
@@ -572,21 +669,36 @@ export default function NewTablePage() {
                     value={col.name}
                     onChange={(e) => updateCol(col.id, { name: e.target.value })}
                     placeholder={t('table.col_name')}
+                    aria-label={`${t('table.col_name')} ${i + 1}`}
                     className="flex-1 input-field py-2 text-sm"
                   />
                   <select
                     value={col.type}
                     onChange={(e) => updateCol(col.id, { type: e.target.value as ColumnType })}
+                    aria-label={`${t('table.column_type')} ${i + 1}`}
                     className="w-44 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink"
                   >
                     {COLUMN_TYPES.map(ct => (
                       <option key={ct.value} value={ct.value}>{ct.label}</option>
                     ))}
                   </select>
+                  <span className={styles.columnRuleState} data-ready={isReady}>
+                    {isReady ? t('table.builder_configured') : t('table.builder_needs_attention')}
+                  </span>
+                  <button
+                    type="button"
+                    className={styles.columnToggle}
+                    aria-expanded={isExpanded}
+                    aria-controls={`column-rules-${col.id}`}
+                    onClick={() => setExpandedColumnId(isExpanded ? null : col.id)}
+                  >
+                    {isExpanded ? t('table.builder_collapse_rules') : t('table.builder_configure_rules')}
+                  </button>
                   {columns.length > 1 && (
                     <button
                       type="button"
                       onClick={() => removeColumn(col.id)}
+                      aria-label={`${t('app.delete')} ${col.name || `${t('table.col_name')} ${i + 1}`}`}
                       className="text-gv-pink/60 hover:text-gv-pink p-1 transition-colors"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -596,6 +708,7 @@ export default function NewTablePage() {
                   )}
                 </div>
 
+                {isExpanded && <div id={`column-rules-${col.id}`} className={styles.columnRules}>
                 {/* Type-specific fields */}
                 {col.type === 'text' && (
                   <div>
@@ -881,30 +994,46 @@ export default function NewTablePage() {
                     </div>
                   )}
                 </div>
+                </div>}
               </div>
               <button type="button" onClick={() => addColumn(i)}
-                className="w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors"
+                className={`w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors ${styles.insertButton}`}
                 title="在此处插入新列">
                 + 插入列
               </button>
               </React.Fragment>
-            ))}
+              )
+            })}
           </div>
-        </div>
+        </section>
 
-        {error && (
-          <div className="rounded-lg bg-gv-pink/10 border border-gv-pink/30 p-3 text-sm text-gv-pink-dark">
-            {error}
+        <section id="builder-check" className={styles.checkSection} onFocusCapture={() => setActiveSection('check')}>
+          <header className={styles.sectionHeading}>
+            <div><span>{t('table.builder_check')}</span><h2>{t('table.builder_check_title')}</h2></div>
+            <p>{t('table.builder_check_help')}</p>
+          </header>
+          <dl className={styles.checkMetrics}>
+            <div><dt>{t('table.builder_metric_columns')}</dt><dd>{columns.length}</dd></div>
+            <div><dt>{t('table.builder_metric_named')}</dt><dd>{columns.filter(column => column.name.trim()).length}</dd></div>
+            <div><dt>{t('table.builder_metric_relations')}</dt><dd>{relatedTableIds.length}</dd></div>
+            <div><dt>{t('table.builder_metric_completion')}</dt><dd>{completion}%</dd></div>
+          </dl>
+          <ul className={styles.checkList}>
+            <li data-ready={tableNameReady}>{t('table.builder_check_name')}</li>
+            <li data-ready={columnNamesReady}>{t('table.builder_check_columns')}</li>
+            <li data-ready={generationRulesReady}>{t('table.builder_check_rules')}</li>
+            <li data-ready={!hasTextCols || llmConfigured}>{t('table.builder_check_llm')}</li>
+          </ul>
+          {error && <div className={styles.feedback} role="alert">{error}</div>}
+          <div className={styles.checkActions}>
+            <p>{t('table.builder_submit_help')}</p>
+            <button type="submit" className={`btn-primary rounded-lg px-4 py-3 text-sm ${styles.primarySubmit}`}>
+              {t('table.create_btn')}
+            </button>
           </div>
-        )}
-
-        <button
-          type="submit"
-          className="btn-primary w-full rounded-lg px-4 py-3 text-sm"
-        >
-          {t('table.create_btn')}
-        </button>
+        </section>
       </form>
+      </div>
     </main>
   )
 }

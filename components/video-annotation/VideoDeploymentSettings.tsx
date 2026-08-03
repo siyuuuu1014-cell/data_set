@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLang } from '@/services/i18n'
+import { useConfirm } from '@/components/ui'
 import type {
   DeploymentMode,
   DeploymentStatus,
 } from '@/services/video-annotation/types'
 
-export function VideoDeploymentSettings() {
+export function VideoDeploymentSettings({ onModeChange }: { onModeChange?: (mode: DeploymentMode) => void } = {}) {
   const { t } = useLang()
+  const confirmAction = useConfirm()
   const [deployment, setDeployment] = useState<DeploymentStatus | null>(null)
   const [hfToken, setHfToken] = useState('')
   const [loading, setLoading] = useState(true)
@@ -21,13 +23,14 @@ export function VideoDeploymentSettings() {
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || t('video.worker_unavailable'))
       setDeployment(payload as DeploymentStatus)
+      onModeChange?.((payload as DeploymentStatus).mode)
       setError('')
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : t('video.worker_unavailable'))
     } finally {
       setLoading(false)
     }
-  }, [t])
+  }, [onModeChange, t])
 
   useEffect(() => {
     const timer = window.setTimeout(loadDeployment, 0)
@@ -55,6 +58,7 @@ export function VideoDeploymentSettings() {
       if (!response.ok) throw new Error(payload.error || t('deployment.save_failed'))
       const next = payload as DeploymentStatus
       setDeployment(next)
+      onModeChange?.(next.mode)
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : t('deployment.save_failed'))
     } finally {
@@ -101,7 +105,7 @@ export function VideoDeploymentSettings() {
   const setupStatus = deployment?.enhancedSetup.status
 
   return (
-    <section className="card p-5 sm:p-6">
+    <section className="card p-5 sm:p-6" aria-busy={loading || saving}>
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
         <div>
           <h2 className="text-base font-semibold text-gv-text">{t('deployment.title')}</h2>
@@ -115,7 +119,10 @@ export function VideoDeploymentSettings() {
       </div>
 
       {loading ? (
-        <p className="text-sm text-gv-text-dim">{t('app.loading')}</p>
+        <div className="space-y-3" aria-label={t('app.loading')}>
+          <div className="h-20 animate-pulse rounded-xl border border-gv-border bg-gv-bg/60" />
+          <div className="h-10 animate-pulse rounded-lg bg-gv-border/30" />
+        </div>
       ) : deployment ? (
         <div className="space-y-5">
           <div className="grid sm:grid-cols-2 gap-3">
@@ -127,13 +134,14 @@ export function VideoDeploymentSettings() {
                   type="button"
                   disabled={saving || deployment.managedByEnvironment}
                   onClick={() => changeMode(mode)}
-                  className={`text-left rounded-xl border p-4 transition-all disabled:opacity-60 ${selected ? 'border-gv-pink bg-gv-pink/8 shadow-[0_0_12px_var(--color-gv-pink-glow)]' : 'border-gv-border hover:border-gv-pink/40 bg-gv-bg/50'}`}
+                  aria-pressed={selected}
+                  className={`text-left rounded-xl border p-4 transition-colors disabled:opacity-60 ${selected ? 'border-ui-active-indicator bg-ui-icon-accent-soft' : 'border-ui-border hover:border-ui-border-strong bg-ui-surface'}`}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <span className={`text-sm font-semibold ${selected ? 'text-gv-pink' : 'text-gv-text'}`}>
+                    <span className={`text-sm font-semibold ${selected ? 'text-ui-accent-hover' : 'text-gv-text'}`}>
                       {mode === 'standard' ? t('deployment.standard') : t('deployment.enhanced')}
                     </span>
-                    <span className={`w-3 h-3 rounded-full border ${selected ? 'border-gv-pink bg-gv-pink shadow-[0_0_6px_var(--color-gv-pink-glow)]' : 'border-gv-border'}`} />
+                    <span className={`w-3 h-3 rounded-full border ${selected ? 'border-ui-icon-accent bg-ui-icon-accent' : 'border-ui-border'}`} />
                   </div>
                   <p className="text-xs text-gv-text-dim mt-2 leading-relaxed">
                     {mode === 'standard' ? t('deployment.standard_desc') : t('deployment.enhanced_desc')}
@@ -175,8 +183,8 @@ export function VideoDeploymentSettings() {
                 {setupStatus !== 'ready' && deployment.huggingFace.authenticated && setupStatus !== 'downloading' && setupStatus !== 'checking_access' && (
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!deployment.enhancedSetup.downloadRequired || window.confirm(t('deployment.download_confirmation', deployment.enhancedSetup.approximateDownloadGb))) {
+                    onClick={async () => {
+                      if (!deployment.enhancedSetup.downloadRequired || await confirmAction(t('deployment.download_confirmation', deployment.enhancedSetup.approximateDownloadGb))) {
                         prepareEnhanced()
                       }
                     }}
@@ -225,7 +233,7 @@ export function VideoDeploymentSettings() {
               )}
 
               {setupStatus === 'failed' && (
-                <p className="mt-4 text-xs rounded-lg border border-gv-pink/30 bg-gv-pink/10 p-3 text-gv-pink break-words">
+                <p className="mt-4 text-xs rounded-lg border border-gv-pink/30 bg-gv-pink/10 p-3 text-gv-pink break-words" role="alert">
                   {deployment.enhancedSetup.error || t('deployment.prepare_failed')}
                 </p>
               )}
@@ -239,7 +247,7 @@ export function VideoDeploymentSettings() {
       ) : null}
 
       {error && (
-        <p className="mt-4 text-xs rounded-lg border border-gv-pink/30 bg-gv-pink/10 p-3 text-gv-pink break-words">{error}</p>
+        <p className="mt-4 text-xs rounded-lg border border-gv-pink/30 bg-gv-pink/10 p-3 text-gv-pink break-words" role="alert">{error}</p>
       )}
     </section>
   )

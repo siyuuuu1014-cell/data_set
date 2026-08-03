@@ -45,6 +45,21 @@ export function mergeVideoPeople(task: AnnotateSet, videoId: string, sourceId: s
   return task
 }
 
+function nextManualPersonSequence(video: VideoTaskItem): number {
+  const prefix = `${video.videoId}:manual-person:`
+  let next = Math.max(1, video.nextManualPersonId || 1)
+  for (const segment of video.segments || []) {
+    for (const annotation of [segment.modelAnnotation, segment.humanAnnotation]) {
+      for (const person of annotation?.persons || []) {
+        if (!person.personId?.startsWith(prefix)) continue
+        const suffix = Number(person.personId.slice(prefix.length))
+        if (Number.isSafeInteger(suffix) && suffix >= next) next = suffix + 1
+      }
+    }
+  }
+  return next
+}
+
 export function splitVideoPerson(task: AnnotateSet, videoId: string, segmentId: number, trackId: number): { task: AnnotateSet; personId: string } {
   const video = task.videos.find(item => item.videoId === videoId)
   if (!video) throw new IdentityReviewError('VIDEO_NOT_FOUND', 404, 'Video not found')
@@ -52,8 +67,10 @@ export function splitVideoPerson(task: AnnotateSet, videoId: string, segmentId: 
   if (!segment) throw new IdentityReviewError('SEGMENT_NOT_FOUND', 404, 'Segment not found')
   const exists = [segment.humanAnnotation, segment.modelAnnotation].some(annotation => annotation?.persons.some(person => person.trackId === trackId))
   if (!exists) throw new IdentityReviewError('PERSON_NOT_FOUND', 404, 'Person track not found in this segment')
-  video.nextManualPersonId = Math.max(1, video.nextManualPersonId || 1)
-  const personId = `${video.videoId}:manual-person:${video.nextManualPersonId++}`
+  // Scan existing person IDs so a stale counter can never allocate a duplicate
+  const sequence = nextManualPersonSequence(video)
+  const personId = `${video.videoId}:manual-person:${sequence}`
+  video.nextManualPersonId = sequence + 1
   const review = state(video)
   review.segmentOverrides[`${segmentId}:${trackId}`] = personId
   review.lockedPersonIds = [...new Set([...review.lockedPersonIds, personId])]

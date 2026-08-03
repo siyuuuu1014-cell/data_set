@@ -1,8 +1,9 @@
 import type { NextRequest } from 'next/server'
 
 function requestHostname(request: NextRequest): string {
-  const forwarded = request.headers.get('x-forwarded-host')?.split(',')[0].trim()
-  const host = forwarded || request.headers.get('host') || request.nextUrl.host
+  // Never trust X-Forwarded-Host: it is client-controllable and can be spoofed
+  // to bypass the local-only admin guard on deployments without a reverse proxy.
+  const host = request.headers.get('host') || request.nextUrl.host
   if (host.startsWith('[')) return host.slice(1, host.indexOf(']'))
   return host.split(':')[0].toLowerCase()
 }

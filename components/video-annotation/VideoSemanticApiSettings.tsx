@@ -17,7 +17,7 @@ const EMPTY_CONFIG: PublicVideoSemanticConfig = {
   configured: true,
 }
 
-export function VideoSemanticApiSettings() {
+export function VideoSemanticApiSettings({ onModeChange }: { onModeChange?: (mode: VideoSemanticMode) => void } = {}) {
   const { t } = useLang()
   const [config, setConfig] = useState(EMPTY_CONFIG)
   const [mode, setMode] = useState<VideoSemanticMode>('local')
@@ -39,6 +39,7 @@ export function VideoSemanticApiSettings() {
       if (!response.ok) throw new Error(payload.error || t('semantic.load_failed'))
       setConfig(payload)
       setMode(payload.mode)
+      onModeChange?.(payload.mode)
       setBaseUrl(payload.baseUrl)
       setModel(payload.model)
       setApiFormat(payload.apiFormat)
@@ -48,7 +49,7 @@ export function VideoSemanticApiSettings() {
     } finally {
       setLoading(false)
     }
-  }, [t])
+  }, [onModeChange, t])
 
   useEffect(() => {
     const timer = window.setTimeout(loadConfig, 0)
@@ -76,6 +77,7 @@ export function VideoSemanticApiSettings() {
       if (!response.ok) throw new Error(payload.error || t('semantic.save_failed'))
       setConfig(payload)
       setMode(payload.mode)
+      onModeChange?.(payload.mode)
       setBaseUrl(payload.baseUrl)
       setModel(payload.model)
       setApiFormat(payload.apiFormat)
@@ -123,7 +125,7 @@ export function VideoSemanticApiSettings() {
   const endpointPath = apiFormat === 'anthropic' ? '/messages' : '/chat/completions'
 
   return (
-    <section className="card p-5 sm:p-6">
+    <section className="card p-5 sm:p-6" aria-busy={loading || saving || testing}>
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
         <div>
           <h2 className="text-base font-semibold text-gv-text">{t('semantic.title')}</h2>
@@ -135,7 +137,10 @@ export function VideoSemanticApiSettings() {
       </div>
 
       {loading ? (
-        <p className="text-sm text-gv-text-dim">{t('app.loading')}</p>
+        <div className="space-y-3" aria-label={t('app.loading')}>
+          <div className="h-20 animate-pulse rounded-xl border border-gv-border bg-gv-bg/60" />
+          <div className="h-10 animate-pulse rounded-lg bg-gv-border/30" />
+        </div>
       ) : (
         <div className="space-y-5">
           <div className="grid sm:grid-cols-2 gap-3">
@@ -146,13 +151,14 @@ export function VideoSemanticApiSettings() {
                   key={option}
                   type="button"
                   onClick={() => { setMode(option); setSaved(false); setTestResult(null) }}
-                  className={`text-left rounded-xl border p-4 transition-all ${selected ? 'border-gv-pink bg-gv-pink/8 shadow-[0_0_12px_var(--color-gv-pink-glow)]' : 'border-gv-border hover:border-gv-pink/40 bg-gv-bg/50'}`}
+                  aria-pressed={selected}
+                  className={`text-left rounded-xl border p-4 transition-colors ${selected ? 'border-ui-active-indicator bg-ui-icon-accent-soft' : 'border-ui-border hover:border-ui-border-strong bg-ui-surface'}`}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <span className={`text-sm font-semibold ${selected ? 'text-gv-pink' : 'text-gv-text'}`}>
+                    <span className={`text-sm font-semibold ${selected ? 'text-ui-accent-hover' : 'text-gv-text'}`}>
                       {option === 'local' ? t('semantic.local') : t('semantic.remote')}
                     </span>
-                    <span className={`w-3 h-3 rounded-full border ${selected ? 'border-gv-pink bg-gv-pink' : 'border-gv-border'}`} />
+                    <span className={`w-3 h-3 rounded-full border ${selected ? 'border-ui-icon-accent bg-ui-icon-accent' : 'border-ui-border'}`} />
                   </div>
                   <p className="text-xs text-gv-text-dim mt-2 leading-relaxed">
                     {option === 'local' ? t('semantic.local_desc') : t('semantic.remote_desc')}
@@ -172,7 +178,8 @@ export function VideoSemanticApiSettings() {
                       key={format}
                       type="button"
                       onClick={() => setApiFormat(format)}
-                      className={`rounded-lg border px-3 py-1.5 text-sm ${apiFormat === format ? 'border-gv-pink bg-gv-pink/10 text-gv-pink' : 'border-gv-border text-gv-text-dim'}`}
+                      aria-pressed={apiFormat === format}
+                      className={`rounded-lg border px-3 py-1.5 text-sm ${apiFormat === format ? 'border-ui-active-indicator bg-ui-icon-accent-soft text-ui-accent-hover' : 'border-ui-border text-gv-text-dim'}`}
                     >
                       {format === 'openai' ? t('settings.format_openai') : t('settings.format_anthropic')}
                     </button>
@@ -254,12 +261,12 @@ export function VideoSemanticApiSettings() {
           </div>
 
           {testResult === 'success' && (
-            <p className="text-sm rounded-lg border border-gv-green-deep/30 bg-gv-green-deep/10 p-3 text-gv-green-deep">
+            <p className="text-sm rounded-lg border border-gv-green-deep/30 bg-gv-green-deep/10 p-3 text-gv-green-deep" role="status" aria-live="polite">
               {t('semantic.test_success')}
             </p>
           )}
           {error && (
-            <p className="text-sm rounded-lg border border-gv-pink/30 bg-gv-pink/10 p-3 text-gv-pink break-words">
+            <p className="text-sm rounded-lg border border-gv-pink/30 bg-gv-pink/10 p-3 text-gv-pink break-words" role="alert">
               {error}
             </p>
           )}

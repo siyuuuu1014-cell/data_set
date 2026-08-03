@@ -4,6 +4,7 @@ import { useRef, useState, useEffect, useCallback } from 'react'
 import { CANVAS_MAX_W, CANVAS_MAX_H, CANVAS_MIN_BOX_SIZE } from '@/services/video-annotation/constants'
 import { drawRect, getClassColor } from '@/services/video-annotation/canvas-utils'
 import { personDisplayId } from '@/services/video-annotation/frame-annotations'
+import { useLang } from '@/services/i18n'
 import type { PersonAnnotation, ObjectAnnotation, BBox, SpatialEntityType } from '@/services/video-annotation/types'
 
 type CanvasMode = 'view' | 'draw'
@@ -34,6 +35,7 @@ export function AnnotationCanvas({
   imageUrl, persons, objects, imgWidth, imgHeight,
   mode, drawEnabled = true, hiddenTrackKeys, onModeChange, onDrawBox, onSelectTrack, onResizeBox, selectedTrackId, selectedEntityType,
 }: Props) {
+  const { t } = useLang()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef(0)
   const [loadedImage, setLoadedImage] = useState<{ url: string; image: HTMLImageElement } | null>(null)
@@ -362,20 +364,20 @@ export function AnnotationCanvas({
         <label className="flex items-center gap-1 text-xs cursor-pointer">
           <input type="radio" name="canvas-mode" checked={mode === 'view'}
             onChange={() => onModeChange('view')} className="h-3 w-3 accent-gv-pink" />
-          <span className="text-gv-text-dim">View</span>
+          <span className="text-gv-text-dim">{t('annotation.canvas_view')}</span>
         </label>
         <label className="flex items-center gap-1 text-xs cursor-pointer">
           <input type="radio" name="canvas-mode" checked={mode === 'draw'}
             onChange={() => onModeChange('draw')} className="h-3 w-3 accent-gv-pink" />
-          <span className="text-gv-text-dim">Draw</span>
+          <span className="text-gv-text-dim">{t('annotation.canvas_draw')}</span>
         </label>
         {mode === 'draw'
-          ? <span className="text-xs text-gv-pink">{drawEnabled ? 'Drag to draw' : 'Choose Person or Object first'}</span>
-          : <span className="text-xs text-gv-text-muted">{selectedTrackId != null ? 'Drag to move, edges to resize' : 'Click to select'}</span>}
+          ? <span className="text-xs text-gv-pink">{drawEnabled ? t('annotation.drag_to_draw') : t('annotation.choose_type_first')}</span>
+          : <span className="text-xs text-gv-text-muted">{selectedTrackId != null ? t('annotation.drag_to_resize') : t('annotation.click_to_select')}</span>}
         <span className="flex-1" />
-        <span className="text-xs text-gv-text-muted">{persons.length + objects.length} tracks</span>
+        <span className="text-xs text-gv-text-muted">{t('annotation.track_count', persons.length + objects.length)}</span>
       </div>
-      <canvas ref={canvasRef} onMouseDown={onMouseDown} style={{ cursor }} className="block mx-auto" />
+      <canvas ref={canvasRef} onMouseDown={onMouseDown} style={{ cursor }} className="block mx-auto" aria-label={t('annotation.canvas_label')} />
     </div>
   )
 }

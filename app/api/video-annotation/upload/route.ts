@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server'
+import { rm } from 'fs/promises'
 import { getVideoMetadata } from '@/services/video-annotation/segment-service'
 import { getUploadDir } from '@/services/video-annotation/server-paths'
 import {
@@ -24,12 +25,18 @@ export async function POST(req: NextRequest) {
       removeDirectoryOnFailure: true,
     })
 
-    // Extract metadata via ffprobe
-    let metadata = { duration: 0, fps: 0, width: 0, height: 0 }
+    // Extract metadata via ffprobe. Metadata failure is fatal for this upload:
+    // accepting a video with 0 duration/fps/width/height poisons the whole
+    // annotation pipeline (collapsed frame indexes, NaN exports).
+    let metadata
     try {
       metadata = await getVideoMetadata(upload.finalPath)
     } catch {
-      // Metadata extraction failed — video will still be uploaded, user can retry later
+      await rm(videoDir, { recursive: true, force: true }).catch(() => {})
+      return Response.json(
+        { error: { code: 'VIDEO_METADATA_FAILED', message: 'Failed to read video metadata. The file may be corrupted or unsupported.' } },
+        { status: 422 },
+      )
     }
 
     return Response.json({

@@ -117,7 +117,19 @@ export async function generateColumn(
 
     case 'boolean':
       if (col.generationCode?.trim()) {
-        results = executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols || []).map(v => v ? 1 : 0)
+        results = executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols || []).map(v => v == null ? null : (v ? 1 : 0))
+      } else if (col.llmPrompt?.trim()) {
+        const result = await llmGenerateCode(col.llmPrompt, 'boolean')
+        if (result.code) {
+          col.generationCode = result.code
+          results = executeColumnCode(col, result.code, rowCount, refData, columnResults, allCols || []).map(v => v == null ? null : (v ? 1 : 0))
+        } else if (result.error) {
+          throw new Error(`Boolean column "${col.name}" 代码生成失败: ${result.error}`)
+        } else {
+          for (let i = 0; i < rowCount; i++) {
+            results.push(generateBoolean(col.boolTrueRatio))
+          }
+        }
       } else {
         for (let i = 0; i < rowCount; i++) {
           results.push(generateBoolean(col.boolTrueRatio))
@@ -186,7 +198,8 @@ Rules:
 - If the description implies a specific format, follow it precisely
 
 Column description: ${col.llmPrompt}`
-    return await callLlmBatch(systemPrompt, prompts)
+    const values = await callLlmBatch(systemPrompt, prompts)
+    return values.map((value, i) => value ?? `[Error - Row ${i + 1}]`)
   } catch (err) {
     console.error(`[text] ${col.name} failed:`, err)
     return prompts.map((_, i) => `[Error - Row ${i + 1}]`)
@@ -206,12 +219,20 @@ async function generateNumberColumn(
   if (col.generationCode?.trim()) {
     return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols)
   }
+  // Direct-value mode: imported number column copying a parent column value
+  if (col.foreignTable && col.foreignColumn) {
+    return Array.from({ length: rowCount }, () => resolveForeignKey(col, refData))
+  }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
     const result = await llmGenerateCode(col.llmPrompt, 'number')
     if (result.code) {
       col.generationCode = result.code
       return executeColumnCode(col, result.code, rowCount, refData, columnResults, allCols)
+    }
+    // Surface the failure instead of silently falling back to random values
+    if (result.error) {
+      throw new Error(`Number column "${col.name}" 代码生成失败: ${result.error}`)
     }
   }
   // Fallback: random integers
@@ -237,12 +258,20 @@ async function generateDateColumn(
   if (col.generationCode?.trim()) {
     return executeColumnCode(col, col.generationCode, rowCount, refData, columnResults, allCols)
   }
+  // Direct-value mode: imported date column copying a parent column value
+  if (col.foreignTable && col.foreignColumn) {
+    return Array.from({ length: rowCount }, () => resolveForeignKey(col, refData))
+  }
   // If user provided prompt, ask LLM to generate code
   if (col.llmPrompt?.trim()) {
     const result = await llmGenerateCode(col.llmPrompt, 'date', { dateFormat: col.dateFormat, dateDistribution: col.dateDistribution })
     if (result.code) {
       col.generationCode = result.code
       return executeColumnCode(col, result.code, rowCount, refData, columnResults, allCols)
+    }
+    // Surface the failure instead of silently falling back to random dates
+    if (result.error) {
+      throw new Error(`Date column "${col.name}" 代码生成失败: ${result.error}`)
     }
   }
   // Fallback: use distribution if configured, else random dates
@@ -278,7 +307,7 @@ export async function llmGenerateCode(
     date_slash: "formatDate(new Date(...),'date_slash')",
     date_us: "formatDate(new Date(...),'date_us')",
     date_eu: "formatDate(new Date(...),'date_eu')",
-    time: "new Date(...).toISOString().split('T')[1].split('.')[0]",
+    time: "formatDate(new Date(...),'time')",
     iso: "new Date(...).toISOString()",
     unix_s: "Math.floor(new Date(...).getTime()/1000)",
     unix_ms: "new Date(...).getTime()",
@@ -407,10 +436,15 @@ function extractExpression(raw: string): { code: string | null; error?: string }
         products: [{ id: 1 }],
       }
       const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : undefined)
-      // Proxy row returns Date objects for any field name (so row.xxx.getTime() works)
+      // Sample row: string-like values so row.name.length / .includes() /
+      // .toUpperCase() work as they would against real string columns, while
+      // row.xxx.getTime() still resolves via the attached helper.
       const testRow = new Proxy({} as Record<string, unknown>, {
-        get: () => new Date(),
-        getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true, value: new Date() }),
+        get: (_t, prop) => {
+          if (prop === 'getTime') return undefined
+          return Object.assign(new String('sample'), { getTime: () => 1700000000000 })
+        },
+        getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true, value: 'sample' }),
       })
       const testParentRow = { id: 1, name: 'test', price: 100 }
       evaluateExpression({
@@ -450,18 +484,23 @@ function executeColumnCode(
   rowContext: Record<string, unknown[]> | undefined,
   allCols: ColumnDef[]
 ): unknown[] {
-  // Basic validation before attempting compilation
-  if (!code || code.length > 500 || /[\u4e00-\u9fff]/.test(code)) {
+  // Basic validation before attempting compilation.
+  // Reject natural-language output, but allow CJK characters inside quoted
+  // string literals (e.g. row.status === '已过期').
+  const codeOutsideStrings = code.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '')
+  if (!code || code.length > 500 || /[\u4e00-\u9fff]/.test(codeOutsideStrings)) {
     return new Array(rowCount).fill(null)
   }
 
   // Resolve FK column for parentRow lookup
-  // Prefer explicit localMatchColumn, fallback to auto-detect FK column
+  // Prefer explicit localMatchColumn, fallback to auto-detect FK column.
+  // foreign_key_array is excluded: its value is a serialized "[1,2]" string
+  // that can never match a single parent row.
   let fkColName: string | null = col.localMatchColumn || null
   let parentKeyCol = col.foreignColumn || 'id'
   if (!fkColName && col.foreignTable && allCols) {
     const fkCol = allCols.find(c =>
-      (c.type === 'foreign_key' || c.type === 'foreign_key_array') &&
+      c.type === 'foreign_key' &&
       c.foreignTable === col.foreignTable
     )
     if (fkCol) {
@@ -501,7 +540,11 @@ function executeColumnCode(
       const fkValue = row[fkColName]
       const parentRows = refData[col.foreignTable]
       if (parentRows && fkValue != null) {
-        parentRow = parentRows.find(r => r[parentKeyCol] === fkValue) || null
+        // String-normalized comparison: Parquet parent keys (e.g. id) are
+        // often strings while generated FK values are numbers — strict ===
+        // would never match and silently null every row.
+        const normalized = String(fkValue)
+        parentRow = parentRows.find(r => String(r[parentKeyCol]) === normalized) || null
       }
     }
 

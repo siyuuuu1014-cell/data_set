@@ -1,4 +1,4 @@
-import { writeParquet, readParquet, countParquet, deleteParquetTable, deleteParquetProject } from '@/services/parquet'
+import { writeParquet, readParquet, countParquet, deleteParquetTable, deleteParquetProject, renameParquet, ParquetRenameConflictError } from '@/services/parquet'
 import type { ColumnDef } from '@/services/types'
 import { assertSafeFileStem, assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 
@@ -52,6 +52,36 @@ export async function POST(request: Request) {
     if (isUnsafePathError(err)) return Response.json({ error: err.message }, { status: 400 })
     const msg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err)
     console.error('[data POST]', msg)
+    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
+  }
+}
+
+// PATCH — rename a Parquet data file when a table is renamed
+export async function PATCH(request: Request) {
+  try {
+    const { projectId, fromTable, toTable } = await request.json() as {
+      projectId: string
+      fromTable: string
+      toTable: string
+    }
+
+    if (!projectId || !fromTable || !toTable) {
+      return Response.json({ error: 'Missing params' }, { status: 400 })
+    }
+
+    assertSafeIdentifier(projectId, 'project ID')
+    assertSafeFileStem(fromTable, 'table name')
+    assertSafeFileStem(toTable, 'table name')
+    const renamed = renameParquet(projectId, fromTable, toTable)
+    if (!renamed) {
+      return Response.json({ error: 'Source table has no generated data' }, { status: 404 })
+    }
+    return Response.json({ ok: true })
+  } catch (err) {
+    if (isUnsafePathError(err)) return Response.json({ error: err.message }, { status: 400 })
+    if (err instanceof ParquetRenameConflictError) return Response.json({ error: err.message }, { status: 409 })
+    const msg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err)
+    console.error('[data PATCH]', msg)
     return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }

@@ -537,6 +537,23 @@ export function exportCurrentFrameJson(
   }, null, 2)
 }
 
+/** Normalize a bbox coordinate into [0,1] against valid video dimensions. */
+function normalizedCoordinate(value: number, dimension: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(dimension) || dimension <= 0) return 0
+  return Math.max(0, Math.min(1, value / dimension))
+}
+
+/**
+ * A video with zero/NaN width or height has no usable geometry — exporting it
+ * would emit Infinity/NaN labels. Report it so callers can warn the user.
+ */
+export function invalidVideoDimensions(annotations: VideoAnnotation[]): VideoAnnotation[] {
+  return annotations.filter(ann => (
+    !Number.isFinite(ann.video.width) || ann.video.width <= 0
+    || !Number.isFinite(ann.video.height) || ann.video.height <= 0
+  ))
+}
+
 /** Generate YOLO format — returns a map of filename → label content. */
 export function exportYolo(annotations: VideoAnnotation[]): Map<string, string> {
   const files = new Map<string, string>()
@@ -544,15 +561,16 @@ export function exportYolo(annotations: VideoAnnotation[]): Map<string, string> 
   const classMap = new Map<string, number>()
 
   for (const ann of annotations) {
+    if (invalidVideoDimensions([ann]).length > 0) continue // no usable geometry
     for (const seg of ann.annotations) {
       for (const p of seg.persons) {
         const className = 'person'
         if (!classMap.has(className)) { classMap.set(className, classIdx++) }
         const cid = classMap.get(className)!
-        const cx = (p.bbox.x + p.bbox.width / 2) / ann.video.width
-        const cy = (p.bbox.y + p.bbox.height / 2) / ann.video.height
-        const w = p.bbox.width / ann.video.width
-        const h = p.bbox.height / ann.video.height
+        const cx = normalizedCoordinate(p.bbox.x + p.bbox.width / 2, ann.video.width)
+        const cy = normalizedCoordinate(p.bbox.y + p.bbox.height / 2, ann.video.height)
+        const w = normalizedCoordinate(p.bbox.width, ann.video.width)
+        const h = normalizedCoordinate(p.bbox.height, ann.video.height)
         const line = `${cid} ${cx.toFixed(6)} ${cy.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}`
         const key = `${ann.video.videoId}_seg${seg.segmentId}.txt`
         const existing = files.get(key) || ''
@@ -563,10 +581,10 @@ export function exportYolo(annotations: VideoAnnotation[]): Map<string, string> 
         const className = o.name || 'object'
         if (!classMap.has(className)) { classMap.set(className, classIdx++) }
         const cid = classMap.get(className)!
-        const cx = (o.bbox.x + o.bbox.width / 2) / ann.video.width
-        const cy = (o.bbox.y + o.bbox.height / 2) / ann.video.height
-        const w = o.bbox.width / ann.video.width
-        const h = o.bbox.height / ann.video.height
+        const cx = normalizedCoordinate(o.bbox.x + o.bbox.width / 2, ann.video.width)
+        const cy = normalizedCoordinate(o.bbox.y + o.bbox.height / 2, ann.video.height)
+        const w = normalizedCoordinate(o.bbox.width, ann.video.width)
+        const h = normalizedCoordinate(o.bbox.height, ann.video.height)
         const line = `${cid} ${cx.toFixed(6)} ${cy.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}`
         const key = `${ann.video.videoId}_seg${seg.segmentId}.txt`
         const existing = files.get(key) || ''
@@ -595,6 +613,7 @@ export function exportCoco(annotations: VideoAnnotation[]): string {
   let catId = 0
 
   for (const ann of annotations) {
+    if (invalidVideoDimensions([ann]).length > 0) continue // no usable geometry
     for (const seg of ann.annotations) {
       imgId++
       images.push({
@@ -728,6 +747,10 @@ function triggerDownload(blob: Blob, filename: string) {
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  document.body.removeChild(a)
+  // Defer revocation: some browsers (notably Safari) abort the download if the
+  // object URL is released synchronously after click().
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

@@ -1,9 +1,9 @@
 import { existsSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import type { NextRequest } from 'next/server'
 import type { AnnotateSet, SegmentAnnotation } from '@/services/video-annotation/types'
 import { getTaskPath } from '@/services/video-annotation/server-paths'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import { withDerivedAnnotationStatuses } from '@/services/video-annotation/status'
 import { findAnnotationTrackConflicts } from '@/services/video-annotation/manual-track'
 
@@ -93,7 +93,7 @@ export async function PATCH(
       ...task,
       updatedAt: new Date().toISOString(),
     })
-    await writeFile(taskPath, JSON.stringify(updated, null, 2))
+    await writeTaskFileAtomic(taskPath, JSON.stringify(updated, null, 2))
     return Response.json({ data: updated })
   })
 }

@@ -91,7 +91,7 @@ export function formatDate(d: Date, format: string): string {
     case 'date_eu':
       return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`
     case 'time':
-      return d.toISOString().split('T')[1].split('.')[0]
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     case 'unix_s':
       return String(Math.floor(d.getTime() / 1000))
     case 'unix_ms':
@@ -146,7 +146,7 @@ const PHONE_RULES: Record<string, { code: string; prefixes: string[]; length: nu
 export function generatePhone(country: string): string {
   const rules = PHONE_RULES[country] || PHONE_RULES.CN
   const prefix = rules.prefixes[Math.floor(Math.random() * rules.prefixes.length)]
-  const remaining = rules.length - prefix.length - 1 // -1 for country code formatting
+  const remaining = rules.length - prefix.length
   let number = prefix
   for (let i = 0; i < remaining; i++) {
     number += Math.floor(Math.random() * 10)

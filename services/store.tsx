@@ -11,6 +11,7 @@ interface StoreState {
 }
 
 interface StoreContextValue extends StoreState {
+  hydrated: boolean
   addProject: (name: string) => Project
   deleteProject: (id: string) => void
   updateProject: (id: string, updates: Partial<Project>) => void
@@ -68,7 +69,9 @@ function saveToStorage(state: StoreState) {
     for (const [projectId, sets] of Object.entries(state.annotateSets)) {
       stripped.annotateSets[projectId] = sets.map(s => ({
         ...s,
-        videos: s.videos.map(v => ({ ...v, segments: [], uploadProgress: 0 })),
+        // Keep uploadProgress intact: resetting it to 0 would make persisted
+        // videos look like they are stuck mid-upload after a reload.
+        videos: s.videos.map(v => ({ ...v, segments: [] })),
       }))
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped))
@@ -89,21 +92,35 @@ function genId(): string {
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<StoreState>(INITIAL_STATE)
+  const [hydrated, setHydrated] = useState(false)
   const hydratedRef = React.useRef(false)
+  const persistReadyRef = React.useRef(false)
+  const stateRef = React.useRef(state)
+
+  // Keep a fresh snapshot available to event handlers (deletion flow reads the
+  // table name before removing it from state)
+  useEffect(() => {
+    stateRef.current = state
+  })
 
   // Hydrate from localStorage on mount — one-time, intentional
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setState(loadFromStorage())
     hydratedRef.current = true
+    setHydrated(true)
   }, [])
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Persist on change — skip when store is empty (prevents accidental wipe)
+  // Skip the initial pre-hydration snapshot, then persist every intentional
+  // state change, including deletion of the final project.
   useEffect(() => {
-    if (hydratedRef.current && (state.projects.length > 0 || Object.keys(state.tables).length > 0 || Object.keys(state.annotateSets).length > 0)) {
-      saveToStorage(state)
+    if (!hydratedRef.current) return
+    if (!persistReadyRef.current) {
+      persistReadyRef.current = true
+      return
     }
+    saveToStorage(state)
   }, [state])
 
   const addProject = useCallback((name: string): Project => {
@@ -120,8 +137,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return project
   }, [])
 
-  const deleteProject = useCallback((id: string) => {
-    fetch(`/api/data?projectId=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+  const deleteProject = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } catch (err) {
+      console.error('[store] delete project failed:', err)
+      alert('删除项目失败，请重试')
+      return
+    }
     setState(prev => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [id]: _t, ...restTables } = prev.tables
@@ -177,21 +201,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }))
   }, [])
 
-  const deleteTable = useCallback((projectId: string, tableId: string) => {
-    setState(prev => {
-      const tables = prev.tables[projectId] || []
-      const table = tables.find(t => t.id === tableId)
-      if (table) {
-        fetch(`/api/data?projectId=${encodeURIComponent(projectId)}&tableName=${encodeURIComponent(table.name)}`, { method: 'DELETE' }).catch(() => {})
-      }
-      return {
-        ...prev,
-        tables: {
-          ...prev.tables,
-          [projectId]: tables.filter(t => t.id !== tableId),
-        },
-      }
-    })
+  const deleteTable = useCallback(async (projectId: string, tableId: string) => {
+    const table = stateRef.current.tables[projectId]?.find(t => t.id === tableId)
+    if (!table) return
+    try {
+      const res = await fetch(`/api/data?projectId=${encodeURIComponent(projectId)}&tableName=${encodeURIComponent(table.name)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } catch (err) {
+      console.error('[store] delete table failed:', err)
+      alert('删除数据表失败，请重试')
+      return
+    }
+    setState(prev => ({
+      ...prev,
+      tables: {
+        ...prev.tables,
+        [projectId]: (prev.tables[projectId] || []).filter(t => t.id !== tableId),
+      },
+    }))
   }, [])
 
   const setTableRows = useCallback((projectId: string, tableId: string, rows: Record<string, unknown>[]) => {
@@ -200,7 +227,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       tables: {
         ...prev.tables,
         [projectId]: (prev.tables[projectId] || []).map(t =>
-          t.id === tableId ? { ...t, rows } : t
+          t.id === tableId ? { ...t, rows, rowCount: rows.length } : t
         ),
       },
     }))
@@ -255,6 +282,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     <StoreContext.Provider
       value={{
         ...state,
+        hydrated,
         addProject,
         deleteProject,
         updateProject,

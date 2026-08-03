@@ -61,6 +61,7 @@ export function splitAnnotatedSegment(task: AnnotateSet, videoId: string, segmen
   const index = video.segments.findIndex(item => item.segmentId === segmentId)
   if (index < 0) throw new SegmentTimelineError('SEGMENT_NOT_FOUND', 404, 'Segment not found')
   const source = video.segments[index]
+  if (!Number.isFinite(time)) throw new SegmentTimelineError('INVALID_BOUNDARY', 400, 'Split time must be a finite number')
   const fps = video.fps > 0 ? video.fps : 30
   const splitTime = Number((Math.round(time * fps) / fps).toFixed(6))
   if (splitTime - source.start < MIN_MANUAL_SEGMENT_DURATION || source.end - splitTime < MIN_MANUAL_SEGMENT_DURATION) throw new SegmentTimelineError('INVALID_BOUNDARY', 400, 'Both split segments must be at least 0.5 seconds')
@@ -94,6 +95,7 @@ export function adjustSegmentBoundary(task: AnnotateSet, videoId: string, leftSe
   const index = ordered.findIndex(item => item.segmentId === leftSegmentId)
   if (index < 0 || index >= ordered.length - 1) throw new SegmentTimelineError('ADJACENT_NOT_FOUND', 404, 'No following segment boundary found')
   const left = ordered[index]; const right = ordered[index + 1]
+  if (!Number.isFinite(time)) throw new SegmentTimelineError('INVALID_BOUNDARY', 400, 'Boundary time must be a finite number')
   const fps = video.fps > 0 ? video.fps : 30
   const boundary = Number((Math.round(time * fps) / fps).toFixed(6))
   if (boundary - left.start < MIN_MANUAL_SEGMENT_DURATION || right.end - boundary < MIN_MANUAL_SEGMENT_DURATION) throw new SegmentTimelineError('INVALID_BOUNDARY', 400, 'Both adjacent segments must remain at least 0.5 seconds')

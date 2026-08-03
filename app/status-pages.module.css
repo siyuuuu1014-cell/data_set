@@ -1,0 +1,132 @@
+.page {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--ui-space-6);
+  background: var(--ui-page);
+  color: var(--ui-text);
+}
+
+.panel {
+  width: min(100%, 42rem);
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  gap: 0 var(--ui-space-6);
+  padding-block: var(--ui-space-8);
+  text-align: left;
+}
+
+.mark {
+  width: 2.75rem;
+  min-height: 2.75rem;
+  display: grid;
+  grid-row: 1 / span 3;
+  place-items: start center;
+  padding-top: 0.375rem;
+  color: var(--ui-accent);
+  font-size: var(--ui-text-md);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+}
+
+.page[data-kind='error'] .mark { color: var(--ui-danger); }
+.page[data-kind='not-found'] .mark {
+  color: var(--ui-success);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: var(--ui-text-xs);
+}
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid color-mix(in srgb, var(--ui-icon-accent) 18%, transparent);
+  border-top-color: var(--ui-icon-accent);
+  border-radius: 50%;
+  animation: state-spin 0.8s linear infinite;
+}
+
+.title {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--ui-text-xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.description {
+  grid-column: 2;
+  margin-top: var(--ui-space-2);
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-sm);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--ui-space-3);
+  margin-top: var(--ui-space-6);
+}
+
+.actions a,
+.actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--ui-control-md);
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  padding: 0 0.125rem;
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color var(--ui-duration-normal) var(--ui-ease-standard), color var(--ui-duration-normal) var(--ui-ease-standard);
+}
+
+.actions a:focus-visible,
+.actions button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.primary {
+  color: var(--ui-text) !important;
+  font-weight: 700 !important;
+}
+
+.primary:hover,
+.secondary:hover {
+  border-bottom-color: currentColor;
+  color: var(--ui-text);
+}
+
+@keyframes state-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .page {
+    align-items: start;
+    padding: var(--ui-space-4);
+  }
+
+  .panel {
+    margin-top: var(--ui-space-8);
+    padding: var(--ui-space-4) 0;
+  }
+
+  .actions { gap: var(--ui-space-4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

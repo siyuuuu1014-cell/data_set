@@ -146,8 +146,10 @@ function upsertManualFrame(
     ...source,
     imageWidth: input.imageWidth,
     imageHeight: input.imageHeight,
+    // Idempotent upsert: a retried request for the same track must not append
+    // a duplicate observation to the same frame.
     observations: [
-      ...source.observations,
+      ...source.observations.filter(observation => observation.trackId !== trackId),
       {
         trackId,
         entityType: input.entityType,

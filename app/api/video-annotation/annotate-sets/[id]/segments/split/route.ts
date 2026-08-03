@@ -1,10 +1,10 @@
 import { existsSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import type { NextRequest } from 'next/server'
 import type { AnnotateSet } from '@/services/video-annotation/types'
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskPath } from '@/services/video-annotation/server-paths'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import { SegmentSplitError, splitDraftVideoSegment } from '@/services/video-annotation/segment-split'
 
 interface SplitBody {
@@ -41,7 +41,7 @@ export async function POST(
     return await withTaskFileLock(taskPath, async () => {
       const task = JSON.parse(await readFile(taskPath, 'utf-8')) as AnnotateSet
       const result = splitDraftVideoSegment(task, body.videoId as string, body.segmentId as number, body.splitTime as number)
-      await writeFile(taskPath, JSON.stringify(result.task, null, 2))
+      await writeTaskFileAtomic(taskPath, JSON.stringify(result.task, null, 2))
       return Response.json({
         data: result.task,
         split: {

@@ -1,10 +1,10 @@
 import { existsSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import type { NextRequest } from 'next/server'
 import type { AnnotateSet } from '@/services/video-annotation/types'
 import { assertSafeIdentifier, isUnsafePathError } from '@/services/server-paths'
 import { getTaskPath } from '@/services/video-annotation/server-paths'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import { IdentityReviewError, mergeVideoPeople, setIdentityLock, splitVideoPerson } from '@/services/video-annotation/identity-review'
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const result = splitVideoPerson(task, body.videoId as string, body.segmentId as number, body.trackId as number); task = result.task; personId = result.personId
       } else if (body.action === 'lock' && typeof body.personId === 'string' && typeof body.locked === 'boolean') task = setIdentityLock(task, body.videoId as string, body.personId, body.locked)
       else return Response.json({ error: { code: 'VALIDATION', message: 'Invalid identity action' } }, { status: 400 })
-      await writeFile(taskPath, JSON.stringify(task, null, 2))
+      await writeTaskFileAtomic(taskPath, JSON.stringify(task, null, 2))
       return Response.json({ data: task, personId })
     })
   } catch (error) {

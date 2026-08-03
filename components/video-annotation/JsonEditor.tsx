@@ -8,6 +8,8 @@ import {
   withAuthoritativeSegmentMetadata,
 } from '@/services/video-annotation/json-review'
 import type { SegmentReviewMetadata } from '@/services/video-annotation/json-review'
+import { useLang } from '@/services/i18n'
+import styles from './review-export.module.css'
 
 interface Props {
   annotation: SegmentAnnotation | null
@@ -43,10 +45,10 @@ function containsQuery(label: string, value: unknown, query: string): boolean {
 }
 
 function valueTone(value: unknown): string {
-  if (value === null) return 'text-gv-text-muted italic'
-  if (typeof value === 'number') return 'text-amber-700'
-  if (typeof value === 'boolean') return 'text-sky-700'
-  return 'text-gv-text'
+  if (value === null) return styles.valueNull
+  if (typeof value === 'number') return styles.valueNumber
+  if (typeof value === 'boolean') return styles.valueBoolean
+  return styles.treeValue
 }
 
 function JsonTreeNode({
@@ -62,15 +64,16 @@ function JsonTreeNode({
   query: string
   depth?: number
 }) {
+  const { t } = useLang()
   const [expanded, setExpanded] = useState(depth === 0)
   if (!containsQuery(label, value, query)) return null
 
   const collection = Array.isArray(value) || isRecord(value)
   if (!collection) {
     return (
-      <div className="grid grid-cols-[minmax(8rem,0.7fr)_minmax(0,1.3fr)] gap-3 border-b border-gv-border/40 py-1.5 last:border-b-0">
-        <span className="break-all font-mono text-[11px] text-gv-text-muted" title={path}>{label}</span>
-        <span className={`break-words text-xs ${valueTone(value)}`}>{printableValue(value)}</span>
+      <div className={styles.treeLeaf}>
+        <span className={styles.treeLeafLabel} title={path}>{label}</span>
+        <span className={valueTone(value)}>{printableValue(value)}</span>
       </div>
     )
   }
@@ -81,21 +84,21 @@ function JsonTreeNode({
   const open = query.length > 0 || expanded
 
   return (
-    <div className={depth > 0 ? 'border-l border-gv-border/60 pl-3' : ''}>
+    <div className={depth > 0 ? styles.treeBranch : ''}>
       <button
         type="button"
         onClick={() => setExpanded(current => !current)}
-        className="flex w-full items-center gap-2 py-1.5 text-left text-xs hover:text-gv-pink"
+        className={styles.treeButton}
         title={path}
       >
-        <span className="w-3 text-gv-text-muted">{open ? '▾' : '▸'}</span>
-        <span className="break-all font-mono font-medium text-gv-text">{label}</span>
-        <span className="rounded bg-gv-bg-deep px-1.5 py-0.5 text-[10px] text-gv-text-muted">
-          {Array.isArray(value) ? `${entries.length} items` : `${entries.length} fields`}
+        <svg className={`h-3 w-3 text-gv-text-muted transition-transform ${open ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <span className={styles.treeLabel}>{label}</span>
+        <span className={styles.treeCount}>
+          {Array.isArray(value) ? t('annotation.item_count', entries.length) : t('annotation.field_count', entries.length)}
         </span>
       </button>
       {open && (
-        <div className="ml-1">
+        <div className={styles.treeChildren}>
           {entries.length > 0 ? entries.map(([key, item]) => (
             <JsonTreeNode
               key={`${path}.${key}`}
@@ -106,7 +109,7 @@ function JsonTreeNode({
               depth={depth + 1}
             />
           )) : (
-            <p className="py-1.5 pl-5 text-xs italic text-gv-text-muted">Empty</p>
+            <p className={styles.treeEmpty}>{t('annotation.empty')}</p>
           )}
         </div>
       )}
@@ -123,25 +126,25 @@ function ReviewGroup({ group, query }: { group: ReviewGroupData; query: string }
     : [[group.key, group.value] as const]
 
   return (
-    <section className="overflow-hidden rounded-lg border border-gv-border bg-white/35">
+    <section className={styles.reviewGroup}>
       <button
         type="button"
         onClick={() => setExpanded(current => !current)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gv-pink/5"
+        className={styles.groupButton}
       >
         <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gv-text-muted">{open ? '▾' : '▸'}</span>
-            <h4 className="text-sm font-semibold text-gv-text">{group.label}</h4>
+          <div className={styles.groupTitle}>
+            <svg className={`h-3 w-3 text-gv-text-muted transition-transform ${open ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m9 6 6 6-6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            <h4>{group.label}</h4>
             {group.count !== undefined && (
-              <span className="rounded-full bg-gv-pink/10 px-2 py-0.5 text-[10px] text-gv-pink">{group.count}</span>
+              <span className={styles.groupCount}>{group.count}</span>
             )}
           </div>
-          <p className="mt-0.5 pl-5 text-[11px] text-gv-text-muted">{group.description}</p>
+          <p className={styles.groupDescription}>{group.description}</p>
         </div>
       </button>
       {open && (
-        <div className="border-t border-gv-border px-4 py-2">
+        <div className={styles.groupBody}>
           {entries.map(([key, value]) => (
             <JsonTreeNode
               key={`${group.key}.${key}`}
@@ -158,9 +161,10 @@ function ReviewGroup({ group, query }: { group: ReviewGroupData; query: string }
 }
 
 export function JsonEditor({ annotation, segmentMetadata, onSave }: Props) {
+  const { t } = useLang()
   const [text, setText] = useState('')
   const [error, setError] = useState<string[]>([])
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(true)
   const [mode, setMode] = useState<'review' | 'raw'>('review')
   const [query, setQuery] = useState('')
 
@@ -175,6 +179,7 @@ export function JsonEditor({ annotation, segmentMetadata, onSave }: Props) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset the editor when the selected segment changes
     setText(sourceText)
     setError([])
+    setExpanded(true)
   }, [sourceText])
 
   const parsedPreview = useMemo(() => {
@@ -208,64 +213,64 @@ export function JsonEditor({ annotation, segmentMetadata, onSave }: Props) {
     return [
       {
         key: 'segment',
-        label: 'Segment Overview',
-        description: 'Identity and exact time range for this segment.',
+        label: t('annotation.group.segment'),
+        description: t('annotation.group.segment_desc'),
         value: { segmentId: preview.segmentId, start: preview.start, end: preview.end },
         defaultOpen: true,
       },
       {
         key: 'scene',
-        label: 'Scene & Camera',
-        description: 'Segment-level environment and camera semantics.',
+        label: t('annotation.group.scene'),
+        description: t('annotation.group.scene_desc'),
         value: { scene: preview.scene, camera: preview.camera },
         defaultOpen: true,
       },
       {
         key: 'persons',
-        label: 'Persons',
-        description: 'Person identities, appearance, actions, clothing, and summary boxes.',
+        label: t('annotation.group.persons'),
+        description: t('annotation.group.persons_desc'),
         value: persons,
         count: persons.length,
       },
       {
         key: 'objects',
-        label: 'Objects',
-        description: 'Non-text object tracks and their semantic attributes.',
+        label: t('annotation.group.objects'),
+        description: t('annotation.group.objects_desc'),
         value: objects,
         count: objects.length,
       },
       {
         key: 'events',
-        label: 'Visual Events',
-        description: 'Short descriptions of activities visible in the segment.',
+        label: t('annotation.group.events'),
+        description: t('annotation.group.events_desc'),
         value: events,
         count: events.length,
       },
       {
         key: 'text',
-        label: 'OCR & Speech',
-        description: 'Reviewed on-screen text and the segment speech transcript.',
+        label: t('annotation.group.text'),
+        description: t('annotation.group.text_desc'),
         value: { speechTranscript, ocrObjects },
         count: ocrObjects.length + (speechTranscript ? 1 : 0),
       },
       {
         key: 'frames',
-        label: 'Sampled Frames',
-        description: 'Per-sampled-frame observations. Kept collapsed because this section can be large.',
+        label: t('annotation.group.frames'),
+        description: t('annotation.group.frames_desc'),
         value: frames,
         count: frames.length,
       },
     ]
-  }, [preview])
+  }, [preview, t])
 
   if (!expanded) {
     return (
       <button
         type="button"
         onClick={() => setExpanded(true)}
-        className="mt-2 text-xs text-gv-text-muted underline hover:text-gv-pink"
+        className={styles.reviewTrigger}
       >
-        Review Segment Data / Raw JSON
+        {t('annotation.review_data_trigger')}
       </button>
     )
   }
@@ -279,7 +284,7 @@ export function JsonEditor({ annotation, segmentMetadata, onSave }: Props) {
       setText(JSON.stringify(parsed, null, 2))
       setError([])
     } catch (caught) {
-      setError([`Invalid JSON: ${String(caught)}`])
+      setError([t('annotation.invalid_json', String(caught))])
     }
   }
 
@@ -298,126 +303,128 @@ export function JsonEditor({ annotation, segmentMetadata, onSave }: Props) {
       setText(JSON.stringify(authoritative, null, 2))
       setError([])
     } catch (caught) {
-      setError([`Invalid JSON: ${String(caught)}`])
+      setError([t('annotation.invalid_json', String(caught))])
     }
   }
 
   return (
-    <div className="mt-4 rounded-xl border border-gv-border bg-white/20 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className={styles.reviewShell}>
+      <div className={styles.reviewHeader}>
         <div>
-          <h3 className="text-sm font-semibold text-gv-text">Segment Data Review</h3>
-          <p className="mt-0.5 text-xs text-gv-text-muted">
-            Review grouped annotation data here. Use Raw JSON only for advanced whole-segment edits.
-          </p>
+          <h3>{t('annotation.json_review_title')}</h3>
+          <p>{t('annotation.json_review_desc')}</p>
         </div>
         <button
           type="button"
           onClick={() => setExpanded(false)}
-          className="rounded px-2 py-1 text-xs text-gv-text-dim hover:bg-gv-bg-deep"
+          className={styles.closeButton}
         >
-          Close
+          {t('annotation.close')}
         </button>
       </div>
 
-      <div className="mt-4 flex gap-2 border-b border-gv-border">
+      <div className={styles.reviewTabs} role="tablist" aria-label={t('annotation.json_mode_label')}>
         <button
           type="button"
           onClick={() => setMode('review')}
-          className={`border-b-2 px-3 py-2 text-xs font-medium ${mode === 'review' ? 'border-gv-pink text-gv-pink' : 'border-transparent text-gv-text-muted'}`}
+          className={`${styles.reviewTab} ${mode === 'review' ? styles.reviewTabActive : ''}`}
+          role="tab"
+          aria-selected={mode === 'review'}
         >
-          Structured Review
+          {t('annotation.structured_review')}
         </button>
         <button
           type="button"
           onClick={() => setMode('raw')}
-          className={`border-b-2 px-3 py-2 text-xs font-medium ${mode === 'raw' ? 'border-gv-pink text-gv-pink' : 'border-transparent text-gv-text-muted'}`}
+          className={`${styles.reviewTab} ${mode === 'raw' ? styles.reviewTabActive : ''}`}
+          role="tab"
+          aria-selected={mode === 'raw'}
         >
-          Raw JSON (Advanced)
+          {t('annotation.raw_json_advanced')}
         </button>
       </div>
 
       {mode === 'review' ? (
-        <div className="mt-4">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+        <div className={styles.reviewContent} role="tabpanel">
+          <div className={styles.reviewMetrics}>
             {groups.map(group => (
-              <div key={group.key} className="rounded-lg border border-gv-border bg-white/40 px-3 py-2">
-                <p className="truncate text-[10px] uppercase tracking-wide text-gv-text-muted">{group.label}</p>
-                <p className="mt-0.5 text-sm font-semibold text-gv-text">
-                  {group.count ?? (group.key === 'segment' ? `S${String(preview?.segmentId ?? '?')}` : 'Ready')}
-                </p>
+              <div key={group.key} className={styles.reviewMetric}>
+                <span>{group.label}</span>
+                <strong>
+                  {group.count ?? (group.key === 'segment' ? `S${String(preview?.segmentId ?? '?')}` : t('annotation.ready'))}
+                </strong>
               </div>
             ))}
           </div>
 
-          <div className="mt-3">
-            <label className="text-[11px] font-medium text-gv-text-dim" htmlFor="segment-json-search">Search fields or values</label>
+          <div className={styles.searchBlock}>
+            <label htmlFor="segment-json-search">{t('annotation.search_fields')}</label>
             <input
               id="segment-json-search"
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder="e.g. personId, chicken, speechTranscript"
-              className="mt-1 w-full rounded-lg border border-gv-border bg-white/50 px-3 py-2 text-xs text-gv-text outline-none focus:border-gv-pink"
+              placeholder={t('annotation.search_fields_placeholder')}
+              className={styles.searchInput}
             />
           </div>
 
           {!parsedPreview && text && (
-            <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Raw JSON currently contains a syntax error. This review preview is showing the last saved annotation.
+            <p className={styles.syntaxWarning} role="status">
+              {t('annotation.json_syntax_warning')}
             </p>
           )}
 
-          <div className="mt-3 space-y-2">
+          <div className={styles.reviewGroups}>
             {matchedGroups.length > 0 ? matchedGroups.map(group => (
               <ReviewGroup key={group.key} group={group} query={normalizedQuery} />
             )) : (
-              <p className="rounded-lg border border-gv-border px-3 py-6 text-center text-xs text-gv-text-muted">
-                No fields or values match “{query}”.
+              <p className={styles.reviewEmpty}>
+                {t('annotation.no_search_matches', query)}
               </p>
             )}
           </div>
         </div>
       ) : (
-        <div className="mt-4">
-          <p className="mb-2 text-xs text-gv-text-muted">
-            This is whole-segment internal data and may include all sampled frames, OCR, and speech. Saving replaces the complete human annotation after validation.
+        <div className={styles.reviewContent} role="tabpanel">
+          <p className={styles.rawIntro}>
+            {t('annotation.raw_json_intro')}
           </p>
           <textarea
             value={text}
             onChange={event => { setText(event.target.value); setError([]) }}
-            className="h-[32rem] w-full resize-y rounded-lg border border-gv-border bg-gv-bg-deep p-3 font-mono text-xs focus:border-gv-pink focus:outline-none"
+            className={styles.rawTextarea}
             spellCheck={false}
           />
           {error.length > 0 && (
-            <div className="mt-2 rounded-lg border border-gv-pink/40 bg-gv-pink/5 px-3 py-2">
-              <p className="text-xs font-medium text-gv-pink">Cannot apply this JSON</p>
-              <ul className="mt-1 list-disc pl-4 text-xs text-gv-pink">
+            <div className={styles.validationError} role="alert">
+              <p>{t('annotation.cannot_apply_json')}</p>
+              <ul>
                 {error.slice(0, 12).map(message => <li key={message}>{message}</li>)}
               </ul>
-              {error.length > 12 && <p className="mt-1 text-xs text-gv-pink">And {error.length - 12} more errors.</p>}
+              {error.length > 12 && <p>{t('annotation.more_errors', error.length - 12)}</p>}
             </div>
           )}
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className={styles.rawActions}>
             <button
               type="button"
               onClick={applyRawJson}
-              className="rounded bg-gv-green/20 px-3 py-1.5 text-xs font-medium text-gv-green-deep hover:bg-gv-green/30"
+              className={styles.applyButton}
             >
-              Validate &amp; Apply JSON
+              {t('annotation.validate_apply_json')}
             </button>
             <button
               type="button"
               onClick={formatRawJson}
-              className="btn-outline rounded px-3 py-1.5 text-xs"
+              className={styles.secondaryButton}
             >
-              Format JSON
+              {t('annotation.format_json')}
             </button>
             <button
               type="button"
               onClick={() => { setText(sourceText); setError([]) }}
-              className="btn-outline rounded px-3 py-1.5 text-xs"
+              className={styles.secondaryButton}
             >
-              Reset Unsaved Changes
+              {t('annotation.reset_unsaved')}
             </button>
           </div>
         </div>

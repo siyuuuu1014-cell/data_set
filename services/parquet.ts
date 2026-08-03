@@ -4,7 +4,7 @@
  * Only used in API routes (server-side, not client).
  */
 
-import { mkdirSync, existsSync, unlinkSync, rmdirSync, readdirSync } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, rmdirSync, readdirSync, renameSync } from 'fs'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
 import type { ColumnDef } from './types'
@@ -73,23 +73,20 @@ export async function writeParquet(
   columns: ColumnDef[],
   rows: Record<string, unknown>[]
 ): Promise<string> {
-  const dir = getProjectDir(projectId)
+const dir = getProjectDir(projectId)
   ensureDir(dir)
   const filePath = getParquetPath(projectId, tableName)
-
-  if (existsSync(filePath)) {
-    unlinkSync(filePath)
-  }
+  const tmpPath = `${filePath}.tmp`
 
   const schema = new parquet.ParquetSchema(buildParquetSchema(columns))
-  const writer = await parquet.ParquetWriter.openFile(schema, filePath)
+  const writer = await parquet.ParquetWriter.openFile(schema, tmpPath)
 
   try {
     for (const row of rows) {
       const out: Record<string, unknown> = {}
       for (const col of columns) {
         let val = row[col.name]
-        if (col.type === 'boolean') val = val ? 1 : 0
+        if (col.type === 'boolean' && val != null) val = val ? 1 : 0
         if (col.type === 'number') {
           if (typeof val === 'string') { const num = Number(val); val = isNaN(num) ? null : num }
           else if (typeof val !== 'number' && val !== null && val !== undefined) { const num = Number(val); val = isNaN(num) ? null : num }
@@ -99,9 +96,11 @@ export async function writeParquet(
       await writer.appendRow(out)
     }
     await writer.close()
+    ensureDir(dir)
+    renameSync(tmpPath, filePath)
   } catch (err) {
     try { await writer.close() } catch {}
-    try { unlinkSync(filePath) } catch {}
+    try { unlinkSync(tmpPath) } catch {}
     throw err
   }
   return filePath
@@ -115,17 +114,31 @@ export async function readParquet(
   if (!existsSync(filePath)) return []
 
   // Try parquetjs first, fall back to Python for externally-written files
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let reader: any = null
   try {
-    const reader = await parquet.ParquetReader.openFile(filePath)
+    reader = await parquet.ParquetReader.openFile(filePath)
     const cursor = reader.getCursor()
     const rows: Record<string, unknown>[] = []
     let row = null
     while ((row = await cursor.next())) rows.push(row)
-    await reader.close()
-    if (rows.length > 0 && Object.keys(rows[0]).length > 0) return rows
+    if (rows.length > 0 && Object.keys(rows[0]).length > 0) {
+      // parquetjs omits null-valued keys entirely — restore them as null so
+      // consumers get a stable schema shape
+      const allKeys = new Set<string>()
+      for (const r of rows) for (const key of Object.keys(r)) allKeys.add(key)
+      for (const r of rows) {
+        for (const key of allKeys) {
+          if (r[key] === undefined) r[key] = null
+        }
+      }
+      return rows
+    }
     // Empty objects — file was written by pandas/pyarrow, fall through to Python
   } catch {
     // parquetjs failed completely — fall through to Python
+  } finally {
+    try { await reader?.close() } catch {}
   }
   return readParquetViaPython(filePath)
 }
@@ -137,6 +150,24 @@ export async function countParquet(projectId: string, tableName: string): Promis
 
 export function parquetExists(projectId: string, tableName: string): boolean {
   return existsSync(getParquetPath(projectId, tableName))
+}
+
+export class ParquetRenameConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ParquetRenameConflictError'
+  }
+}
+
+export function renameParquet(projectId: string, fromName: string, toName: string): boolean {
+  const fromPath = getParquetPath(projectId, fromName)
+  const toPath = getParquetPath(projectId, toName)
+  if (!existsSync(fromPath)) return false
+  if (existsSync(toPath)) {
+    throw new ParquetRenameConflictError(`表名 "${toName}" 已存在，无法重命名`)
+  }
+  renameSync(fromPath, toPath)
+  return true
 }
 
 export function deleteParquetTable(projectId: string, tableName: string): void {

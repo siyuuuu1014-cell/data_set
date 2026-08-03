@@ -68,7 +68,9 @@ export async function POST(
     }
 
     const files = await readdir(getUploadDir(video.videoId))
-    const sourceFile = files.find(file => file.startsWith('source.'))
+    // Match the exact same pattern getUploadFile validates, so a filename like
+    // "source.mp4 (1)" cannot pass the scan and then fail path validation.
+    const sourceFile = files.find(file => /^source\.[A-Za-z0-9]+$/.test(file))
     if (!sourceFile) {
       return Response.json({ error: { code: 'NOT_FOUND', message: 'Video source file not found' } }, { status: 404 })
     }

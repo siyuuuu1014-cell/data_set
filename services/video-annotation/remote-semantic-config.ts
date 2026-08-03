@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ApiFormat } from '@/services/types'
 import { UnsafeLlmUrlError, validateLlmBaseUrl } from '@/services/llm-url-policy'
@@ -78,8 +78,11 @@ export function normalizeVideoSemanticConfig(
 
 export async function writeVideoSemanticConfig(config: VideoSemanticConfig): Promise<void> {
   await mkdir(dirname(CONFIG_FILE), { recursive: true })
-  const tempFile = `${CONFIG_FILE}.tmp`
+  // Unique temp sibling avoids concurrent writers clobbering each other's file
+  const tempFile = `${CONFIG_FILE}.tmp-${process.pid}-${Date.now().toString(36)}`
   await writeFile(tempFile, JSON.stringify(config, null, 2), 'utf8')
+  // The file contains an API key — restrict to the owning user
+  await chmod(tempFile, 0o600).catch(() => {})
   await rename(tempFile, CONFIG_FILE)
 }
 

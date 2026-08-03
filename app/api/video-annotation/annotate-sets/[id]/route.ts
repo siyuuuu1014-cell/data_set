@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server'
-import { readFile, writeFile, rmdir } from 'fs/promises'
+import { readFile, rm } from 'fs/promises'
 import { existsSync } from 'fs'
 import { getJobStatus } from '@/services/video-annotation/worker-client'
 import type { AnnotateSet, SegmentAnnotation } from '@/services/video-annotation/types'
 import { withDerivedAnnotationStatuses } from '@/services/video-annotation/status'
 import { isUnsafePathError } from '@/services/server-paths'
-import { getTaskDir, getTaskPath } from '@/services/video-annotation/server-paths'
-import { withTaskFileLock } from '@/services/video-annotation/task-file-lock'
+import { getTaskDir, getTaskPath, getUploadDir, getVideoIdentityCachePath } from '@/services/video-annotation/server-paths'
+import { withTaskFileLock, writeTaskFileAtomic } from '@/services/video-annotation/task-file-lock'
 import { applyCompletedModelResult, applyIdentityAliasesToVideo } from '@/services/video-annotation/model-result'
 import { repairLegacyMultipartFilename } from '@/services/video-annotation/upload-stream'
 import { repairLegacyOcrObjectCollisions } from '@/services/video-annotation/annotation-migrations'
@@ -84,12 +84,14 @@ export async function GET(
               }
             }
           } catch {
+            // Worker unreachable is transient — keep the segment processing so
+            // the next poll retries instead of permanently failing a running job
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const s = seg as any
-            s.status = 'failed'
-            s.error = 'Worker unreachable'
-            delete s.processingMode
-            modified = true
+            if (s.progressPhase !== 'worker_unreachable') {
+              s.progressPhase = 'worker_unreachable'
+              modified = true
+            }
           }
         }
       }
@@ -101,7 +103,7 @@ export async function GET(
       const normalizedTask = withDerivedAnnotationStatuses(task)
       const statusChanged = normalizedTask.status !== task.status || normalizedTask.videos.some((video, index) => video.status !== task.videos[index]?.status)
       if (modified || statusChanged) {
-        await writeFile(taskPath, JSON.stringify(normalizedTask, null, 2))
+        await writeTaskFileAtomic(taskPath, JSON.stringify(normalizedTask, null, 2))
       }
 
       return Response.json({ data: normalizedTask })
@@ -125,11 +127,23 @@ export async function PUT(
     }
 
     const body = await req.json() as Partial<AnnotateSet>
+    // Lightweight shape validation: videos must be a well-formed array and
+    // scalar fields must keep their types, so a corrupt/abusive body cannot
+    // wipe or corrupt the task document.
+    if (body.videos !== undefined && (!Array.isArray(body.videos) || body.videos.some(v => !v || typeof v.videoId !== 'string'))) {
+      return Response.json({ error: { code: 'VALIDATION', message: 'Invalid videos payload' } }, { status: 400 })
+    }
+    for (const key of ['name', 'status'] as const) {
+      const value = body[key]
+      if (value !== undefined && typeof value !== 'string') {
+        return Response.json({ error: { code: 'VALIDATION', message: `Invalid ${key} payload` } }, { status: 400 })
+      }
+    }
     return await withTaskFileLock(taskPath, async () => {
       const raw = await readFile(taskPath, 'utf-8')
       const task = JSON.parse(raw) as AnnotateSet
       const updated = withDerivedAnnotationStatuses({ ...task, ...body, id, updatedAt: new Date().toISOString() } as AnnotateSet)
-      await writeFile(taskPath, JSON.stringify(updated, null, 2))
+      await writeTaskFileAtomic(taskPath, JSON.stringify(updated, null, 2))
       return Response.json({ data: updated })
     })
   } catch (err) {
@@ -146,10 +160,44 @@ export async function DELETE(
   const { id } = await params
   try {
     const taskDir = getTaskDir(id)
-    if (existsSync(taskDir)) {
-      await rmdir(taskDir, { recursive: true })
+    if (!existsSync(taskDir)) {
+      return Response.json({ success: true })
     }
-    return Response.json({ success: true })
+
+    // Collect owned video IDs from the task file before it is removed, then
+    // best-effort clean up each video's uploads and identity cache — the same
+    // derived-file cleanup the per-video DELETE performs.
+    const videoIds: string[] = []
+    const taskPath = getTaskPath(id)
+    if (existsSync(taskPath)) {
+      await withTaskFileLock(taskPath, async () => {
+        try {
+          const task = JSON.parse(await readFile(taskPath, 'utf-8')) as AnnotateSet
+          for (const video of task.videos || []) {
+            if (typeof video.videoId === 'string') videoIds.push(video.videoId)
+          }
+        } catch {
+          // Corrupt task file: nothing to recover — proceed with directory removal
+        }
+      })
+    }
+
+    const cleanup = await Promise.allSettled(videoIds.map(async videoId => {
+      // videoId originates from a task file, so it must be validated before
+      // it is used to build any filesystem path.
+      const uploadDir = getUploadDir(videoId)
+      const identityPath = getVideoIdentityCachePath(videoId)
+      const identityLockPath = identityPath.replace(/\.json$/i, '.lock')
+      await Promise.allSettled([
+        rm(uploadDir, { recursive: true, force: true }),
+        rm(identityPath, { force: true }),
+        rm(identityLockPath, { force: true }),
+      ])
+    }))
+    const cleanupPending = cleanup.some(result => result.status === 'rejected')
+
+    await rm(taskDir, { recursive: true, force: true })
+    return Response.json({ success: true, cleanupPending })
   } catch (err) {
     if (isUnsafePathError(err)) return Response.json({ error: { code: 'VALIDATION', message: err.message } }, { status: 400 })
     return Response.json({ error: { code: 'INTERNAL', message: String(err) } }, { status: 500 })

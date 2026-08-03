@@ -9,8 +9,18 @@ import {
 } from '@/services/video-annotation/remote-semantic-config'
 
 export async function GET() {
-  const config = await readVideoSemanticConfig()
-  return Response.json(publicVideoSemanticConfig(config))
+  try {
+    const config = await readVideoSemanticConfig()
+    return Response.json(publicVideoSemanticConfig(config))
+  } catch (error) {
+    // A corrupt config file must return a JSON error like POST does, not an
+    // HTML 500 page.
+    const message = error instanceof Error ? error.message : '读取视频语义配置失败'
+    return Response.json(
+      { error: message },
+      { status: error instanceof VideoSemanticConfigError || error instanceof SyntaxError ? 400 : 500 },
+    )
+  }
 }
 
 export async function POST(request: Request) {

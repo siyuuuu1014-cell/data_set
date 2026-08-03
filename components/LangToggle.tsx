@@ -6,13 +6,18 @@ import { useLang } from '@/services/i18n'
 type LangToggleProps = {
   className?: string
   hideOnHome?: boolean
+  hideOnManual?: boolean
 }
 
-export function LangToggle({ className, hideOnHome = false }: LangToggleProps) {
+export function LangToggle({
+  className,
+  hideOnHome = false,
+  hideOnManual = false,
+}: LangToggleProps) {
   const { lang, setLang, t } = useLang()
   const pathname = usePathname()
 
-  if (hideOnHome && pathname === '/') return null
+  if ((hideOnHome && pathname === '/') || (hideOnManual && pathname === '/manual')) return null
 
   return (
     <button

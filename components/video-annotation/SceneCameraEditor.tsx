@@ -32,7 +32,7 @@ export function SceneCameraEditor({ scene, camera, events, onChange, onSave, dir
         <Field label={t('annotation.indoor')}>
           <select value={String(place.indoor)}
             onChange={e => onChange({ scene: { ...scene, place: { ...place, indoor: e.target.value === 'true' } } })}
-            className="input-field w-full text-xs py-1.5">
+            className="input-field w-full text-sm py-1.5">
             <option value="true">{t('annotation.yes')}</option>
             <option value="false">{t('annotation.no')}</option>
           </select>
@@ -71,7 +71,7 @@ export function SceneCameraEditor({ scene, camera, events, onChange, onSave, dir
       <Field label={t('annotation.camera_movement')}>
         <input type="text" value={(camera.movement || []).join(', ')}
           onChange={e => onChange({ camera: { ...camera, movement: e.target.value.split(',').map(s => s.trim()).filter(Boolean) } })}
-          className="input-field w-full text-xs py-1.5"
+          className="input-field w-full text-sm py-1.5"
           placeholder={t('annotation.camera_movement_placeholder')} />
       </Field>
 
@@ -81,15 +81,15 @@ export function SceneCameraEditor({ scene, camera, events, onChange, onSave, dir
             <div key={i} className="grid grid-cols-[minmax(9rem,0.7fr)_minmax(12rem,1.3fr)_4rem_auto] gap-2 mt-1">
               <EditableSelect value={ev.type} options={EVENT_TYPES}
                 onChange={value => { const next = [...events]; next[i] = { ...next[i], type: value }; onChange({ events: next }) }}
-                selectClassName="input-field w-full text-xs py-1"
-                inputClassName="input-field w-full text-xs py-1" />
+                selectClassName="input-field w-full text-sm py-1"
+                inputClassName="input-field w-full text-sm py-1" />
               <input type="text" value={ev.description || ''}
                 onChange={e => { const next = [...events]; next[i] = { ...next[i], description: e.target.value }; onChange({ events: next }) }}
-                className="input-field w-full text-xs py-1"
+                className="input-field w-full text-sm py-1"
                 placeholder={t('annotation.event_summary_placeholder')} />
               <input type="number" value={ev.confidence} min={0} max={1} step={0.1}
                 onChange={e => { const next = [...events]; next[i] = { ...next[i], confidence: parseFloat(e.target.value) || 0 }; onChange({ events: next }) }}
-                className="input-field w-16 text-xs py-1 text-center" />
+                className="input-field w-16 text-sm py-1 text-center" />
               <button onClick={() => onChange({ events: events.filter((_, j) => j !== i) })}
                 className="text-xs text-gv-pink hover:text-gv-pink-dark" aria-label={t('annotation.remove_event', i + 1)} title={t('annotation.remove_event', i + 1)}>
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">

@@ -862,12 +862,12 @@ export default function TableEditorPage() {
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          <option value="">{t('table.local_match_auto')}</option>
                           {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
@@ -936,12 +936,12 @@ export default function TableEditorPage() {
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          <option value="">{t('table.local_match_auto')}</option>
                           {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
@@ -949,7 +949,7 @@ export default function TableEditorPage() {
                     {col.foreignTable && (
                       <select value={col.parentDateColumn || ''} onChange={(e) => updateEditCol(col.id, { parentDateColumn: e.target.value || undefined })}
                         className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                        <option value="">选择外表日期字段（手动写公式则留空）</option>
+                        <option value="">{t('table.parent_date_pick')}</option>
                         {allTables.find(t => t.id === col.foreignTable)?.columns.filter(c => c.type === 'date').map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                       </select>
                     )}
@@ -1026,12 +1026,12 @@ export default function TableEditorPage() {
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          <option value="">{t('table.local_match_auto')}</option>
                           {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>

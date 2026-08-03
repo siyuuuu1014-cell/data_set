@@ -5,6 +5,7 @@ import type { ManualSection } from './MarkdownManual'
 
 type ManualTocProps = {
   sections: ManualSection[]
+  ariaLabel?: string
   className?: string
   linkClassName?: string
   activeLinkClassName?: string
@@ -12,6 +13,7 @@ type ManualTocProps = {
 
 export function ManualToc({
   sections,
+  ariaLabel = '用户手册目录',
   className,
   linkClassName,
   activeLinkClassName,
@@ -46,7 +48,7 @@ export function ManualToc({
   }, [sections])
 
   return (
-    <nav className={className} aria-label="用户手册目录">
+    <nav className={className} aria-label={ariaLabel}>
       {sections.map(section => (
         <a
           className={`${linkClassName ?? ''} ${activeId === section.id ? activeLinkClassName ?? '' : ''}`.trim()}

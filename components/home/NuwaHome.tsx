@@ -26,7 +26,7 @@ const WORKSPACES = [
 ] as const
 
 export function NuwaHome() {
-  const { t } = useLang()
+  const { lang, t } = useLang()
 
   return (
     <main className={styles.page}>
@@ -63,7 +63,7 @@ export function NuwaHome() {
       </header>
 
       <div className={styles.content}>
-        <section className={styles.homeThesis} aria-labelledby="home-title">
+        <section className={styles.homeThesis} data-lang={lang} aria-labelledby="home-title">
           <div className={styles.homeIntroduction}>
             <div className={styles.homeStatement}>
               <h1 id="home-title">
@@ -121,9 +121,19 @@ export function NuwaHome() {
         </section>
       </div>
 
-      <Link className={styles.manualLink} href="/manual">
-        {t('home.landing.manual')}
-      </Link>
+      <nav className={styles.resourceLinks} aria-label={t('home.landing.resources_aria')}>
+        <a
+          className={styles.resourceLink}
+          href="https://www.wenyaotech.com/products?category=zhere&product=zhere"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t('home.landing.learn_more')}
+        </a>
+        <Link className={styles.resourceLink} href="/manual">
+          {t('home.landing.manual')}
+        </Link>
+      </nav>
     </main>
   )
 }

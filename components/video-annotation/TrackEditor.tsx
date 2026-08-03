@@ -53,7 +53,7 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
           <Field label={t('annotation.occlusion')}>
             <input type="number" value={person.occlusion} min={0} max={1} step={0.05}
               onChange={e => onChange({ ...person, occlusion: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)) })}
-              className="input-field w-full text-xs py-1.5" />
+              className="input-field w-full text-sm py-1.5" />
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -71,7 +71,7 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
             type="text"
             value={person.action?.join(', ') || ''}
             onChange={e => onChange({ ...person, action: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-            className="input-field w-full text-xs py-1.5"
+            className="input-field w-full text-sm py-1.5"
             placeholder={t('annotation.actions_placeholder')}
           />
         </Field>
@@ -84,14 +84,14 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
                 const next = [...(person.clothing || [])]
                 next[i] = { ...next[i], type: value }
                 onChange({ ...person, clothing: next })
-                }} selectClassName="input-field w-full text-xs py-1" inputClassName="input-field w-full text-xs py-1" />
+                }} selectClassName="input-field w-full text-sm py-1" inputClassName="input-field w-full text-sm py-1" />
               </div>
               <div className="w-28">
                 <EditableSelect value={c.color} options={CLOTHING_COLORS} onChange={value => {
                 const next = [...(person.clothing || [])]
                 next[i] = { ...next[i], color: value }
                 onChange({ ...person, clothing: next })
-                }} selectClassName="input-field w-full text-xs py-1" inputClassName="input-field w-full text-xs py-1" />
+                }} selectClassName="input-field w-full text-sm py-1" inputClassName="input-field w-full text-sm py-1" />
               </div>
               <button onClick={() => {
                 const next = (person.clothing || []).filter((_, j) => j !== i)
@@ -132,7 +132,7 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
       <div className="space-y-3">
         <Field label={t('annotation.name')}>
           <input type="text" value={object.name} onChange={e => onChange({ ...object, name: e.target.value })}
-            className="input-field w-full text-xs py-1.5" />
+            className="input-field w-full text-sm py-1.5" />
         </Field>
         <Field label={t('annotation.category')}>
           <EditableSelect value={object.category} options={OBJECT_CATEGORIES}
@@ -144,7 +144,7 @@ export function TrackEditor({ person, object, onChange, onSave, dirty, detection
         </Field>
         <Field label={t('annotation.brand')}>
           <input type="text" value={object.brand || ''} onChange={e => onChange({ ...object, brand: e.target.value || null })}
-            className="input-field w-full text-xs py-1.5" placeholder={t('annotation.brand_placeholder')} />
+            className="input-field w-full text-sm py-1.5" placeholder={t('annotation.brand_placeholder')} />
         </Field>
         <p className="text-xs text-gv-text-muted">
           {object.bbox ? `${t('annotation.bbox')}: [${object.bbox.x},${object.bbox.y} ${object.bbox.width}×${object.bbox.height}]` : t('annotation.location_unknown')}

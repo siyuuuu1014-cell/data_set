@@ -72,3 +72,18 @@ workers/video-annotation/cache/
 
 # Project snapshot
 project_tree.txt
+
+# Design / review / demo artifacts (local only, not for publishing)
+.impeccable/
+.hermes/
+app/ui-review/
+components/ui-review/
+app/design-demo/
+components/design-demo/
+app/home-demo/
+components/home-demo/
+app/restore/
+app/api/restore/
+public/restore.html
+public/restore.js
+PROJECT_STATUS_AND_ISSUES.md

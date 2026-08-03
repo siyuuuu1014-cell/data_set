@@ -27,7 +27,7 @@ export default function RootLayout({
           <ConfirmProvider>
             <StoreProvider>
               <div className="fixed bottom-4 right-4 z-50">
-                <LangToggle hideOnHome />
+                <LangToggle hideOnHome hideOnManual />
               </div>
               {children}
             </StoreProvider>

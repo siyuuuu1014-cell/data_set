@@ -47,7 +47,7 @@
 
 .searchBlock { margin-top: var(--ui-space-3); }
 .searchBlock label { display: block; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); font-weight: 620; }
-.searchInput { width: 100%; min-height: var(--ui-control-sm); margin-top: var(--ui-space-1); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); padding: 0 var(--ui-space-3); background: var(--ui-surface); color: var(--ui-text); font-size: var(--ui-text-xs); outline: 0; }
+.searchInput { width: 100%; min-height: var(--ui-control-sm); margin-top: var(--ui-space-1); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); padding: 0 var(--ui-space-3); background: var(--ui-surface); color: var(--ui-text); font-size: var(--ui-text-sm); outline: 0; }
 .searchInput::placeholder { color: var(--ui-text-muted); }
 .searchInput:focus { border-color: var(--ui-accent); box-shadow: 0 0 0 3px var(--ui-focus-ring); }
 
@@ -75,20 +75,20 @@
 .treeButton { width: 100%; min-height: 2rem; display: flex; align-items: center; gap: var(--ui-space-2); border: 0; padding: var(--ui-space-1) 0; background: transparent; color: var(--ui-text-secondary); text-align: left; }
 .treeButton:hover { color: var(--ui-accent-hover); }
 .treeChevron { width: .75rem; color: var(--ui-text-muted); }
-.treeLabel { overflow-wrap: anywhere; color: var(--ui-text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--ui-text-xs); font-weight: 620; }
+.treeLabel { overflow-wrap: anywhere; color: var(--ui-text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--ui-text-sm); font-weight: 620; }
 .treeCount { border-radius: var(--ui-radius-xs); padding: 2px 6px; background: var(--ui-surface-subtle); color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
 .treeChildren { margin-left: var(--ui-space-1); }
 .treeEmpty { margin: 0; padding: var(--ui-space-2) 0 var(--ui-space-2) var(--ui-space-5); color: var(--ui-text-muted); font-size: var(--ui-text-xs); font-style: italic; }
 .treeLeaf { display: grid; grid-template-columns: minmax(7.5rem, .7fr) minmax(0, 1.3fr); gap: var(--ui-space-3); border-bottom: 1px solid var(--ui-border); padding: var(--ui-space-2) 0; }
 .treeLeaf:last-child { border-bottom: 0; }
-.treeLeafLabel { overflow-wrap: anywhere; color: var(--ui-text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--ui-text-xs); }
-.treeValue { overflow-wrap: anywhere; color: var(--ui-text); font-size: var(--ui-text-xs); }
+.treeLeafLabel { overflow-wrap: anywhere; color: var(--ui-text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--ui-text-sm); }
+.treeValue { overflow-wrap: anywhere; color: var(--ui-text); font-size: var(--ui-text-sm); }
 .valueNull { color: var(--ui-text-muted); font-style: italic; }
 .valueNumber { color: var(--ui-warning); font-variant-numeric: tabular-nums; }
 .valueBoolean { color: var(--ui-info); }
 
 .rawIntro { margin: 0 0 var(--ui-space-2); color: var(--ui-text-muted); font-size: var(--ui-text-xs); line-height: var(--ui-leading-normal); }
-.rawTextarea { width: 100%; min-height: 26rem; resize: vertical; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); padding: var(--ui-space-3); background: var(--ui-code-surface, var(--ui-surface-subtle)); color: var(--ui-text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--ui-text-xs); line-height: 1.55; outline: 0; tab-size: 2; }
+.rawTextarea { width: 100%; min-height: 26rem; resize: vertical; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm); padding: var(--ui-space-3); background: var(--ui-code-surface, var(--ui-surface-subtle)); color: var(--ui-text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: var(--ui-text-sm); line-height: 1.55; outline: 0; tab-size: 2; }
 .rawTextarea:focus { border-color: var(--ui-accent); box-shadow: 0 0 0 3px var(--ui-focus-ring); }
 .rawActions { display: flex; flex-wrap: wrap; gap: var(--ui-space-2); margin-top: var(--ui-space-3); }
 .applyButton,

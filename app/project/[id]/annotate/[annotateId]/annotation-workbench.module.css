@@ -29,7 +29,7 @@
 .routeState a:hover { border-bottom-color: currentColor; }
 
 .formalWorkbench {
-  --workbench-title-size: 1rem;
+  --workbench-title-size: 1.125rem;
   --workbench-section-size: var(--ui-text-sm);
   --workbench-control-size: 0.75rem;
   --workbench-meta-size: var(--ui-text-xs);

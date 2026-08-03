@@ -18,8 +18,8 @@ export function EditableSelect({
   value,
   options,
   onChange,
-  selectClassName = 'input-field w-full text-xs py-1.5',
-  inputClassName = 'input-field w-full text-xs py-1.5',
+  selectClassName = 'input-field w-full text-sm py-1.5',
+  inputClassName = 'input-field w-full text-sm py-1.5',
   placeholder,
 }: Props) {
   const { t } = useLang()

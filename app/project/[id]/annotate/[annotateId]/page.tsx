@@ -264,7 +264,7 @@ function TrackReviewEditor({
             </span>
           </div>
           {analysisResult && (
-            <div className="mt-3 space-y-2 text-xs">
+            <div className="mt-3 space-y-2 text-sm">
               <p className="text-gv-text-muted">
                 {t('annotation.analysis_source', analysisResult.source === 'remote_api' ? 'Remote API' : 'Local Qwen', analysisResult.timestamp.toFixed(3))}
               </p>
@@ -288,7 +288,7 @@ function TrackReviewEditor({
         </div>
       )}
       <div className="mt-3 border-t border-gv-border/60 pt-3">
-        <p className="mb-2 text-xs font-medium text-gv-text">
+        <p className="mb-2 text-sm font-medium text-gv-text">
           {t('annotation.convert_type', selectedEntityType === 'person' ? t('annotation.person_to_object') : t('annotation.object_to_person'))}
         </p>
         {selectedEntityType === 'person' && (
@@ -297,7 +297,7 @@ function TrackReviewEditor({
             onChange={event => setConversionLabel(event.target.value)}
             placeholder={t('video.object_label_required')}
             aria-label={t('video.object_label_required')}
-            className="mb-2 w-full rounded border border-gv-border bg-gv-bg px-2 py-1.5 text-xs text-gv-text"
+            className="mb-2 w-full rounded border border-gv-border bg-gv-bg px-2 py-1.5 text-sm text-gv-text"
           />
         )}
         <div className="flex flex-wrap gap-2">

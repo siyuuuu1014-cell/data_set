@@ -1,58 +1,114 @@
 <svg width="571" height="576" viewBox="0 0 571 576" fill="none" xmlns="http://www.w3.org/2000/svg">
   <style>
-    .color-flow-layer { display: none; }
+    .animated-ink { display: none; }
 
     @media (prefers-reduced-motion: no-preference) {
+      .static-reveal { display: none; }
+      .animated-ink { display: block; }
+      .paint-stroke {
+        fill: none;
+        stroke: white;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 1;
+        stroke-dashoffset: 1;
+      }
+      .outer-stroke { animation: draw-outer 5.6s linear 1 forwards; }
+      .lower-stroke { animation: draw-lower 5.6s linear 1 forwards; }
+      .figure-stroke { animation: draw-figure 5.6s linear 1 forwards; }
+      .ribbon-stroke { animation: draw-ribbon 5.6s linear 1 forwards; }
+      .detail-stroke { animation: draw-detail 5.6s linear 1 forwards; }
+      .final-reveal { animation: reveal-complete 5.6s linear 1 forwards; }
       .brand-artwork {
         animation:
-          color-deepen 5.4s cubic-bezier(0.16, 1, 0.3, 1) 1 forwards,
-          logo-breathe 6.8s cubic-bezier(0.45, 0, 0.55, 1) 5.4s infinite;
-      }
-      .color-flow-layer {
-        display: block;
-        opacity: 0;
-        mix-blend-mode: overlay;
-        animation:
-          color-flow-enter 5.4s cubic-bezier(0.16, 1, 0.3, 1) forwards,
-          color-flow-breathe 6.8s cubic-bezier(0.45, 0, 0.55, 1) 5.4s infinite;
+          color-deepen 5.6s linear 1 forwards,
+          logo-breathe-handoff 0.8s cubic-bezier(0.45, 0, 0.55, 1) 5.6s 1 forwards,
+          logo-breathe 6.8s cubic-bezier(0.45, 0, 0.55, 1) 6.4s infinite;
       }
     }
 
+    @keyframes draw-outer {
+      0%, 3% { stroke-dashoffset: 1; opacity: 0; }
+      6% { opacity: 1; }
+      30%, 100% { stroke-dashoffset: 0; opacity: 1; }
+    }
+    @keyframes draw-lower {
+      0%, 12% { stroke-dashoffset: 1; opacity: 0; }
+      15% { opacity: 1; }
+      42%, 100% { stroke-dashoffset: 0; opacity: 1; }
+    }
+    @keyframes draw-figure {
+      0%, 22% { stroke-dashoffset: 1; opacity: 0; }
+      25% { opacity: 1; }
+      58%, 100% { stroke-dashoffset: 0; opacity: 1; }
+    }
+    @keyframes draw-ribbon {
+      0%, 34% { stroke-dashoffset: 1; opacity: 0; }
+      37% { opacity: 1; }
+      70%, 100% { stroke-dashoffset: 0; opacity: 1; }
+    }
+    @keyframes draw-detail {
+      0%, 45% { stroke-dashoffset: 1; opacity: 0; }
+      48% { opacity: 1; }
+      78%, 100% { stroke-dashoffset: 0; opacity: 1; }
+    }
+    @keyframes reveal-complete {
+      0%, 76% { opacity: 0; }
+      86%, 100% { opacity: 1; }
+    }
     @keyframes color-deepen {
       0% {
-        opacity: 0.28;
-        filter: saturate(0.22) brightness(1.34);
+        opacity: 0.38;
+        filter: saturate(0.3) brightness(1.28);
       }
       52% {
-        opacity: 0.7;
-        filter: saturate(0.68) brightness(1.12);
+        opacity: 0.68;
+        filter: saturate(0.62) brightness(1.14);
       }
       100% {
         opacity: 1;
         filter: saturate(1) brightness(1);
       }
     }
-    @keyframes color-flow-enter {
-      from { opacity: 0; }
-      to { opacity: 0.72; }
-    }
-    @keyframes color-flow-breathe {
-      0%, 100% { opacity: 0.34; }
-      50% { opacity: 0.88; }
-    }
     @keyframes logo-breathe {
       0%, 100% {
         opacity: 1;
-        filter: saturate(0.82) brightness(1.12);
+        filter: saturate(0.74) brightness(1.18);
       }
       50% {
         opacity: 1;
-        filter: saturate(1.2) brightness(0.9);
+        filter: saturate(1.22) brightness(0.95);
+      }
+    }
+    @keyframes logo-breathe-handoff {
+      from {
+        opacity: 1;
+        filter: saturate(1) brightness(1);
+      }
+      to {
+        opacity: 1;
+        filter: saturate(0.74) brightness(1.18);
       }
     }
   </style>
 
-  <g class="brand-artwork">
+  <mask id="paint-reveal" maskUnits="userSpaceOnUse" x="0" y="0" width="571" height="576">
+    <rect class="static-reveal" width="571" height="576" fill="white"/>
+    <g class="animated-ink">
+      <rect width="571" height="576" fill="black"/>
+      <path class="paint-stroke outer-stroke" pathLength="1" stroke-width="54" d="M16 331C2 222 30 145 92 83C151 24 226 8 302 13C407 20 501 82 552 192"/>
+      <path class="paint-stroke lower-stroke" pathLength="1" stroke-width="62" d="M54 447C112 520 191 556 277 554C379 552 473 495 526 414C557 367 571 306 557 244"/>
+      <path class="paint-stroke figure-stroke" pathLength="1" stroke-width="104" d="M307 105C304 150 291 184 269 215C244 251 242 293 274 326C298 351 291 385 258 413C231 436 229 472 232 507"/>
+      <path class="paint-stroke figure-stroke" pathLength="1" stroke-width="76" d="M242 488C217 434 194 383 161 367C134 354 112 340 95 322"/>
+      <path class="paint-stroke ribbon-stroke" pathLength="1" stroke-width="74" d="M250 505C302 475 350 438 390 386C423 343 446 317 480 286C514 255 528 222 510 192C492 163 453 165 409 176C389 181 374 183 356 181"/>
+      <path class="paint-stroke detail-stroke" pathLength="1" stroke-width="48" d="M271 161C278 142 290 126 305 109C323 139 339 160 355 176"/>
+      <path class="paint-stroke detail-stroke" pathLength="1" stroke-width="56" d="M122 292C136 276 163 271 180 291C164 311 137 312 122 292"/>
+      <path class="paint-stroke detail-stroke" pathLength="1" stroke-width="42" d="M338 276C349 262 371 260 381 277C372 296 350 299 338 276"/>
+      <rect class="final-reveal" width="571" height="576" fill="white" opacity="0"/>
+    </g>
+  </mask>
+
+  <g class="brand-artwork" mask="url(#paint-reveal)">
     <g id="brand-shapes">
     <path class="tone-step tone-4" d="M287.228 165.606C284.206 168.992 279.81 171.125 274.915 171.125C273.184 171.125 271.516 170.856 269.948 170.362C275.215 168.259 280.982 166.589 287.228 165.606ZM274.915 138.125C277.282 138.125 279.533 138.624 281.568 139.522C281.468 140.376 281.415 141.244 281.415 142.125C281.415 148.544 284.165 154.321 288.551 158.342C278.942 159.575 270.338 162.31 262.795 165.82C260.077 162.878 258.415 158.946 258.415 154.625C258.415 145.512 265.802 138.125 274.915 138.125Z" fill="#F33EB4"/>
     <path class="tone-step tone-4" d="M317.837 166.123C330.602 168.274 340.076 172.537 347.367 177.65C344.272 179.838 340.494 181.125 336.415 181.125C327.293 181.125 319.673 174.696 317.837 166.123ZM336.415 143.125C346.908 143.125 355.415 151.631 355.415 162.125C355.415 165.98 354.265 169.566 352.292 172.562C343.711 166.332 332.584 161.321 317.671 159.005C317.679 158.956 317.688 158.906 317.696 158.857C321.228 155.84 323.793 151.725 324.862 147.04C328.063 144.584 332.069 143.125 336.415 143.125Z" fill="#FF9EE5"/>
@@ -73,26 +129,7 @@
     </g>
   </g>
 
-  <g class="color-flow-layer" mask="url(#brand-alpha-mask)">
-    <rect width="571" height="576" fill="url(#color-flow-gradient)"/>
-  </g>
-
   <defs>
-    <linearGradient id="color-flow-gradient" gradientUnits="userSpaceOnUse" x1="-520" y1="-70" x2="230" y2="500">
-      <stop offset="0" stop-color="#FF75D7"/>
-      <stop offset="0.2" stop-color="#FFD6F0"/>
-      <stop offset="0.4" stop-color="#DDF88E"/>
-      <stop offset="0.58" stop-color="#FFF8FC"/>
-      <stop offset="0.76" stop-color="#F45DBE"/>
-      <stop offset="1" stop-color="#BDEB42"/>
-      <animate attributeName="x1" values="-520;430;-520" dur="10.8s" begin="5.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.45 0 0.55 1;0.45 0 0.55 1"/>
-      <animate attributeName="x2" values="230;1180;230" dur="10.8s" begin="5.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.45 0 0.55 1;0.45 0 0.55 1"/>
-      <animate attributeName="y1" values="-70;90;-70" dur="13.6s" begin="5.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.45 0 0.55 1;0.45 0 0.55 1"/>
-      <animate attributeName="y2" values="500;340;500" dur="13.6s" begin="5.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.45 0 0.55 1;0.45 0 0.55 1"/>
-    </linearGradient>
-    <mask id="brand-alpha-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="571" height="576" style="mask-type: alpha">
-      <use href="#brand-shapes"/>
-    </mask>
     <linearGradient id="paint0_linear_116_292" x1="343.415" y1="109.625" x2="265.415" y2="109.625" gradientUnits="userSpaceOnUse"><stop stop-color="#DAF691"/><stop offset="0.398266" stop-color="#C4EE4D"/><stop offset="1" stop-color="#9CD600"/></linearGradient>
     <linearGradient id="paint1_linear_116_292" x1="424.416" y1="291.125" x2="375.916" y2="291.125" gradientUnits="userSpaceOnUse"><stop stop-color="#FF5FD2"/><stop offset="1" stop-color="#C4EE4D"/></linearGradient>
     <linearGradient id="paint2_linear_116_292" x1="184.415" y1="290.625" x2="119.415" y2="290.625" gradientUnits="userSpaceOnUse"><stop stop-color="#C4EE4D"/><stop offset="1" stop-color="#FF5FD2"/></linearGradient>

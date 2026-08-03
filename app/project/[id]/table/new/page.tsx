@@ -19,72 +19,77 @@ function genTableId(): string {
   return 'tbl_' + (_tableIdCounter++).toString(36)
 }
 
-const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
-  { value: 'text', label: '文本 (LLM生成)' },
-  { value: 'number', label: '数字 (代码生成)' },
-  { value: 'boolean', label: '布尔值' },
-  { value: 'date', label: '日期' },
-  { value: 'id', label: 'ID (自增/雪花)' },
-  { value: 'phone', label: '电话' },
-  { value: 'city', label: '城市' },
-  { value: 'foreign_key', label: '外键 (引用其他表)' },
-  { value: 'foreign_key_array', label: '外键数组' },
+const COLUMN_TYPES: { value: ColumnType; key: string }[] = [
+  { value: 'text', key: 'coltype.text_create' },
+  { value: 'number', key: 'coltype.number_create' },
+  { value: 'boolean', key: 'coltype.boolean' },
+  { value: 'date', key: 'coltype.date' },
+  { value: 'id', key: 'coltype.id' },
+  { value: 'phone', key: 'coltype.phone' },
+  { value: 'city', key: 'coltype.city' },
+  { value: 'foreign_key', key: 'coltype.foreign_key' },
+  { value: 'foreign_key_array', key: 'coltype.foreign_key_array' },
 ]
 
-const ID_FORMATS: { value: IdFormat; label: string }[] = [
-  { value: 'uuid4', label: 'UUID v4' },
-  { value: 'uuid7', label: 'UUID v7' },
-  { value: 'snowflake', label: '雪花ID (Snowflake)' },
-  { value: 'auto_increment', label: '自增 (1,2,3...)' },
-  { value: 'cuid2', label: 'CUID2' },
-  { value: 'objectid', label: 'MongoDB ObjectID' },
-  { value: 'nanoid', label: 'Nano ID' },
-  { value: 'ulid', label: 'ULID' },
+const ID_FORMATS: { value: IdFormat; key: string }[] = [
+  { value: 'uuid4', key: 'idfmt.uuid4' },
+  { value: 'uuid7', key: 'idfmt.uuid7' },
+  { value: 'snowflake', key: 'idfmt.snowflake' },
+  { value: 'auto_increment', key: 'idfmt.auto_increment' },
+  { value: 'cuid2', key: 'idfmt.cuid2' },
+  { value: 'objectid', key: 'idfmt.objectid' },
+  { value: 'nanoid', key: 'idfmt.nanoid' },
+  { value: 'ulid', key: 'idfmt.ulid' },
 ]
 
-const TYPE_SHORT_LABEL: Record<ColumnType, string> = {
-  text: '文本', number: '数字', boolean: '布尔', date: '日期',
-  foreign_key: '外键', foreign_key_array: '外键数组', id: 'ID', phone: '电话', city: '城市',
+const TYPE_KEY: Record<ColumnType, string> = {
+  text: 'coltype.text_short', number: 'coltype.number_short', boolean: 'coltype.boolean_short', date: 'coltype.date_short',
+  id: 'coltype.id_short', phone: 'coltype.phone_short', city: 'coltype.city_short', foreign_key: 'coltype.foreign_key',
+  foreign_key_array: 'coltype.foreign_key_array',
 }
 
-const PHONE_COUNTRIES: { value: PhoneCountry; label: string }[] = [
-  { value: 'CN', label: '中国 (+86)' },
-  { value: 'US', label: '美国 (+1)' },
-  { value: 'JP', label: '日本 (+81)' },
-  { value: 'KR', label: '韩国 (+82)' },
-  { value: 'GB', label: '英国 (+44)' },
-  { value: 'DE', label: '德国 (+49)' },
-  { value: 'FR', label: '法国 (+33)' },
-  { value: 'IN', label: '印度 (+91)' },
-  { value: 'BR', label: '巴西 (+55)' },
-  { value: 'AU', label: '澳大利亚 (+61)' },
+// Sentinel used to detect "code generation in progress" — a logic check, not
+// display text, so it must not go through i18n.
+const GEN_IN_PROGRESS = '⌛generating'
+
+const PHONE_COUNTRIES: { value: PhoneCountry; key: string }[] = [
+  { value: 'CN', key: 'country.CN' },
+  { value: 'US', key: 'country.US' },
+  { value: 'JP', key: 'country.JP' },
+  { value: 'KR', key: 'country.KR' },
+  { value: 'GB', key: 'country.GB' },
+  { value: 'DE', key: 'country.DE' },
+  { value: 'FR', key: 'country.FR' },
+  { value: 'IN', key: 'country.IN' },
+  { value: 'BR', key: 'country.BR' },
+  { value: 'AU', key: 'country.AU' },
 ]
 
-const DATE_FORMATS: { value: DateFormat; label: string }[] = [
-  { value: 'date', label: 'yyyy-MM-dd' },
-  { value: 'datetime', label: 'yyyy-MM-dd HH:mm:ss' },
-  { value: 'iso', label: 'ISO 8601' },
-  { value: 'date_slash', label: 'yyyy/MM/dd' },
-  { value: 'date_us', label: 'MM/dd/yyyy' },
-  { value: 'date_eu', label: 'dd-MM-yyyy' },
-  { value: 'time', label: 'HH:mm:ss' },
-  { value: 'unix_s', label: 'Unix 时间戳 (秒)' },
-  { value: 'unix_ms', label: 'Unix 时间戳 (毫秒)' },
+const DATE_FORMATS: { value: DateFormat; key: string }[] = [
+  { value: 'date', key: 'datefmt.date' },
+  { value: 'datetime', key: 'datefmt.datetime' },
+  { value: 'iso', key: 'datefmt.iso' },
+  { value: 'date_slash', key: 'datefmt.date_slash' },
+  { value: 'date_us', key: 'datefmt.date_us' },
+  { value: 'date_eu', key: 'datefmt.date_eu' },
+  { value: 'time', key: 'datefmt.time' },
+  { value: 'unix_s', key: 'datefmt.unix_s' },
+  { value: 'unix_ms', key: 'datefmt.unix_ms' },
 ]
 
-const PRESET_DATE_RANGES: Omit<DateRange, 'ratio'>[] = [
-  { label: '近7日', minDays: 0, maxDays: 7 },
-  { label: '近15日', minDays: 0, maxDays: 15 },
-  { label: '近30日', minDays: 0, maxDays: 30 },
-  { label: '近3个月', minDays: 0, maxDays: 90 },
-  { label: '近6个月', minDays: 0, maxDays: 180 },
-  { label: '近1年', minDays: 0, maxDays: 365 },
-  { label: '近3年', minDays: 0, maxDays: 1095 },
+const PRESET_DATE_RANGES: { key: string; minDays: number; maxDays: number }[] = [
+  { key: 'daterange.7d', minDays: 0, maxDays: 7 },
+  { key: 'daterange.15d', minDays: 0, maxDays: 15 },
+  { key: 'daterange.30d', minDays: 0, maxDays: 30 },
+  { key: 'daterange.90d', minDays: 0, maxDays: 90 },
+  { key: 'daterange.180d', minDays: 0, maxDays: 180 },
+  { key: 'daterange.1y', minDays: 0, maxDays: 365 },
+  { key: 'daterange.3y', minDays: 0, maxDays: 1095 },
 ]
 
 function ensureDateDistribution(col: ColumnDef): DateRange[] {
   if (!col.dateDistribution || col.dateDistribution.length === 0) {
-    return PRESET_DATE_RANGES.map(r => ({ ...r, ratio: 0 }))
+    return PRESET_DATE_RANGES.map(r => ({ label: r.key, minDays: r.minDays, maxDays: r.maxDays, ratio: 0 }))
   }
   return col.dateDistribution
 }
@@ -335,7 +340,7 @@ export default function NewTablePage() {
       const text = await file.text()
       const data = JSON.parse(text)
       const tables = data.tables || (data.table ? [data.table] : null)
-      if (!tables || !Array.isArray(tables)) throw new Error('无效的 .nuwa 文件格式')
+      if (!tables || !Array.isArray(tables)) throw new Error(t('table.invalid_nuwa'))
       const newCols: ColumnDef[] = []
       let firstName = ''
       let fileRows: Record<string, unknown>[] = []
@@ -372,14 +377,14 @@ export default function NewTablePage() {
         setColumns(newCols)
         setExpandedColumnId(newCols[0].id)
         setImportedRows(fileRows)
-        const rowMsg = fileRows.length > 0 ? `，含 ${fileRows.length} 行数据` : ''
-        setError(`已导入 ${newCols.length} 个列定义${rowMsg}`)
+        const rowMsg = fileRows.length > 0 ? t('table.import_rows_suffix').replace('{0}', String(fileRows.length)) : ''
+        setError(`${t('table.import_cols_success').replace('{0}', String(newCols.length))}${rowMsg}`)
       } else {
-        setError('文件中没有找到列定义')
+        setError(t('table.import_no_data'))
       }
       if (nuwaFileRef.current) nuwaFileRef.current.value = ''
     } catch (err) {
-      setError(err instanceof Error ? err.message : '导入失败')
+      setError(err instanceof Error ? err.message : t('table.import_fail'))
     } finally {
       setImportingNuwa(false)
     }
@@ -390,7 +395,7 @@ export default function NewTablePage() {
     const file = e.target.files?.[0]
     if (!file) return
     if (file.size > 10 * 1024 * 1024) {
-      setError('图片大小不能超过 10MB')
+      setError(t('table.image_too_large'))
       return
     }
     setImageUploading(true)
@@ -401,7 +406,7 @@ export default function NewTablePage() {
       const raw = await callLlmVision(VISION_SYSTEM_PROMPT, '请识别图片中的表格列结构', [base64])
       const parsed = extractJsonArray(raw)
       if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
-        setError('未能从图片中识别出有效的列结构。请确保图片包含表格信息。')
+        setError(t('table.image_no_columns'))
         return
       }
       const newCols: ColumnDef[] = parsed.map((item: Record<string, unknown>) => ({
@@ -415,7 +420,7 @@ export default function NewTablePage() {
       setExpandedColumnId(newCols[0]?.id ?? null)
       if (fileInputRef.current) fileInputRef.current.value = ''
     } catch (err) {
-      setError(err instanceof Error ? err.message : '图片识别失败')
+      setError(err instanceof Error ? err.message : t('table.image_fail'))
     } finally {
       setImageUploading(false)
     }
@@ -524,7 +529,7 @@ export default function NewTablePage() {
               : 'bg-gv-pink/10 border-gv-pink/30 text-gv-pink-dark'
           }`}>
             {llmConfigured
-              ? 'LLM 已配置，文本列将调用模型生成。'
+              ? t('table.llm_configured_banner')
               : <>{t('app.unconfigured')}。<Link href="/settings" className="underline font-medium ml-1">{t('home.settings_hint')}</Link></>
             }
           </div>
@@ -552,7 +557,7 @@ export default function NewTablePage() {
               onClick={() => nuwaFileRef.current?.click()}
               disabled={importingNuwa}
               className="btn-outline rounded-lg px-3 py-1.5 text-sm whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
-              {importingNuwa ? '...' : '导入 .nuwa'}
+              {importingNuwa ? t('table.import_nuwa_loading') : t('table.import_nuwa')}
             </button>
           </div>
         </section>
@@ -613,7 +618,7 @@ export default function NewTablePage() {
                                 className="sr-only"
                               />
                               {col.name}
-                              <span className="text-gv-text-muted">({TYPE_SHORT_LABEL[col.type]})</span>
+                              <span className="text-gv-text-muted">({t(TYPE_KEY[col.type])})</span>
                               {isImported && (
                                 <span
                                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFkMode(table.id, col.name) }}
@@ -622,7 +627,7 @@ export default function NewTablePage() {
                                       ? 'bg-gv-pink/20 text-gv-pink-dark'
                                       : 'bg-gv-green/20 text-gv-green-dark'
                                   }`}
-                                  title={isFk ? '外键模式 (点击切换)' : '直接值模式 (点击切换)'}
+                                  title={isFk ? t('table.fk_mode_title') : t('table.direct_mode_title')}
                                 >
                                   {isFk ? 'FK' : t('table.col_name')}
                                 </span>
@@ -679,7 +684,7 @@ export default function NewTablePage() {
                     className="w-44 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink"
                   >
                     {COLUMN_TYPES.map(ct => (
-                      <option key={ct.value} value={ct.value}>{ct.label}</option>
+                      <option key={ct.value} value={ct.value}>{t(ct.key)}</option>
                     ))}
                   </select>
                   <span className={styles.columnRuleState} data-ready={isReady}>
@@ -712,11 +717,11 @@ export default function NewTablePage() {
                 {/* Type-specific fields */}
                 {col.type === 'text' && (
                   <div>
-                    <label className="block text-xs text-gv-text-dim mb-1">生成提示词 (描述LLM应如何生成此列的数据)</label>
+                    <label className="block text-xs text-gv-text-dim mb-1">{t('table.prompt_label')}</label>
                     <textarea
                       value={col.llmPrompt || ''}
                       onChange={(e) => updateCol(col.id, { llmPrompt: e.target.value })}
-                      placeholder="例如：生成一个中文姓名，包含姓和名..."
+                      placeholder={t('table.prompt_example')}
                       rows={2}
                       className="input-field w-full py-2 text-sm"
                     />
@@ -727,42 +732,42 @@ export default function NewTablePage() {
                   <div className="space-y-2">
                     <select value={col.foreignTable || ''} onChange={(e) => updateCol(col.id, { foreignTable: e.target.value || undefined })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      <option value="">引用外表（用于跨表公式，可选）</option>
+                      <option value="">{t('table.ref_table_number')}</option>
                       {existingTables.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
                     </select>
                     {col.foreignTable && (
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateCol(col.id, { localMatchColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          <option value="">{t('table.local_match_auto')}</option>
                           {columns.filter(c => c.name.trim()).map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateCol(col.id, { foreignColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {existingTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
                     )}
-                    <label className="block text-xs text-gv-text-dim">规则描述</label>
+                    <label className="block text-xs text-gv-text-dim">{t('table.rule_desc')}</label>
                     <div className="flex gap-2">
                       <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateCol(col.id, { llmPrompt: e.target.value })}
-                        placeholder="描述你要的数字规则，如：中国随机纬度"
+                        placeholder={t('table.number_prompt_placeholder')}
                         className="flex-1 input-field py-1.5 text-xs" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
-                          updateCol(col.id, { generationCode: '生成中...' })
+                          updateCol(col.id, { generationCode: GEN_IN_PROGRESS })
                           const { llmGenerateCode } = await import('@/services/data-gen')
                           const result = await llmGenerateCode(col.llmPrompt!.trim(), 'number')
-                          updateCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
+                          updateCol(col.id, { generationCode: result.code || `// ${result.error || t('table.gen_fail')}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
                         className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
-                        AI 生成代码
+                        {t('table.ai_gen_code')}
                       </button>
                     </div>
-                    <label className="block text-xs text-gv-text-dim">JavaScript 代码（可手写或 AI 生成）</label>
+                    <label className="block text-xs text-gv-text-dim">{t('table.code_label_short')}</label>
                     <textarea
                       value={col.generationCode || ''}
                       onChange={(e) => updateCol(col.id, { generationCode: e.target.value })}
@@ -770,18 +775,18 @@ export default function NewTablePage() {
                       rows={4}
                       className="input-field w-full py-2 text-sm font-mono"
                     />
-                    {col.generationCode && col.generationCode !== '生成中...' && (
+                    {col.generationCode && col.generationCode !== GEN_IN_PROGRESS && (
                       <button type="button"
                         onClick={() => {
                           try {
                             const results = previewGenerationExpression(col.generationCode!)
-                            alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
+                            alert(`${t('table.test_result')}\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
-                            alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
+                            alert(`${t('table.code_error')} ${err instanceof Error ? err.message : String(err)}`)
                           }
                         }}
                         className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
-                        测试代码（预览5条）
+                        {t('table.test_code')}
                       </button>
                     )}
                   </div>
@@ -790,26 +795,26 @@ export default function NewTablePage() {
                 {(col.type === 'foreign_key' || col.type === 'foreign_key_array') && (
                   <div className="flex gap-3">
                     <div className="flex-1">
-                      <label className="block text-xs text-gv-text-dim mb-1">引用表</label>
+                      <label className="block text-xs text-gv-text-dim mb-1">{t('table.fk_ref_table')}</label>
                       <select
                         value={col.foreignTable || ''}
                         onChange={(e) => updateCol(col.id, { foreignTable: e.target.value })}
                         className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink"
                       >
-                        <option value="">选择表...</option>
+                        <option value="">{t('table.fk_select_table')}</option>
                         {existingTables.map(t => (
                           <option key={t.id} value={t.id}>{t.name}</option>
                         ))}
                       </select>
                     </div>
                     <div className="flex-1">
-                      <label className="block text-xs text-gv-text-dim mb-1">引用列 (可选)</label>
+                      <label className="block text-xs text-gv-text-dim mb-1">{t('table.fk_ref_col')}</label>
                       <select
                         value={col.foreignColumn || ''}
                         onChange={(e) => updateCol(col.id, { foreignColumn: e.target.value })}
                         className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink"
                       >
-                        <option value="">自动匹配</option>
+                        <option value="">{t('table.fk_auto_match')}</option>
                         {(() => {
                           const ft = existingTables.find(t => t.id === col.foreignTable)
                           if (!ft) return null
@@ -826,19 +831,19 @@ export default function NewTablePage() {
                   <div className="space-y-3">
                     <select value={col.foreignTable || ''} onChange={(e) => updateCol(col.id, { foreignTable: e.target.value || undefined })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      <option value="">引用外表（用于跨表公式，可选）</option>
+                      <option value="">{t('table.ref_table_date')}</option>
                       {existingTables.map(t => (<option key={t.id} value={t.id}>{t.name}</option>))}
                     </select>
                     {col.foreignTable && (
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateCol(col.id, { localMatchColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          <option value="">{t('table.local_match_auto')}</option>
                           {columns.filter(c => c.name.trim()).map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateCol(col.id, { foreignColumn: e.target.value || undefined })}
                           className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {existingTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
@@ -846,20 +851,20 @@ export default function NewTablePage() {
                     {col.foreignTable && (
                       <select value={col.parentDateColumn || ''} onChange={(e) => updateCol(col.id, { parentDateColumn: e.target.value || undefined })}
                         className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                        <option value="">选择外表日期字段（手动写公式则留空）</option>
+                        <option value="">{t('table.parent_date_pick')}</option>
                         {existingTables.find(t => t.id === col.foreignTable)?.columns.filter(c => c.type === 'date').map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                       </select>
                     )}
                     <select value={col.dateFormat || 'date'} onChange={(e) => updateCol(col.id, { dateFormat: e.target.value as DateFormat })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{f.label}</option>))}
+                      {DATE_FORMATS.map(f => (<option key={f.value} value={f.value}>{t(f.key)}</option>))}
                     </select>
                     <div>
-                      <p className="text-xs text-gv-text-dim mb-1">时间分布比例（%）</p>
+                      <p className="text-xs text-gv-text-dim mb-1">{t('table.date_distribution')}</p>
                       <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                         {ensureDateDistribution(col).map((range, ri) => (
                           <div key={ri} className="flex items-center gap-1.5">
-                            <span className="text-xs text-gv-text-dim w-20 flex-shrink-0">{range.label}</span>
+                            <span className="text-xs text-gv-text-dim w-20 flex-shrink-0">{t(range.label)}</span>
                             <input
                               type="number" min={0} max={100}
                               value={range.ratio}
@@ -876,36 +881,36 @@ export default function NewTablePage() {
                     </div>
                     <div className="flex gap-2">
                       <input type="text" value={col.llmPrompt || ''} onChange={(e) => updateCol(col.id, { llmPrompt: e.target.value })}
-                        placeholder="描述日期规则，如：最近30天随机日期"
+                        placeholder={t('table.date_prompt_placeholder')}
                         className="flex-1 input-field py-1.5 text-xs" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
-                          updateCol(col.id, { generationCode: '生成中...' })
+                          updateCol(col.id, { generationCode: GEN_IN_PROGRESS })
                           const { llmGenerateCode } = await import('@/services/data-gen')
                           const result = await llmGenerateCode(col.llmPrompt!.trim(), 'date', { dateFormat: col.dateFormat, dateDistribution: col.dateDistribution })
-                          updateCol(col.id, { generationCode: result.code || `// ${result.error || '生成失败'}` })
+                          updateCol(col.id, { generationCode: result.code || `// ${result.error || t('table.gen_fail')}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
                         className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
-                        AI 生成代码
+                        {t('table.ai_gen_code')}
                       </button>
                     </div>
                     <input type="text" value={col.generationCode || ''} onChange={(e) => updateCol(col.id, { generationCode: e.target.value })}
-                      placeholder="JavaScript 代码，可手写或 AI 生成"
+                      placeholder={t('table.code_placeholder_short')}
                       className="input-field w-full py-2 text-xs font-mono" />
-                    {col.generationCode && col.generationCode !== '生成中...' && (
+                    {col.generationCode && col.generationCode !== GEN_IN_PROGRESS && (
                       <button type="button"
                         onClick={() => {
                           try {
                             const results = previewGenerationExpression(col.generationCode!)
-                            alert(`测试结果（5条）:\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
+                            alert(`${t('table.test_result')}\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
-                            alert(`代码错误: ${err instanceof Error ? err.message : String(err)}`)
+                            alert(`${t('table.code_error')} ${err instanceof Error ? err.message : String(err)}`)
                           }
                         }}
                         className="text-xs text-gv-pink hover:text-gv-pink-dark transition-colors">
-                        测试代码（预览5条）
+                        {t('table.test_code')}
                       </button>
                     )}
                   </div>
@@ -913,16 +918,16 @@ export default function NewTablePage() {
 
                 {col.type === 'boolean' && (
                   <div>
-                    <label className="block text-xs text-gv-text-dim mb-1">生成代码 (可选，返回值转布尔)</label>
+                    <label className="block text-xs text-gv-text-dim mb-1">{t('table.code_label')}</label>
                     <textarea
                       value={col.generationCode || ''}
                       onChange={(e) => updateCol(col.id, { generationCode: e.target.value })}
-                      placeholder="留空则随机生成 true/false"
+                      placeholder={t('table.code_gen_bool_ph')}
                       rows={2}
                       className="input-field w-full py-2 text-sm font-mono"
                     />
                     <div className="flex items-center gap-2 mt-2 pl-1">
-                      <span className="text-xs text-gv-text-muted w-16">True 占比</span>
+                      <span className="text-xs text-gv-text-muted w-16">{t('table.bool_true_ratio')}</span>
                       <input
                         type="range"
                         min={0} max={100}
@@ -938,30 +943,30 @@ export default function NewTablePage() {
 
                 {col.type === 'id' && (
                   <div>
-                    <label className="block text-xs text-gv-text-dim mb-1">ID 格式</label>
+                    <label className="block text-xs text-gv-text-dim mb-1">{t('table.id_format')}</label>
                     <select value={col.idFormat || 'uuid4'} onChange={(e) => updateCol(col.id, { idFormat: e.target.value as IdFormat })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      {ID_FORMATS.map(f => (<option key={f.value} value={f.value}>{f.label}</option>))}
+                      {ID_FORMATS.map(f => (<option key={f.value} value={f.value}>{t(f.key)}</option>))}
                     </select>
                   </div>
                 )}
 
                 {col.type === 'phone' && (
                   <div>
-                    <label className="block text-xs text-gv-text-dim mb-1">国家</label>
+                    <label className="block text-xs text-gv-text-dim mb-1">{t('table.country_label')}</label>
                     <select value={col.phoneCountry || 'CN'} onChange={(e) => updateCol(col.id, { phoneCountry: e.target.value as PhoneCountry })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{c.label}</option>))}
+                      {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{t(c.key)}</option>))}
                     </select>
                   </div>
                 )}
 
                 {col.type === 'city' && (
                   <div>
-                    <label className="block text-xs text-gv-text-dim mb-1">国家</label>
+                    <label className="block text-xs text-gv-text-dim mb-1">{t('table.country_label')}</label>
                     <select value={col.cityCountry || 'CN'} onChange={(e) => updateCol(col.id, { cityCountry: e.target.value as PhoneCountry })}
                       className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                      {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{c.label}</option>))}
+                      {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{t(c.key)}</option>))}
                     </select>
                   </div>
                 )}
@@ -977,11 +982,11 @@ export default function NewTablePage() {
                       })}
                       className="rounded accent-gv-pink"
                     />
-                    <span className="text-xs text-gv-text-dim">允许空值 (null)</span>
+                    <span className="text-xs text-gv-text-dim">{t('table.allow_null')}</span>
                   </label>
                   {col.nullable && (
                     <div className="flex items-center gap-2 mt-2 pl-1">
-                      <span className="text-xs text-gv-text-muted w-10">比例</span>
+                      <span className="text-xs text-gv-text-muted w-10">{t('table.null_ratio')}</span>
                       <input
                         type="range"
                         min={0} max={100}
@@ -998,8 +1003,8 @@ export default function NewTablePage() {
               </div>
               <button type="button" onClick={() => addColumn(i)}
                 className={`w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors ${styles.insertButton}`}
-                title="在此处插入新列">
-                + 插入列
+                title={t('table.insert_col_hint')}>
+                {t('table.insert_col')}
               </button>
               </React.Fragment>
               )

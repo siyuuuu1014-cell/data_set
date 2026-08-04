@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLang } from '@/services/i18n'
 import type {
   EventAnnotation,
@@ -54,6 +54,20 @@ export function TextContent({
   ))
   const [speechDraft, setSpeechDraft] = useState(() => speechTexts.join('\n'))
   const [dirty, setDirty] = useState(false)
+
+  // New recognition results can arrive via polling while this panel is open.
+  // Sync drafts from props — but only while the user has not started editing,
+  // so their in-progress corrections are never overwritten.
+  /* eslint-disable react-hooks/set-state-in-effect -- draft sync from props */
+  useEffect(() => {
+    if (dirty) return
+    setOcrDrafts(Object.fromEntries(
+      textObjects.map(object => [object.trackId, object._textContent || '']),
+    ))
+    setSpeechDraft(speechTexts.join('\n'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sync on content change only
+  }, [objects, speechTranscript, events])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!completed && !recognition && textObjects.length === 0 && speechTexts.length === 0) {
     return null

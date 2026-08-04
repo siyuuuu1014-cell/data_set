@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'fs'
-import { join } from 'path'
-import { assertSafeFileStem, assertSafeIdentifier, isUnsafePathError, resolveWithin } from '@/services/server-paths'
+import { getParquetPath } from '@/services/parquet'
+import { assertSafeIdentifier, assertSafeFileStem, isUnsafePathError } from '@/services/server-paths'
 
 // GET ?projectId=X&tableName=Y — download Parquet file
 export async function GET(request: Request) {
@@ -16,9 +16,7 @@ export async function GET(request: Request) {
   try {
     assertSafeIdentifier(projectId, 'project ID')
     assertSafeFileStem(tableName, 'table name')
-    const dataRoot = join(process.cwd(), 'generated_data')
-    const dir = resolveWithin(dataRoot, projectId)
-    filePath = resolveWithin(dir, `${tableName}.parquet`)
+    filePath = getParquetPath(projectId, tableName)
   } catch (err) {
     if (isUnsafePathError(err)) return Response.json({ error: err.message }, { status: 400 })
     throw err

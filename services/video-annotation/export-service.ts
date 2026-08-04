@@ -1,6 +1,9 @@
 /** Export service — generates Custom JSON, YOLO, COCO formats. */
 
-import JSZip from 'jszip'
+/**
+ * Export helpers. JSZip is intentionally loaded lazily inside the zip
+ * functions so the annotation workbench bundle does not pay for it up front.
+ */
 import { callLlm } from '@/services/llm'
 import type {
   CameraAnnotation,
@@ -683,6 +686,7 @@ export async function downloadAsFile(
 ) {
   if (content instanceof Map) {
     // Build ZIP with labels + classes.txt
+    const { default: JSZip } = await import('jszip')
     const zip = new JSZip()
 
     content.forEach((text, name) => {
@@ -709,6 +713,7 @@ export async function downloadYoloZip(
   filename: string
 ) {
   const labelMap = exportYolo(annotations)
+  const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
 
   // Add labels

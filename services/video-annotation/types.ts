@@ -289,6 +289,9 @@ export interface SegmentState {
   /** Monotonic segment-scoped sequence for manually created tracks. */
   nextManualTrackId?: number
   reviewStatus?: ReviewStatus
+  /** Lightweight marker from the summary list API: annotation payloads are
+   * stripped there, so review-status derivation checks this flag instead. */
+  _hasAnnotation?: boolean
 }
 
 // ── Annotate set ───────────────────────────────────────────

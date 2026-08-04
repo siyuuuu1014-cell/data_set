@@ -113,15 +113,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Skip the initial pre-hydration snapshot, then persist every intentional
-  // state change, including deletion of the final project.
+  // state change, including deletion of the final project. Writes are
+  // debounced so high-frequency updates (annotation polling, canvas edits)
+  // coalesce into one localStorage write instead of serializing on every tick.
+  const persistTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestStateRef = React.useRef<StoreState>(INITIAL_STATE)
+  useEffect(() => { latestStateRef.current = state }, [state])
   useEffect(() => {
     if (!hydratedRef.current) return
     if (!persistReadyRef.current) {
       persistReadyRef.current = true
       return
     }
-    saveToStorage(state)
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    persistTimerRef.current = setTimeout(() => saveToStorage(state), 400)
+    return () => { if (persistTimerRef.current) clearTimeout(persistTimerRef.current) }
   }, [state])
+  // Flush the last debounced write when the page is being closed/navigated
+  // away, so the final state (e.g. a deletion) is never lost to the 400ms gap.
+  useEffect(() => {
+    const flush = () => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+        saveToStorage(latestStateRef.current)
+      }
+    }
+    const flushOnHide = () => { if (document.visibilityState === 'hidden') flush() }
+    window.addEventListener('beforeunload', flush)
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', flushOnHide)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', flushOnHide)
+    }
+  }, [])
 
   const addProject = useCallback((name: string): Project => {
     const project: Project = {

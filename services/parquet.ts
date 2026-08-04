@@ -13,14 +13,20 @@ import { assertSafeFileStem, assertSafeIdentifier, resolveWithin } from './serve
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const parquet = require('parquetjs')
 
-const DATA_DIR = join(process.cwd(), 'generated_data')
+// Data root is resolved per call (not at module load) so tests can redirect it
+// via NUWA_DATA_DIR to a temporary directory instead of writing into the
+// repository's generated_data/.
+function dataDir(): string {
+  return process.env.NUWA_DATA_DIR || join(process.cwd(), 'generated_data')
+}
 
 function getProjectDir(projectId: string): string {
   assertSafeIdentifier(projectId, 'project ID')
-  return resolveWithin(DATA_DIR, projectId)
+  return resolveWithin(dataDir(), projectId)
 }
 
-function getParquetPath(projectId: string, tableName: string): string {
+/** Resolve the on-disk path for a table's Parquet file (single data-root source). */
+export function getParquetPath(projectId: string, tableName: string): string {
   assertSafeFileStem(tableName, 'table name')
   return resolveWithin(getProjectDir(projectId), `${tableName}.parquet`)
 }
@@ -51,20 +57,15 @@ function buildParquetSchema(columns: ColumnDef[]): Record<string, { type: string
 }
 
 export async function readParquetViaPython(filePath: string): Promise<Record<string, unknown>[]> {
-  try {
-    const python = process.platform === 'win32' ? 'python' : 'python3'
-    const script = "import pandas as pd,json,sys; df=pd.read_parquet(sys.argv[1]); print(json.dumps(df.where(pd.notna(df),None).to_dict(orient='records'), default=str))"
-    const output = execFileSync(python, ['-c', script, filePath], {
-      encoding: 'utf-8',
-      timeout: 30000,
-      maxBuffer: 50 * 1024 * 1024,
-      windowsHide: true,
-    })
-    return JSON.parse(output) as Record<string, unknown>[]
-  } catch (e) {
-    console.error('[parquet] Python fallback failed:', e)
-    return []
-  }
+  const python = process.platform === 'win32' ? 'python' : 'python3'
+  const script = "import pandas as pd,json,sys; df=pd.read_parquet(sys.argv[1]); print(json.dumps(df.where(pd.notna(df),None).to_dict(orient='records'), default=str))"
+  const output = execFileSync(python, ['-c', script, filePath], {
+    encoding: 'utf-8',
+    timeout: 30000,
+    maxBuffer: 50 * 1024 * 1024,
+    windowsHide: true,
+  })
+  return JSON.parse(output) as Record<string, unknown>[]
 }
 
 export async function writeParquet(
@@ -82,6 +83,9 @@ const dir = getProjectDir(projectId)
   const writer = await parquet.ParquetWriter.openFile(schema, tmpPath)
 
   try {
+    // Pre-convert every row synchronously (types/null normalization) so the
+    // async write loop below only awaits the append itself.
+    const converted: Record<string, unknown>[] = []
     for (const row of rows) {
       const out: Record<string, unknown> = {}
       for (const col of columns) {
@@ -93,6 +97,9 @@ const dir = getProjectDir(projectId)
         }
         out[col.name] = val ?? null
       }
+      converted.push(out)
+    }
+    for (const out of converted) {
       await writer.appendRow(out)
     }
     await writer.close()

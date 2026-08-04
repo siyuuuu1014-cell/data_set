@@ -72,11 +72,41 @@ export function clampBox(box: BBox, width: number, height: number): BBox {
   }
 }
 
+// Cache sortedness per array reference: playback calls nearestFrame several
+// times per second, and re-scanning for sortedness on every call would negate
+// the binary search. Arrays are immutable in practice (upsertFrame creates a
+// new array), so the cache is safe.
+const sortedCache = new WeakMap<FrameAnnotation[], boolean>()
+
 export function nearestFrame(frames: FrameAnnotation[] | undefined, timestamp: number): FrameAnnotation | null {
   if (!frames?.length) return null
-  return frames.reduce((best, frame) => (
-    Math.abs(frame.timestamp - timestamp) < Math.abs(best.timestamp - timestamp) ? frame : best
-  ))
+  // Frames are kept timestamp-sorted by upsertFrame; binary search is O(log n)
+  // instead of the linear scan used on every playback tick. Fall back to a
+  // scan if the array is not actually sorted (legacy data).
+  let sorted = sortedCache.get(frames)
+  if (sorted === undefined) {
+    sorted = true
+    for (let i = 1; i < frames.length; i++) {
+      if (frames[i].timestamp < frames[i - 1].timestamp) { sorted = false; break }
+    }
+    sortedCache.set(frames, sorted)
+  }
+  if (!sorted) {
+    return frames.reduce((best, frame) => (
+      Math.abs(frame.timestamp - timestamp) < Math.abs(best.timestamp - timestamp) ? frame : best
+    ))
+  }
+  let low = 0
+  let high = frames.length - 1
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if (frames[mid].timestamp < timestamp) low = mid + 1
+    else high = mid
+  }
+  const candidate = frames[low]
+  if (low === 0) return candidate
+  const prev = frames[low - 1]
+  return Math.abs(candidate.timestamp - timestamp) < Math.abs(prev.timestamp - timestamp) ? candidate : prev
 }
 
 export function legacyFrame(

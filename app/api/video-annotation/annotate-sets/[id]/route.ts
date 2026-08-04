@@ -79,8 +79,10 @@ export async function GET(
               modified = true
             } else if (wStatus.status === 'processing') {
               if (wStatus.progressDetail) {
+                // Update the in-memory phase only (returned to the client);
+                // do NOT persist it — progress phases change on nearly every
+                // poll and would rewrite the whole task file each time.
                 s.progressPhase = wStatus.progressDetail
-                modified = true
               }
             }
           } catch {
@@ -90,7 +92,6 @@ export async function GET(
             const s = seg as any
             if (s.progressPhase !== 'worker_unreachable') {
               s.progressPhase = 'worker_unreachable'
-              modified = true
             }
           }
         }
@@ -103,7 +104,9 @@ export async function GET(
       const normalizedTask = withDerivedAnnotationStatuses(task)
       const statusChanged = normalizedTask.status !== task.status || normalizedTask.videos.some((video, index) => video.status !== task.videos[index]?.status)
       if (modified || statusChanged) {
-        await writeTaskFileAtomic(taskPath, JSON.stringify(normalizedTask, null, 2))
+        // Compact JSON: smaller file, faster parse. Historical pretty-printed
+        // files remain readable (JSON.parse is format-agnostic).
+        await writeTaskFileAtomic(taskPath, JSON.stringify(normalizedTask))
       }
 
       return Response.json({ data: normalizedTask })
@@ -142,7 +145,25 @@ export async function PUT(
     return await withTaskFileLock(taskPath, async () => {
       const raw = await readFile(taskPath, 'utf-8')
       const task = JSON.parse(raw) as AnnotateSet
-      const updated = withDerivedAnnotationStatuses({ ...task, ...body, id, updatedAt: new Date().toISOString() } as AnnotateSet)
+      // The client round-trips in-memory progressPhase (transient display
+      // data) back to us on full PUTs; strip it so the "progress is not
+      // persisted" contract survives, otherwise every delete while another
+      // segment is processing would write a stale phase to disk.
+      const strippedVideos = (body.videos || []).map(video => ({
+        ...video,
+        segments: (video.segments || []).map(segment => {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { progressPhase, ...rest } = segment
+          return rest
+        }),
+      }))
+      const updated = withDerivedAnnotationStatuses({
+        ...task,
+        ...body,
+        videos: strippedVideos,
+        id,
+        updatedAt: new Date().toISOString(),
+      } as AnnotateSet)
       await writeTaskFileAtomic(taskPath, JSON.stringify(updated, null, 2))
       return Response.json({ data: updated })
     })

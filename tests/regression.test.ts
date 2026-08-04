@@ -1,9 +1,24 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { before, after } from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import path from 'node:path'
+import { tmpdir } from 'node:os'
 import { generatePhone } from '../services/code-gen'
 import { generateColumn } from '../services/data-gen'
 import { writeParquet, readParquet, renameParquet, parquetExists } from '../services/parquet'
 import type { ColumnDef } from '../services/types'
+
+// Redirect Parquet writes to a temp directory so tests never touch the
+// repository's real generated_data/ (crash-residue and cwd coupling).
+let parquetRoot: string
+before(async () => {
+  parquetRoot = await mkdtemp(path.join(tmpdir(), 'nuwa-parquet-test-'))
+  process.env.NUWA_DATA_DIR = parquetRoot
+})
+after(async () => {
+  delete process.env.NUWA_DATA_DIR
+  await rm(parquetRoot, { recursive: true, force: true })
+})
 
 const PHONE_LENGTHS: Record<string, number> = {
   CN: 11, US: 10, JP: 11, KR: 11, GB: 11, DE: 12, FR: 10, IN: 10, BR: 11, AU: 10,

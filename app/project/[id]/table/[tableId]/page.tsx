@@ -4,7 +4,7 @@ import React from 'react'
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams } from 'next/navigation'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import Link from 'next/link'
 import type { ColumnDef, ColumnType, IdFormat, DateFormat, DateRange, PhoneCountry } from '@/services/types'
 import { generateColumn } from '@/services/data-gen'
@@ -460,10 +460,12 @@ export default function TableEditorPage() {
         rows.push({ ...existing, [col.name]: values[i] ?? null })
       }
 
+      // Persist first, then update the UI: if the Parquet write fails, the
+      // store/localStorage must not show data that a reload would lose.
+      await saveToParquet(rows)
       setDisplayedRows(rows)
       setCurrentPage(1)
       setTableRows(id, table.id, rows)
-      await saveToParquet(rows)
       setGeneratedColumns(prev => new Set(prev).add(col.id))
     } catch (err) {
       setGenError(err instanceof Error ? err.message : t('table.gen_fail_short'))
@@ -1420,9 +1422,14 @@ function StatsPanel({ columns, rows, t, onClose }: {
   const [selectedColumnId, setSelectedColumnId] = useState(columns[0]?.id ?? '')
   const selectedColumn = columns.find(column => column.id === selectedColumnId) ?? columns[0]
 
-  if (!selectedColumn) return null
+  // Memoize stats: parent re-renders (hover, drag, input) must not recompute
+  // the whole column distribution on every pass.
+  const stats = useMemo(
+    () => selectedColumn ? computeColumnStats(selectedColumn, rows) : null,
+    [selectedColumn, rows],
+  )
 
-  const stats = computeColumnStats(selectedColumn, rows)
+  if (!selectedColumn || !stats) return null
 
   return (
     <section className={styles.statisticsPanel} aria-labelledby="field-statistics-title">

@@ -265,10 +265,20 @@ export function AnnotationCanvas({
       const sb = dr.startBox!
       const nb: BBox = { ...sb }
       const h = dr.handle!
+      // e/s handles grow from the fixed edge; w/n handles must clamp their
+      // moving edge to the opposite edge so width/height can never go
+      // negative (dragging past the far side would otherwise collapse the
+      // box into a 1px sliver on commit).
       if (h.includes('e')) nb.width = Math.max(CANVAS_MIN_BOX_SIZE, sb.width + dx)
-      if (h.includes('w')) { nb.x = sb.x + dx; nb.width = Math.max(CANVAS_MIN_BOX_SIZE, sb.width - dx) }
+      if (h.includes('w')) {
+        nb.x = Math.min(sb.x + sb.width - CANVAS_MIN_BOX_SIZE, Math.max(0, sb.x + dx))
+        nb.width = sb.x + sb.width - nb.x
+      }
       if (h.includes('s')) nb.height = Math.max(CANVAS_MIN_BOX_SIZE, sb.height + dy)
-      if (h.includes('n')) { nb.y = sb.y + dy; nb.height = Math.max(CANVAS_MIN_BOX_SIZE, sb.height - dy) }
+      if (h.includes('n')) {
+        nb.y = Math.min(sb.y + sb.height - CANVAS_MIN_BOX_SIZE, Math.max(0, sb.y + dy))
+        nb.height = sb.y + sb.height - nb.y
+      }
       if (nb.x < 0) { nb.width += nb.x; nb.x = 0 }
       if (nb.y < 0) { nb.height += nb.y; nb.y = 0 }
       if (nb.x + nb.width > actualW) nb.width = actualW - nb.x

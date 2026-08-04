@@ -66,7 +66,10 @@ export function deriveVideoTaskStatus(video: VideoTaskItem): VideoTaskStatus {
 
 export function deriveVideoReviewSummary(video: VideoTaskItem): VideoReviewSummary {
   const reviewableSegments = (video.segments || []).filter(segment => (
-    Boolean(segment.humanAnnotation || segment.modelAnnotation)
+    // `_hasAnnotation` is a lightweight marker used by the summary list API
+    // (annotations stripped); falls back to checking the real payloads.
+    segment._hasAnnotation === true
+    || Boolean(segment.humanAnnotation || segment.modelAnnotation)
   ))
   const approved = reviewableSegments.filter(segment => segment.reviewStatus === 'approved').length
 

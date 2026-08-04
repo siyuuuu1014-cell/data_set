@@ -63,6 +63,8 @@ export function VideoUploadDialog({ busy, progress, activeFileName, error, onClo
     return () => {
       document.body.style.overflow = previousOverflow
       previouslyFocused?.focus()
+      // Never let a pending replacement intent survive a dialog close.
+      replaceIdRef.current = null
     }
   }, [])
 
@@ -128,11 +130,16 @@ export function VideoUploadDialog({ busy, progress, activeFileName, error, onClo
     })
   }, [createItem])
 
-  const removeItem = (id: string, name: string) => {
+  const removeItem = (id: string) => {
     setItems(current => current.filter(item => item.id !== id))
     setFailedNames(current => {
       const next = new Set(current)
-      next.delete(name)
+      next.delete(id)
+      return next
+    })
+    setCompletedNames(current => {
+      const next = new Set(current)
+      next.delete(id)
       return next
     })
   }
@@ -142,9 +149,20 @@ export function VideoUploadDialog({ busy, progress, activeFileName, error, onClo
     inputRef.current?.click()
   }
 
+  // If the file picker is dismissed, a pending replacement intent must not
+  // leak into the next "add more" selection. The `cancel` event is supported
+  // by browsers but absent from the React input types, so attach it natively.
+  useEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    const onCancel = () => { replaceIdRef.current = null }
+    input.addEventListener('cancel', onCancel)
+    return () => input.removeEventListener('cancel', onCancel)
+  }, [])
+
   const validItems = useMemo(() => items.filter(item => !item.validationError), [items])
   const pendingItems = useMemo(
-    () => validItems.filter(item => !completedNames.has(item.file.name)),
+    () => validItems.filter(item => !completedNames.has(item.id)),
     [validItems, completedNames],
   )
   const invalidCount = items.length - validItems.length
@@ -164,13 +182,13 @@ export function VideoUploadDialog({ busy, progress, activeFileName, error, onClo
   }
 
   const statusFor = (item: QueueItem): 'error' | 'success' | 'processing' | 'ready' => {
-    if (item.validationError || failedNames.has(item.file.name) || progress[item.file.name] < 0) return 'error'
-    if (completedNames.has(item.file.name)) return 'success'
+    if (item.validationError || failedNames.has(item.id) || progress[item.id] < 0) return 'error'
+    if (completedNames.has(item.id)) return 'success'
     if (busy) return 'processing'
     return 'ready'
   }
 
-  const retryCount = pendingItems.filter(item => failedNames.has(item.file.name)).length
+  const retryCount = pendingItems.filter(item => failedNames.has(item.id)).length
   const primaryLabel = busy
     ? t('video.upload_uploading')
     : complete
@@ -251,7 +269,7 @@ export function VideoUploadDialog({ busy, progress, activeFileName, error, onClo
                       type="button"
                       disabled={busy || status === 'success'}
                       aria-label={`${status === 'error' ? t('video.upload_reselect') : t('app.remove')} ${item.file.name}`}
-                      onClick={() => status === 'error' ? replaceItem(item.id) : removeItem(item.id, item.file.name)}
+                      onClick={() => status === 'error' ? replaceItem(item.id) : removeItem(item.id)}
                     >
                       {status === 'error' ? t('video.upload_reselect') : t('app.remove')}
                     </button>

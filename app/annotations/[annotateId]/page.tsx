@@ -154,9 +154,10 @@ export default function VideoAnnotationProjectPage() {
     if (!project || files.length === 0 || uploading) {
       return { uploadedNames: [], failedNames: files.map(file => file.name), saved: false }
     }
+    const fileKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`
     setUploading(true)
     setUploadError('')
-    setUploadProgress(Object.fromEntries(files.map(file => [file.name, 0])))
+    setUploadProgress(Object.fromEntries(files.map(file => [fileKey(file), 0])))
 
     const uploadedVideos: VideoTaskItem[] = []
     const uploadedNames: string[] = []
@@ -181,11 +182,11 @@ export default function VideoAnnotationProjectPage() {
           segments: [],
           uploadProgress: 100,
         })
-        uploadedNames.push(file.name)
-        setUploadProgress(current => ({ ...current, [file.name]: 100 }))
+        uploadedNames.push(fileKey(file))
+        setUploadProgress(current => ({ ...current, [fileKey(file)]: 100 }))
       } catch {
-        failedNames.push(file.name)
-        setUploadProgress(current => ({ ...current, [file.name]: -1 }))
+        failedNames.push(fileKey(file))
+        setUploadProgress(current => ({ ...current, [fileKey(file)]: -1 }))
       }
     }
 

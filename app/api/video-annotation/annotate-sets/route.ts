@@ -19,7 +19,29 @@ async function listTasks(projectId: string): Promise<AnnotateSet[]> {
         const raw = await readFile(taskPath, 'utf-8')
         const task = JSON.parse(raw) as AnnotateSet
         if (!projectId || task.projectId === projectId) {
-          results.push(withDerivedAnnotationStatuses(task))
+          // Strip per-segment annotation payloads (the bulk of the file): the
+          // list page only needs identity/status/counts, so shipping full
+          // annotations here would multiply the payload by the number of sets.
+          const summary: AnnotateSet = {
+            ...task,
+            videos: (task.videos || []).map(video => ({
+              ...video,
+              segments: (video.segments || []).map(segment => ({
+                segmentId: segment.segmentId,
+                status: segment.status,
+                reviewStatus: segment.reviewStatus,
+                start: segment.start,
+                end: segment.end,
+                modelAnnotation: null,
+                humanAnnotation: null,
+                // Lightweight marker so review status derivation can still
+                // tell "has annotation content" apart from "empty" without
+                // shipping the full annotation payloads.
+                _hasAnnotation: Boolean(segment.modelAnnotation || segment.humanAnnotation),
+              })),
+            })),
+          }
+          results.push(withDerivedAnnotationStatuses(summary))
         }
       }
     } catch { /* skip invalid directory names and corrupted files */ }

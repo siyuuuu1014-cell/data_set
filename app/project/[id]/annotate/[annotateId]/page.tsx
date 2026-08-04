@@ -371,7 +371,12 @@ export default function AnnotateDetailPage() {
   const [set, setSet] = useState<AnnotateSet | null>(null)
   const id = routeProjectId || set?.projectId || ''
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [loadRetry, setLoadRetry] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const analysisAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => () => { analysisAbortRef.current?.abort() }, [])
 
   const [viewMode, setViewMode] = useState<'completed' | null>(null)
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null)
@@ -447,28 +452,32 @@ export default function AnnotateDetailPage() {
     updateSplitRatio(DEFAULT_SPLIT_RATIO, true)
   }, [updateSplitRatio])
 
-  const requestSet = useCallback(async (): Promise<AnnotateSet | null> => {
+  const requestSet = useCallback(async (): Promise<{ data: AnnotateSet } | { notFound: true } | null> => {
     try {
       const res = await fetch(`/api/video-annotation/annotate-sets/${annotateId}`)
+      if (res.status === 404) return { notFound: true }
       if (res.ok) {
         const { data } = await res.json()
-        return data as AnnotateSet
+        return { data: data as AnnotateSet }
       }
     } catch {}
+    // Network/HTTP error — the task may still exist; distinguish from 404.
     return null
   }, [annotateId])
 
   const fetchSet = useCallback(async () => {
-    const data = await requestSet()
-    if (data) setSet(data)
+    const result = await requestSet()
+    if (result && 'data' in result) setSet(result.data)
     setLoading(false)
   }, [requestSet])
 
   useEffect(() => {
     let active = true
-    void requestSet().then(data => {
+    void requestSet().then(result => {
       if (!active) return
-      if (data) {
+      if (result && 'data' in result) {
+        const data = result.data
+        setLoadError(false)
         setSet(data)
         const videos = routeVideoId
           ? (data.videos || []).filter(video => video.videoId === routeVideoId)
@@ -478,11 +487,17 @@ export default function AnnotateDetailPage() {
         setSelectedSegmentId(Number.isInteger(routeSegmentId) && firstVideo?.segments?.some(segment => segment.segmentId === routeSegmentId)
           ? routeSegmentId
           : firstVideo?.segments?.[0]?.segmentId ?? null)
+      } else if (result && 'notFound' in result) {
+        setLoadError(false)
+        setSet(null)
+      } else {
+        // Network error — keep the previous view if any, else show retry.
+        setLoadError(true)
       }
       setLoading(false)
     })
     return () => { active = false }
-  }, [requestSet, routeVideoId, routeSegmentId])
+  }, [requestSet, routeVideoId, routeSegmentId, loadRetry])
   useEffect(() => { if (!set || !id) return; updateAnnotateSet(id, annotateId, set) }, [set, id, annotateId, updateAnnotateSet])
 
   const [transition, setTransition] = useState<'uploading' | 'detecting' | 'annotating' | null>(null)
@@ -584,7 +599,8 @@ export default function AnnotateDetailPage() {
     setUploadProgress({})
     for (const file of files) setUploadProgress(prev => ({ ...prev, [file.name]: 0 }))
     const uploadedVideos: VideoTaskItem[] = []
-    for (const file of files) {
+    // Upload with limited concurrency instead of strictly serial files.
+    const uploadOne = async (file: File): Promise<void> => {
       try {
         const form = new FormData()
         form.append('file', file)
@@ -603,6 +619,15 @@ export default function AnnotateDetailPage() {
         }
       } catch { setUploadProgress(prev => ({ ...prev, [file.name]: -1 })) }
     }
+    const CONCURRENCY = 3
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(CONCURRENCY, files.length) }, async () => {
+      while (cursor < files.length) {
+        const idx = cursor++
+        await uploadOne(files[idx])
+      }
+    })
+    await Promise.all(workers)
     if (uploadedVideos.length > 0) {
       const res = await fetch(`/api/video-annotation/annotate-sets/${annotateId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -970,6 +995,10 @@ export default function AnnotateDetailPage() {
       if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('saved')
     }).catch(error => {
       console.error('[manual track] save failed', error)
+      // A draw POST failure cannot be retried with the frame-PATCH payload:
+      // the track was never allocated server-side. Clear any pending retry so
+      // the "Retry save" button does not resubmit a stale PATCH instead.
+      failedSaveRef.current = null
       if (revision === spatialSaveRevisionRef.current) setSpatialSaveStatus('failed')
     })
   }, [
@@ -1308,7 +1337,7 @@ export default function AnnotateDetailPage() {
 
   useEffect(() => {
     if (phase !== 'annotating') { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }; return }
-    pollRef.current = setInterval(() => fetchSet(), 3000)
+    pollRef.current = setInterval(() => fetchSet(), 6000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [phase, fetchSet])
 
@@ -1583,7 +1612,11 @@ export default function AnnotateDetailPage() {
 
   const handleFrameSeek = useCallback((timestamp: number, manual?: boolean) => {
     const frame = nearestFrame(activeAnnotation?.frames, timestamp)
-    if (frame) setSelectedFrameIndex(frame.frameIndex)
+    if (frame) {
+      // Skip the state update when playback stays on the same sampled frame —
+      // timeupdate fires several times per second while playing.
+      setSelectedFrameIndex(prev => prev === frame.frameIndex ? prev : frame.frameIndex)
+    }
     if (manual) {
       // Only user-initiated seeks leave the editing context; plain playback
       // must keep the current track selection so edits are not dropped.
@@ -1626,31 +1659,40 @@ export default function AnnotateDetailPage() {
       throw new Error(apiErrorMessage(submitted, t('annotation.analysis_failed_http', response.status)))
     }
 
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      await waitFor(1000)
-      const statusResponse = await fetch(
-        `/api/video-annotation/annotate-sets/${annotateId}/person-analysis?jobId=${encodeURIComponent(submitted.data.jobId)}`,
-        { cache: 'no-store' },
-      )
-      const statusPayload = await statusResponse.json().catch(() => null) as {
-        data?: {
-          status?: string
-          result?: PersonAnalysisResult | null
-          error?: string | null
+    // Abort the poll loop when the workbench unmounts instead of spinning for
+    // up to 3 minutes against a dead component.
+    analysisAbortRef.current?.abort()
+    const controller = new AbortController()
+    analysisAbortRef.current = controller
+    try {
+      for (let attempt = 0; attempt < 180; attempt += 1) {
+        await waitFor(1000)
+        const statusResponse = await fetch(
+          `/api/video-annotation/annotate-sets/${annotateId}/person-analysis?jobId=${encodeURIComponent(submitted.data.jobId)}`,
+          { cache: 'no-store', signal: controller.signal },
+        )
+        const statusPayload = await statusResponse.json().catch(() => null) as {
+          data?: {
+            status?: string
+            result?: PersonAnalysisResult | null
+            error?: string | null
+          }
+          error?: unknown
+        } | null
+        if (!statusResponse.ok || !statusPayload?.data) {
+          throw new Error(apiErrorMessage(statusPayload, t('annotation.analysis_status_failed_http', statusResponse.status)))
         }
-        error?: unknown
-      } | null
-      if (!statusResponse.ok || !statusPayload?.data) {
-        throw new Error(apiErrorMessage(statusPayload, t('annotation.analysis_status_failed_http', statusResponse.status)))
+        if (statusPayload.data.status === 'completed' && statusPayload.data.result) {
+          return statusPayload.data.result
+        }
+        if (statusPayload.data.status === 'failed' || statusPayload.data.status === 'cancelled') {
+          throw new Error(statusPayload.data.error || t('annotation.analysis_incomplete'))
+        }
       }
-      if (statusPayload.data.status === 'completed' && statusPayload.data.result) {
-        return statusPayload.data.result
-      }
-      if (statusPayload.data.status === 'failed' || statusPayload.data.status === 'cancelled') {
-        throw new Error(statusPayload.data.error || t('annotation.analysis_incomplete'))
-      }
+      throw new Error(t('annotation.analysis_timeout'))
+    } finally {
+      if (analysisAbortRef.current === controller) analysisAbortRef.current = null
     }
-    throw new Error(t('annotation.analysis_timeout'))
   }, [annotateId, selectedVideoId, selectedSegmentId, t])
 
   // ── Keyboard delete ────────────────────────────────
@@ -1712,9 +1754,20 @@ export default function AnnotateDetailPage() {
     <div className={styles.stateShell}>
       <WorkspaceHeader />
       <main className={styles.routeState}>
-        <div><h1>{t('annotation.set_not_found')}</h1><p>{t('project.not_found_desc')}</p>
-          <Link href="/annotations">{t('annotation.back')}</Link>
-        </div>
+        {loadError ? (
+          <div role="alert">
+            <h1>{t('annotation.load_error_title')}</h1>
+            <p>{t('annotation.load_error_desc')}</p>
+            <button type="button" onClick={() => setLoadRetry(n => n + 1)}
+              className="mt-3 rounded-lg border border-gv-border px-4 py-2 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors">
+              {t('annotation.load_retry')}
+            </button>
+          </div>
+        ) : (
+          <div><h1>{t('annotation.set_not_found')}</h1><p>{t('project.not_found_desc')}</p>
+            <Link href="/annotations">{t('annotation.back')}</Link>
+          </div>
+        )}
       </main>
     </div>
   )
@@ -2425,11 +2478,10 @@ export default function AnnotateDetailPage() {
 
                   {inspectorPanel === 'scene' && (
                     <SegmentReviewEditor
-                      key={`${selectedVideoId}_${selectedSegmentId}_${JSON.stringify([
-                        activeAnnotation.scene,
-                        activeAnnotation.camera,
-                        visualEventsFor(activeAnnotation),
-                      ])}`}
+                      // Reset editor draft state only when the segment changes;
+                      // deep-serializing the annotation here re-ran on every
+                      // render and re-created the editor while typing.
+                      key={`${selectedVideoId}_${selectedSegmentId}`}
                       annotation={activeAnnotation}
                       onSave={handleSaveSegEdits}
                     />

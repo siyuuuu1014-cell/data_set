@@ -17,6 +17,13 @@ test('deleting an annotation set removes its uploads and identity cache without 
   const root = await mkdtemp(path.join(tmpdir(), 'nuwa-set-delete-'))
   const previousCwd = process.cwd()
   process.chdir(root)
+  // Safety gate: if this assertion ever fails, the route's module-load-time
+  // data root would resolve to the real repository data/ and the DELETE below
+  // could erase real user data. Fail loudly instead of silently deleting.
+  assert.ok(
+    process.cwd().startsWith(tmpdir()),
+    `chdir to temp failed — refusing to run destructive route against real data (cwd=${process.cwd()})`,
+  )
   try {
     const { mkdir: makeDir } = await import('node:fs/promises')
     const videoDataRoot = path.join('data', 'video-annotations')

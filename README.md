@@ -192,11 +192,13 @@ The checked-in helper scripts target PowerShell on Windows:
 ./scripts/check-video-environment.ps1
 ./scripts/setup-video-worker.ps1
 ./scripts/start-video-worker.ps1
-# Or start the worker and Next.js development server together:
+# Or start everything with a single command:
+npm run dev:all
+# Windows PowerShell equivalent:
 ./scripts/start-all.ps1
 ```
 
-Run the web application separately with `npm run dev`.
+`dev:all` runs the Next.js dev server and the Python worker concurrently with colour-coded output. Run `npm run dev` if you only need the web application.
 
 `setup-video-worker.ps1` creates `workers/video-annotation/.venv`; the start and environment-check scripts use that Nuwa-only interpreter and never fall back to an active Conda/base environment. This keeps Nuwa's model dependencies from changing other projects. `NUWA_WORKER_PYTHON` remains available only for an explicitly selected, Nuwa-dedicated interpreter.
 
@@ -319,6 +321,7 @@ When changing the worker bind host or port, set `VIDEO_ANNOTATION_WORKER_URL` in
 | Command | Purpose |
 |---|---|
 | `npm run dev` | Start the Next.js development server |
+| `npm run dev:all` | Start Next.js and the Python worker together |
 | `npm run build` | Create a production build |
 | `npm run start` | Start the production server |
 | `npm run lint` | Run ESLint |

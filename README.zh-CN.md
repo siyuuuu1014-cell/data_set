@@ -192,11 +192,13 @@ npm run start
 ./scripts/check-video-environment.ps1
 ./scripts/setup-video-worker.ps1
 ./scripts/start-video-worker.ps1
-# 也可以同时启动 Worker 和 Next.js 开发服务器：
+# 也可以用一条命令同时启动所有服务：
+npm run dev:all
+# 或使用 PowerShell 脚本：
 ./scripts/start-all.ps1
 ```
 
-如需单独启动 Web 应用，请运行 `npm run dev`。
+`dev:all` 会同时启动 Next.js 开发服务器和 Python Worker，并用不同颜色区分输出。如果只需要 Web 应用，运行 `npm run dev` 即可。
 
 `setup-video-worker.ps1` 会创建 `workers/video-annotation/.venv`；启动和环境检查脚本只使用这个 Nuwa 专用解释器，不再回退到当前激活的 Conda/base 环境，因此不会通过修改 Worker 依赖影响其他项目。`NUWA_WORKER_PYTHON` 仅用于显式指定另一个 Nuwa 专用解释器。
 
@@ -319,6 +321,7 @@ FastAPI Worker 提供健康检查、任务状态和处理接口，由 Next.js �
 | 命令 | 用途 |
 |---|---|
 | `npm run dev` | 启动 Next.js 开发服务器 |
+| `npm run dev:all` | 同时启动 Next.js 和 Python Worker |
 | `npm run build` | 创建生产构建 |
 | `npm run start` | 启动生产服务器 |
 | `npm run lint` | 运行 ESLint |

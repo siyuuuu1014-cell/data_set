@@ -1,0 +1,62 @@
+.control {
+  --slide-pad: 3px;
+  min-width: max-content;
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(var(--slide-count), minmax(52px, 1fr));
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  padding: var(--slide-pad);
+  background: var(--ui-surface-subtle);
+}
+
+.indicator {
+  width: calc((100% - (var(--slide-pad) * 2)) / var(--slide-count));
+  position: absolute;
+  inset: var(--slide-pad) auto var(--slide-pad) var(--slide-pad);
+  z-index: 0;
+  border: 1px solid var(--ui-selection-border);
+  border-radius: calc(var(--ui-radius-sm) - 3px);
+  background: var(--ui-selection-background);
+  box-shadow: var(--ui-selection-shadow);
+  transform: translateX(calc(var(--slide-index) * 100%));
+  transition:
+    transform 210ms var(--ui-ease-standard),
+    box-shadow var(--ui-duration-fast) var(--ui-ease-standard);
+  pointer-events: none;
+}
+.control[data-has-selection='false'] .indicator { opacity: 0; }
+
+.control button {
+  min-width: 0;
+  min-height: var(--ui-control-lg);
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  gap: 2px;
+  overflow: hidden;
+  border: 0;
+  border-radius: calc(var(--ui-radius-sm) - 3px);
+  padding: 0 var(--ui-space-3);
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font: inherit;
+  font-size: var(--ui-text-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.control button strong { overflow: hidden; font: inherit; font-weight: 630; text-overflow: ellipsis; }
+.control button small { overflow: hidden; color: var(--ui-text-muted); font-size: var(--ui-text-xs); text-overflow: ellipsis; }
+.control button[data-visual='true'],
+.control button[aria-pressed='true'] { color: var(--ui-text); }
+.control button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.control button:disabled { cursor: not-allowed; opacity: 0.45; }
+.compact button { width: 44px; min-height: 38px; padding-inline: 0; }
+.compact button strong { display: grid; place-items: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .indicator { transition-duration: 1ms; }
+}

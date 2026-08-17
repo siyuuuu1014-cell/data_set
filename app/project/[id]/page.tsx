@@ -1,11 +1,14 @@
 'use client'
 
-import { useStore } from '@/services/store'
-import { useLang } from '@/services/i18n'
-import { useParams } from 'next/navigation'
-import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
-import { exportSql, exportJson, exportCsv, exportXml, exportExcel, downloadFile } from '@/services/export'
+import { useEffect, useState } from 'react'
+import { useParams } from 'next/navigation'
+import { Button, EmptyState, PageHeader, PageShell, StatusBadge, useConfirm } from '@/components/ui'
+import { downloadFile, exportCsv, exportExcel, exportJson, exportSql, exportXml } from '@/services/export'
+import { useLang } from '@/services/i18n'
+import { useStore } from '@/services/store'
+import type { TableDef } from '@/services/types'
+import styles from '../project-management.module.css'
 
 type ExportFormat = 'json' | 'csv' | 'xlsx' | 'xml' | 'sql' | 'parquet'
 
@@ -22,247 +25,314 @@ export default function ProjectPage() {
   const { id } = useParams<{ id: string }>()
   const { getTables, deleteTable, setTables, updateTable } = useStore()
   const { t } = useLang()
+  const confirmAction = useConfirm()
   const tables = getTables(id)
-  const [orderedTables, setOrderedTables] = useState(tables)
+  const orderedTables = tables
+  const totalColumns = tables.reduce((sum, table) => sum + table.columns.length, 0)
+  const totalRows = tables.reduce((sum, table) => sum + (table.rowCount ?? table.rows.length), 0)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
-
-  const tablesRef = useRef(tables)
-  if (tables !== tablesRef.current) {
-    tablesRef.current = tables
-    if (orderedTables.length !== tables.length || !tables.every((t, i) => orderedTables[i]?.id === t.id)) {
-      setOrderedTables(tables)
-    }
-  }
-
-  // On mount or when tables change, fetch row counts from Parquet for tables
-  // that show 0 rows (either no cached rowCount or genuinely empty).
-  // Uses the lightweight ?count=true API to avoid loading all data.
-  useEffect(() => {
-    const toCheck: { id: string; name: string }[] = []
-    for (const table of tables) {
-      if ((table.rowCount ?? 0) > 0) continue
-      if (table.columns.length === 0) continue
-      toCheck.push({ id: table.id, name: table.name })
-    }
-    if (toCheck.length === 0) return
-    Promise.allSettled(
-      toCheck.map(async ({ id: tid, name: tableName }) => {
-        const url = `/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(tableName)}&count=true`
-        const res = await fetch(url)
-        if (!res.ok) return
-        const data = await res.json() as { count?: number }
-        if (typeof data.count === 'number' && data.count > 0) {
-          updateTable(id, tid, { rowCount: data.count })
-        }
-      })
-    )
-  }, [id, tables.length])
-
   const [showExport, setShowExport] = useState(false)
+  const [exportTargetId, setExportTargetId] = useState<string | null>(null)
   const [exportFormats, setExportFormats] = useState<Record<string, ExportFormat>>({})
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
+  const [tableSearch, setTableSearch] = useState('')
 
-  const handleExportAll = async () => {
-    for (const table of orderedTables) {
-      const fmt = exportFormats[table.id] || 'json'
-      const opt = FORMAT_OPTIONS.find(f => f.value === fmt)!
-      if (fmt === 'parquet') {
-        const a = document.createElement('a')
-        a.href = `/api/data/download?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`
-        a.download = `${table.name}${opt.ext}`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-      } else {
-        // Fetch fresh data from API in case in-memory rows are stale/empty
-        let tableWithRows = table
-        try {
-          const res = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
-          if (res.ok) {
-            const data = await res.json() as { rows: Record<string, unknown>[] }
-            if (data.rows && data.rows.length > 0) {
-              tableWithRows = { ...table, rows: data.rows }
-            }
-          }
-        } catch {}
-        const exporters: Record<string, (t: typeof table) => string | Uint8Array> = {
-          json: exportJson, csv: exportCsv, xml: exportXml, sql: exportSql,
-        }
-        const fn = exporters[fmt]
-        if (fn) {
-          downloadFile(fn(tableWithRows) as string, `${table.name}${opt.ext}`, opt.mime)
-        } else if (fmt === 'xlsx') {
-          downloadFile(exportExcel(tableWithRows), `${table.name}${opt.ext}`, opt.mime)
-        }
+  const normalizedTableSearch = tableSearch.trim().toLocaleLowerCase()
+  const visibleTables = normalizedTableSearch
+    ? orderedTables.filter(table => {
+        const searchable = [
+          table.name,
+          ...table.columns.flatMap(column => [column.name, column.type]),
+        ].join(' ').toLocaleLowerCase()
+        return searchable.includes(normalizedTableSearch)
+      })
+    : orderedTables
+
+  const exportTables = exportTargetId
+    ? orderedTables.filter(table => table.id === exportTargetId)
+    : orderedTables
+
+  useEffect(() => {
+    const toCheck = tables.filter(table => (table.rowCount ?? 0) === 0 && table.columns.length > 0)
+    if (toCheck.length === 0) return
+
+    void Promise.allSettled(toCheck.map(async table => {
+      const url = `/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}&count=true`
+      const response = await fetch(url)
+      if (!response.ok) return
+      const data = await response.json() as { count?: number }
+      if (typeof data.count === 'number' && data.count > 0) {
+        updateTable(id, table.id, { rowCount: data.count })
       }
-    }
-    setShowExport(false)
+    }))
+  }, [id, tables, updateTable])
+
+  const openExport = (tableId: string | null = null) => {
+    const targets = tableId ? orderedTables.filter(table => table.id === tableId) : orderedTables
+    setExportFormats(Object.fromEntries(targets.map(table => [table.id, 'json' as ExportFormat])))
+    setExportTargetId(tableId)
+    setExportError('')
+    setShowExport(true)
   }
 
-  const handleDragStart = (i: number) => setDragIdx(i)
+  const exportTable = async (table: TableDef, format: ExportFormat) => {
+    const option = FORMAT_OPTIONS.find(item => item.value === format)
+    if (!option) return
 
-  const handleDragOver = useCallback((e: React.DragEvent, i: number) => {
-    e.preventDefault()
-    if (dragIdx === null || dragIdx === i) return
+    if (format === 'parquet') {
+      const link = document.createElement('a')
+      link.href = `/api/data/download?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`
+      link.download = `${table.name}${option.ext}`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      return
+    }
+
+    const response = await fetch(`/api/data?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`)
+    if (!response.ok) throw new Error(`Data request failed with status ${response.status}`)
+    const data = await response.json() as { rows?: Record<string, unknown>[] }
+    const tableWithRows = Array.isArray(data.rows) ? { ...table, rows: data.rows } : table
+
+    const exporters: Partial<Record<ExportFormat, (value: TableDef) => string | Uint8Array>> = {
+      json: exportJson,
+      csv: exportCsv,
+      xml: exportXml,
+      sql: exportSql,
+      xlsx: exportExcel,
+    }
+    const exporter = exporters[format]
+    if (!exporter) return
+    downloadFile(exporter(tableWithRows), `${table.name}${option.ext}`, option.mime)
+  }
+
+  const handleExport = async () => {
+    if (exporting || exportTables.length === 0) return
+    setExporting(true)
+    setExportError('')
+    try {
+      for (const table of exportTables) {
+        await exportTable(table, exportFormats[table.id] || 'json')
+      }
+      setShowExport(false)
+    } catch {
+      setExportError(t('project.export_error'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const moveTable = (index: number, direction: -1 | 1) => {
+    const destination = index + direction
+    if (destination < 0 || destination >= orderedTables.length) return
+    const reordered = [...orderedTables]
+    ;[reordered[index], reordered[destination]] = [reordered[destination], reordered[index]]
+    setTables(id, reordered)
+  }
+
+  const handleDragOver = (event: React.DragEvent, index: number) => {
+    event.preventDefault()
+    if (dragIdx === null || dragIdx === index) return
     const reordered = [...orderedTables]
     const [moved] = reordered.splice(dragIdx, 1)
-    reordered.splice(i, 0, moved)
-    setOrderedTables(reordered)
-    setDragIdx(i)
+    reordered.splice(index, 0, moved)
+    setDragIdx(index)
     setTables(id, reordered)
-  }, [dragIdx, orderedTables, id, setTables])
-
-  const handleDragEnd = () => setDragIdx(null)
+  }
 
   return (
-    <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-4">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-gv-text">
-          {t('project.tables')} ({tables.length})
-        </h2>
-        <div className="flex items-center gap-2">
-          {orderedTables.length > 0 && (
-            <button
-              onClick={() => {
-                const defaults: Record<string, ExportFormat> = {}
-                for (const t of orderedTables) defaults[t.id] = 'json'
-                setExportFormats(defaults)
-                setShowExport(true)
-              }}
-              className="btn-outline rounded-lg px-4 py-2 text-sm inline-flex items-center gap-1"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              {t('project.export_all')}
-            </button>
-          )}
-          <Link
-            href={`/project/${id}/table/new`}
-            className="btn-primary rounded-lg px-4 py-2 text-sm inline-flex items-center gap-1"
-          >
-            + {t('project.new_table')}
-          </Link>
-        </div>
-      </div>
+    <PageShell width="wide" className={styles.projectDetailPage}>
+      <PageHeader
+        className={styles.detailHeader}
+        title={`${t('project.tables')} (${tables.length})`}
+        description={t('project.tables_desc')}
+        actions={(
+          <div className={styles.pageActions}>
+            {orderedTables.length > 0 && (
+              <Button className={styles.exportAllButton} variant="secondary" onClick={() => openExport()}>
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                {t('project.export_all')}
+              </Button>
+            )}
+            <Link href={`/project/${id}/table/new`} className={styles.primaryLink}>
+              <span aria-hidden="true">+</span>
+              {t('project.new_table')}
+            </Link>
+          </div>
+        )}
+      />
 
-      {/* Export All Modal */}
+      <dl className={styles.summaryStrip} aria-label={t('project.project_summary')}>
+        <div><dt>{t('project.metric_tables')}</dt><dd>{tables.length}</dd></div>
+        <div><dt>{t('project.metric_columns')}</dt><dd>{totalColumns}</dd></div>
+        <div><dt>{t('project.metric_rows')}</dt><dd>{totalRows.toLocaleString()}</dd></div>
+      </dl>
+
+      {orderedTables.length > 0 && (
+        <section className={styles.tableSearchBar} aria-label={t('project.table_search_label')}>
+          <div className={styles.tableSearchField}>
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z" />
+            </svg>
+            <label htmlFor="project-table-search" className="sr-only">{t('project.table_search_label')}</label>
+            <input
+              id="project-table-search"
+              type="search"
+              value={tableSearch}
+              onChange={event => setTableSearch(event.target.value)}
+              placeholder={t('project.table_search_placeholder')}
+            />
+            {tableSearch && (
+              <button type="button" onClick={() => setTableSearch('')} aria-label={t('project.clear_table_search')}>
+                <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <p aria-live="polite">
+            {normalizedTableSearch
+              ? t('project.table_search_count', visibleTables.length, orderedTables.length)
+              : t('project.table_search_hint')}
+          </p>
+        </section>
+      )}
+
       {showExport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm" onClick={() => setShowExport(false)}>
-          <div className="glass-raised rounded-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-gv-text mb-1">{t('project.export_all_title')}</h3>
-            <p className="text-sm text-gv-text-dim mb-4">{t('project.export_all_desc')}</p>
-            <div className="space-y-3 mb-6 max-h-64 overflow-y-auto">
-              {orderedTables.map(table => (
-                <div key={table.id} className="flex items-center justify-between gap-3 py-2 border-b border-gv-border last:border-0">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gv-text truncate">{table.name}</p>
-                    <p className="text-xs text-gv-text-muted">{table.columns.length} {t('project.columns_count')} &middot; {(table.rowCount ?? table.rows.length)} {t('project.rows_count')}</p>
+        <div className={styles.modalOverlay} onClick={() => !exporting && setShowExport(false)}>
+          <div
+            className={styles.modal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="export-title"
+            aria-describedby="export-description"
+            onClick={event => event.stopPropagation()}
+          >
+            <h2 id="export-title">
+              {exportTargetId ? t('project.export_table_title', exportTables[0]?.name || '') : t('project.export_all_title')}
+            </h2>
+            <p id="export-description" className={styles.modalDescription}>{t('project.export_all_desc')}</p>
+            {exportError && <p className={styles.modalError} role="alert">{exportError}</p>}
+            <div className={styles.exportList}>
+              {exportTables.map(table => (
+                <div key={table.id} className={styles.exportRow}>
+                  <div className={styles.exportCopy}>
+                    <strong>{table.name}</strong>
+                    <span>
+                      {table.columns.length} {t('project.columns_count')} &middot;{' '}
+                      {(table.rowCount ?? table.rows.length).toLocaleString()} {t('project.rows_count')}
+                    </span>
                   </div>
                   <select
                     value={exportFormats[table.id] || 'json'}
-                    onChange={e => setExportFormats(prev => ({ ...prev, [table.id]: e.target.value as ExportFormat }))}
-                    className="rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2.5 py-1.5 text-sm focus:outline-none focus:border-gv-pink flex-shrink-0"
+                    onChange={event => setExportFormats(previous => ({ ...previous, [table.id]: event.target.value as ExportFormat }))}
+                    className={styles.formatSelect}
+                    aria-label={`${table.name} ${t('project.export_format')}`}
+                    disabled={exporting}
                   >
-                    {FORMAT_OPTIONS.map(f => (
-                      <option key={f.value} value={f.value}>{f.label}</option>
+                    {FORMAT_OPTIONS.map(format => (
+                      <option key={format.value} value={format.value}>{format.label}</option>
                     ))}
                   </select>
                 </div>
               ))}
             </div>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowExport(false)}
-                className="btn-outline rounded-lg px-4 py-2 text-sm"
-              >
-                {t('app.cancel')}
-              </button>
-              <button
-                onClick={handleExportAll}
-                className="btn-primary rounded-lg px-4 py-2 text-sm"
-              >
-                {t('project.download_all')}
-              </button>
+            <div className={styles.modalActions}>
+              <Button variant="secondary" onClick={() => setShowExport(false)} disabled={exporting}>{t('app.cancel')}</Button>
+              <Button onClick={handleExport} loading={exporting}>
+                {exportTargetId ? t('project.download_table') : t('project.download_all')}
+              </Button>
             </div>
           </div>
         </div>
       )}
 
       {orderedTables.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 text-gv-text-dim">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-gv-pink/10 to-gv-green/10 flex items-center justify-center mb-4 border border-gv-border">
-            <svg className="w-8 h-8 text-gv-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <p className="text-base font-medium">{t('project.no_tables')}</p>
-          <p className="text-sm mt-1">{t('project.no_tables_desc')}</p>
-        </div>
+        <section className={styles.tableEmpty}>
+          <EmptyState
+            title={t('project.no_tables')}
+            description={t('project.no_tables_desc')}
+            icon={(
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            )}
+            action={<Link href={`/project/${id}/table/new`} className={styles.primaryLink}>{t('project.new_table')}</Link>}
+          />
+        </section>
+      ) : visibleTables.length === 0 ? (
+        <section className={styles.tableSearchEmpty}>
+          <EmptyState
+            title={t('project.no_table_results')}
+            description={t('project.no_table_results_help')}
+            action={<Button variant="secondary" onClick={() => setTableSearch('')}>{t('project.clear_table_search')}</Button>}
+          />
+        </section>
       ) : (
-        <div className="space-y-3">
-          {orderedTables.map((table, i) => (
+        <section className={styles.tableList} aria-label={t('project.tables')}>
+          {visibleTables.map(table => {
+            const index = orderedTables.findIndex(item => item.id === table.id)
+            return (
             <div
               key={table.id}
-              draggable
-              onDragStart={() => handleDragStart(i)}
-              onDragOver={(e) => handleDragOver(e, i)}
-              onDragEnd={handleDragEnd}
-              className={`card group p-5 flex items-center gap-4 transition-all duration-200 ${
-                dragIdx === i ? 'opacity-50 border-gv-pink shadow-[0_0_16px_var(--color-gv-pink-glow)]' : ''
-              }`}
+              draggable={!normalizedTableSearch}
+              onDragStart={() => setDragIdx(index)}
+              onDragOver={event => handleDragOver(event, index)}
+              onDragEnd={() => setDragIdx(null)}
+              className={`${styles.tableRow} ${dragIdx === index ? styles.tableRowDragging : ''} ${normalizedTableSearch ? styles.tableRowFiltered : ''}`}
             >
-              <div className="cursor-grab active:cursor-grabbing text-gv-text-muted hover:text-gv-pink select-none flex-shrink-0 transition-colors" title={t('project.drag_hint')}>
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
-                </svg>
+              <div className={styles.reorderTools}>
+                <span className={styles.dragHandle} title={t('project.drag_hint')} aria-hidden="true">
+                  <svg fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+                  </svg>
+                </span>
+                <span className={styles.keyboardReorder}>
+                  <button type="button" onClick={() => moveTable(index, -1)} disabled={Boolean(normalizedTableSearch) || index === 0} aria-label={t('project.move_up', table.name)}>&uarr;</button>
+                  <button type="button" onClick={() => moveTable(index, 1)} disabled={Boolean(normalizedTableSearch) || index === orderedTables.length - 1} aria-label={t('project.move_down', table.name)}>&darr;</button>
+                </span>
               </div>
-              <div className="flex-1 min-w-0">
-                <Link href={`/project/${id}/table/${table.id}`} className="block">
-                  <h3 className="font-semibold text-gv-text group-hover:text-gv-pink transition-colors">
-                    {table.name}
-                  </h3>
-                  <p className="text-sm text-gv-text-dim mt-1">
-                    {table.columns.length} {t('project.columns_count')} &middot; {(table.rowCount ?? table.rows.length)} {t('project.rows_count')}
+              <div className={styles.tableBody}>
+                <Link href={`/project/${id}/table/${table.id}`} className={styles.tableMainLink}>
+                  <h3>{table.name}</h3>
+                  <p>
+                    {table.columns.length} {t('project.columns_count')} &middot;{' '}
+                    {(table.rowCount ?? table.rows.length).toLocaleString()} {t('project.rows_count')}
                   </p>
                 </Link>
                 {table.columns.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {table.columns.map(col => (
-                      <span
-                        key={col.id}
-                        className="inline-block text-xs px-2 py-0.5 rounded-full bg-gv-bg text-gv-text-dim border border-gv-border"
-                      >
-                        {col.name}
-                        <span className="ml-1 text-gv-text-muted">
-                          {col.type === 'foreign_key' ? 'FK' : col.type}
-                        </span>
-                      </span>
+                  <div className={styles.columnList}>
+                    {table.columns.slice(0, 6).map(column => (
+                      <StatusBadge key={column.id} tone="neutral" dot={false}>
+                        {column.name} &middot; {column.type === 'foreign_key' ? 'FK' : column.type}
+                      </StatusBadge>
                     ))}
+                    {table.columns.length > 6 && <StatusBadge tone="neutral" dot={false}>+{table.columns.length - 6}</StatusBadge>}
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <Link
-                  href={`/project/${id}/table/${table.id}`}
-                  className="rounded-lg px-3 py-1.5 text-sm bg-gv-pink/10 text-gv-pink hover:bg-gv-pink/20 transition-colors font-medium"
-                >
-                  {t('project.edit_btn')}
-                </Link>
-                <button
-                  onClick={() => {
-                    if (confirm(`${t('project.delete_confirm')} "${table.name}"?`)) {
-                      deleteTable(id, table.id)
-                    }
+              <div className={styles.rowActions}>
+                <Button variant="quiet" size="sm" onClick={() => openExport(table.id)}>{t('project.export_table')}</Button>
+                <Link href={`/project/${id}/table/${table.id}`} className={styles.editLink}>{t('project.edit_btn')}</Link>
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  className={styles.deleteButton}
+                  onClick={async () => {
+                    if (await confirmAction({ message: `${t('project.delete_confirm')} "${table.name}"?`, confirmLabel: t('app.delete'), tone: 'danger' })) deleteTable(id, table.id)
                   }}
-                  className="rounded-lg px-3 py-1.5 text-sm text-gv-pink-dark hover:bg-gv-pink/10 transition-colors"
                 >
                   {t('project.delete_btn')}
-                </button>
+                </Button>
               </div>
             </div>
-          ))}
-        </div>
+            )
+          })}
+        </section>
       )}
-    </main>
+    </PageShell>
   )
 }

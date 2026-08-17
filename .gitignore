@@ -45,7 +45,48 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Claude
+# Claude / Agent harnesses
 .claude/
 CLAUDE.md
 AGENTS.md
+.agent_harnesses.json
+
+# Video annotation
+data/video-annotations/
+workers/video-annotation/.venv/
+workers/video-annotation/worker.env
+workers/video-annotation/**/__pycache__/
+workers/video-annotation/.pytest_cache/
+workers/video-annotation/*.egg-info/
+workers/video-annotation/models/
+workers/video-annotation/cache/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.safetensors
+*.pt
+*.pth
+*.onnx
+
+# Project snapshot
+project_tree.txt
+
+# JetBrains IDE (private per-user config)
+.idea/
+
+# Design / review / demo artifacts (local only, not for publishing)
+.impeccable/
+.hermes/
+app/ui-review/
+components/ui-review/
+app/design-demo/
+components/design-demo/
+app/home-demo/
+components/home-demo/
+app/restore/
+app/api/restore/
+public/restore.html
+public/restore.js
+PROJECT_STATUS_AND_ISSUES.md

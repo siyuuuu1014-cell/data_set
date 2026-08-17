@@ -8,6 +8,7 @@
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { isSafeExpression } from './safe-expression'
 
 const CACHE_FILE = join(process.cwd(), 'configs', 'code-cache.json')
 
@@ -80,25 +81,7 @@ export function deleteCachedCode(key: string): void {
 export function isValidExpression(code: string): boolean {
   if (!code || code.length > 350) return false
   if (/[\u4e00-\u9fff]/.test(code)) return false
-  const expr = code.includes('return ') ? code : `return (${code})`
-  // Realistic test stubs — provide working refData + pick so code like
-  // pick(refData["users"]).name doesn't crash during validation.
-  const testRefData: Record<string, unknown[]> = {
-    users: [{ id: 1, name: 'test' }],
-    orders: [{ id: 1 }],
-    products: [{ id: 1 }],
-  }
-  const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : undefined)
-  const testRow = new Proxy({} as Record<string, unknown>, {
-    get: () => new Date(),
-  })
-  try {
-    const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', expr) as (...args: unknown[]) => unknown
-    fn(0, 1, [], testRefData, testRow, (a: number, b: number) => a, (a: number, b: number) => a, testPick)
-    return true
-  } catch {
-    return false
-  }
+  return isSafeExpression(code)
 }
 
 /**

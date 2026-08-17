@@ -1,0 +1,156 @@
+.trigger {
+  width: 100%;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  text-align: left;
+}
+
+.trigger > span { min-width: 0; display: grid; gap: 0.1875rem; }
+.trigger strong { font-size: 0.75rem; font-weight: 680; }
+.trigger small { color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
+.trigger svg { width: 1rem; height: 1rem; flex: 0 0 auto; color: var(--ui-text-muted); transition: transform var(--ui-duration-normal) var(--ui-ease-standard); }
+.trigger:hover { border-color: var(--ui-border-strong); background: var(--ui-surface-raised); }
+.trigger:hover svg { color: var(--ui-icon-accent); }
+.trigger[aria-expanded='true'] svg { transform: rotate(90deg); }
+
+.panel {
+  width: 100%;
+  margin: -0.25rem 0 0.75rem;
+  overflow: hidden;
+  border-top: 1px solid var(--ui-border-strong);
+  border-bottom: 1px solid var(--ui-border-strong);
+  background: var(--ui-page);
+  color: var(--ui-text);
+  animation: identityPanelIn var(--ui-duration-normal) var(--ui-ease-standard) both;
+}
+
+.panelEmbedded {
+  margin: 0;
+  border-top: 0;
+}
+
+.panelEmbedded .workspace {
+  height: min(36rem, calc(100dvh - 11.5rem));
+  min-height: 30rem;
+  overflow: hidden;
+}
+
+.panelEmbedded .directory {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panelEmbedded .identityList {
+  min-height: 0;
+  max-height: none;
+  flex: 1;
+}
+
+.pageHeader {
+  min-height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+  padding: 0.75rem 0.875rem;
+}
+
+.pageHeader h2 { margin: 0 0 0.1875rem; font-size: var(--ui-text-md); font-weight: 650; letter-spacing: -0.02em; }
+.pageHeader p { max-width: 52ch; margin: 0; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); line-height: 1.45; }
+.pageHeader > button,
+.emptyState button { min-height: 1.75rem; flex: 0 0 auto; border: 0; border-bottom: 1px solid transparent; background: transparent; padding: 0 0.125rem; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); font-weight: 650; }
+.pageHeader > button:hover:not(:disabled),
+.emptyState button:hover { border-bottom-color: currentColor; color: var(--ui-text); }
+
+.workspace { min-height: 25rem; display: grid; grid-template-columns: minmax(10.5rem, 31%) minmax(0, 1fr); }
+.directory { min-width: 0; border-right: 1px solid var(--ui-border); padding: 0.75rem 0.625rem; background: var(--ui-surface-subtle); }
+.directoryHeader { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0 0.375rem 0.5rem; color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
+.directoryHeader strong { color: var(--ui-text); font-size: var(--ui-text-xs); }
+.identityList { max-height: 27rem; display: grid; align-content: start; overflow: auto; }
+
+.identityList > button {
+  width: 100%;
+  min-width: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.1875rem 0.375rem;
+  border: 0;
+  border-top: 1px solid var(--ui-border);
+  background: transparent;
+  padding: 0.625rem 0.375rem;
+  color: var(--ui-text);
+  text-align: left;
+}
+
+.identityList > button:hover { background: color-mix(in srgb, var(--ui-surface) 54%, transparent); }
+.identityList > button[aria-selected='true'] { background: var(--ui-icon-accent-soft); box-shadow: inset 2px 0 var(--ui-active-indicator); }
+.identityList button strong { overflow: hidden; font-family: var(--font-geist-mono), monospace; font-size: var(--ui-text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.identityList button small { overflow: hidden; color: var(--ui-text-muted); font-size: var(--ui-text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.identityList button span { grid-row: 1 / span 2; grid-column: 2; align-self: center; color: var(--ui-text-muted); font-size: var(--ui-text-xs); white-space: nowrap; }
+
+.decision { min-width: 0; width: 100%; display: grid; align-content: start; padding: 0.875rem 1rem; }
+.decision > header { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; padding-bottom: 0.875rem; }
+.decision > header > div { min-width: 0; }
+.decision > header span { color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
+.decision > header h3 { overflow: hidden; margin: 0.1875rem 0; font-family: var(--font-geist-mono), monospace; font-size: 0.875rem; text-overflow: ellipsis; white-space: nowrap; }
+.decision > header p { margin: 0; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); line-height: 1.4; }
+.decision button { min-height: 1.875rem; border: 1px solid var(--ui-border); border-radius: 0.5rem; background: var(--ui-surface); padding: 0 0.5625rem; color: var(--ui-text); font-size: var(--ui-text-xs); font-weight: 650; }
+.decision button:hover:not(:disabled) { border-color: var(--ui-border-strong); background: var(--ui-surface-raised); }
+.decision button:disabled,
+.pageHeader button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.actionBlock { min-width: 0; display: grid; gap: 0.75rem; border-top: 1px solid var(--ui-border-strong); padding: 0.875rem 0; }
+.actionBlock > div:first-child h4 { margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 650; }
+.actionBlock > div:first-child p { max-width: 52ch; margin: 0; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); line-height: 1.45; }
+.actionBlock > button { justify-self: start; }
+
+.mergeFlow { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+.mergeFlow > span { color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
+.mergeFlow label,
+.identitySource { min-width: 0; display: grid; gap: 0.25rem; color: var(--ui-text-muted); font-size: var(--ui-text-xs); }
+.identitySource strong { min-height: 1.875rem; display: flex; align-items: center; overflow: hidden; border-bottom: 1px solid var(--ui-border-strong); color: var(--ui-text); font-family: var(--font-geist-mono), monospace; font-size: var(--ui-text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.mergeFlow select { width: 100%; min-width: 0; min-height: 1.875rem; border: 1px solid var(--ui-border); border-radius: 0.5rem; background: var(--ui-surface); padding: 0 0.5rem; color: var(--ui-text); font-family: var(--font-geist-mono), monospace; font-size: var(--ui-text-xs); }
+
+.commitRow { display: grid; gap: 0.625rem; border-top: 1px solid var(--ui-border); padding-top: 0.625rem; }
+.commitRow p { margin: 0; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); line-height: 1.45; }
+.commitRow button { justify-self: start; }
+.decision .primaryAction { border-color: var(--ui-action-primary-border); background: var(--ui-action-primary-background); box-shadow: var(--ui-action-primary-shadow); color: var(--ui-action-primary-foreground); }
+.decision .primaryAction:hover:not(:disabled) { border-color: var(--ui-action-primary-border-hover); background: var(--ui-action-primary-background-hover); box-shadow: var(--ui-action-primary-shadow-hover); }
+
+.error,
+.success { margin: 0.625rem 0 0; border-top: 1px solid currentColor; padding-top: 0.5rem; font-size: var(--ui-text-xs); line-height: 1.45; }
+.error { color: var(--ui-danger); }
+.success { color: var(--ui-success); }
+
+.emptyState { min-height: 11rem; display: grid; place-content: center; justify-items: start; gap: 0.375rem; padding: 1.25rem; }
+.emptyState h3 { margin: 0; font-size: 0.875rem; font-weight: 650; }
+.emptyState p { max-width: 46ch; margin: 0; color: var(--ui-text-secondary); font-size: var(--ui-text-xs); line-height: 1.5; }
+.emptyState button { margin-top: 0.375rem; padding: 0; color: var(--ui-text); }
+
+.trigger:focus-visible,
+.pageHeader button:focus-visible,
+.identityList button:focus-visible,
+.decision button:focus-visible,
+.decision select:focus-visible,
+.emptyState button:focus-visible { outline: 2px solid var(--ui-focus-ring); outline-offset: 3px; }
+
+@keyframes identityPanelIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .panel { animation: none; }
+  .trigger svg { transition-duration: 1ms; }
+}

@@ -4,12 +4,14 @@ import React from 'react'
 import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import { useParams } from 'next/navigation'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import Link from 'next/link'
 import type { ColumnDef, ColumnType, IdFormat, DateFormat, DateRange, PhoneCountry } from '@/services/types'
 import { generateColumn } from '@/services/data-gen'
 import { exportSql, exportJson, exportCsv, exportXml, exportExcel, downloadFile } from '@/services/export'
 import { computeColumnStats, type ColumnStats, type NumStats, type TextStats, type DateStats, type BoolStats, type IdStats, type FkStats, type PhoneStats, type CityStats } from '@/services/stats'
+import { previewGenerationExpression } from '@/services/expression-preview'
+import styles from '../table-workflow.module.css'
 
 let _colIdCounter = Date.now()
 function genColId(): string { return 'col_' + (_colIdCounter++).toString(36) }
@@ -106,6 +108,7 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => {
+      URL.revokeObjectURL(img.src)
       let { width, height } = img
       if (width <= maxPx && height <= maxPx) {
         // Already small enough, just read as data URL
@@ -125,7 +128,10 @@ function resizeImage(file: File, maxPx = 1920, quality = 0.8): Promise<string> {
       ctx.drawImage(img, 0, 0, width, height)
       resolve(canvas.toDataURL('image/jpeg', quality))
     }
-    img.onerror = () => reject(new Error('Failed to load image'))
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src)
+      reject(new Error('Failed to load image'))
+    }
     img.src = URL.createObjectURL(file)
   })
 }
@@ -153,16 +159,21 @@ export default function TableEditorPage() {
   const [colDragIdx, setColDragIdx] = useState<number | null>(null)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [displayedRows, setDisplayedRows] = useState<Record<string, unknown>[]>(table?.rows || [])
-  const [rowsLoading, setRowsLoading] = useState((table?.rowCount ?? 0) > 0 && (table?.rows.length ?? 0) === 0)
+  const [rowsLoading, setRowsLoading] = useState((table?.rowCount ?? 0) !== 0 && (table?.rows.length ?? 0) === 0)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadRetry, setLoadRetry] = useState(0)
   const [pageSize, setPageSize] = useState(50)
   const [currentPage, setCurrentPage] = useState(1)
+  const [workspaceMode, setWorkspaceMode] = useState<'data' | 'statistics'>('data')
   const [generatedColumns, setGeneratedColumns] = useState<Set<string>>(new Set())
 
   const [llmConfigured, setLlmConfigured] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [imageUploading, setImageUploading] = useState(false)
   const [importingNuwa, setImportingNuwa] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const nuwaFileRef = useRef<HTMLInputElement>(null)
+  const dataFetchSeqRef = useRef(0)
   const exportMenuRef = useRef<HTMLDivElement>(null)
 
   // Close export menu on outside click
@@ -248,6 +259,7 @@ export default function TableEditorPage() {
             const { rows: freshRows } = await reloadRes.json() as { rows: Record<string, unknown>[] }
             if (freshRows && freshRows.length > 0) {
               setDisplayedRows(freshRows)
+              setCurrentPage(1)
               setTableRows(id, table.id, freshRows)
               setGeneratedColumns(new Set(table.columns.map(c => c.id)))
             }
@@ -276,40 +288,77 @@ export default function TableEditorPage() {
 
   useEffect(() => {
     if (!table) return
+    const seq = ++dataFetchSeqRef.current
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data-loading effect with stable deps
+    setRowsLoading(true)
+    setLoadFailed(false)
     const url = `/api/data?projectId=${id}&tableName=${encodeURIComponent(table.name)}`
     fetch(url)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
       .then(data => {
+        if (seq !== dataFetchSeqRef.current) return // stale response
+        setLoadFailed(false)
         if (data.rows?.length > 0) {
           setDisplayedRows(data.rows)
           setTableRows(id, table.id, data.rows)
+          setCurrentPage(1)
+          // Auto-extract column names from first row if none configured
+          if ((table.columns || []).length === 0) {
+            const cols = Object.keys(data.rows[0]).map(name => ({
+              id: name + '_col',
+              name,
+              type: 'text' as const,
+              llmPrompt: '',
+              generationCode: '',
+            }))
+            updateTable(id, table.id, { columns: cols, rowCount: data.rows.length })
+          } else if (table.rowCount === -1) {
+            updateTable(id, table.id, { rowCount: data.rows.length })
+          }
         }
         setRowsLoading(false)
       })
-      .catch(() => setRowsLoading(false))
-  }, [id, table?.name])
+      .catch(() => {
+        if (seq !== dataFetchSeqRef.current) return
+        setRowsLoading(false)
+        // Loading failed — the Parquet file may still hold data. Refuse any
+        // generate/overwrite action until the user retries the load, otherwise
+        // a transient error would let a fresh empty table clobber old rows.
+        setLoadFailed(true)
+      })
+  }, [id, table?.name, loadRetry])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const [editMode, setEditMode] = useState(false)
   const [editName, setEditName] = useState(table?.name || '')
   const [editColumns, setEditColumns] = useState<ColumnDef[]>(table?.columns || [])
+  const [selectedEditColumnId, setSelectedEditColumnId] = useState(table?.columns[0]?.id || '')
   const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [hoveredGuideIndex, setHoveredGuideIndex] = useState<number | null>(null)
 
   if (!project || !table) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-lg text-gv-text-dim">{t('table.not_found')}</p>
-          <Link href={`/project/${id}`} className="text-sm text-gv-pink hover:underline mt-2 inline-block">
+      <main className={styles.editorState}>
+        <div>
+          <h1>{t('table.not_found')}</h1>
+          <p>{t('state.not_found_desc')}</p>
+          <Link href={`/project/${id}`}>
             {t('table.back_to_project')}
           </Link>
         </div>
-      </div>
+      </main>
     )
   }
 
   const emptyPromptCols = table.columns.filter(c => c.type === 'text' && !c.nullable && !c.llmPrompt?.trim())
 
   const handleGenerate = async () => {
+    if (loadFailed) {
+      setGenError(t('table.load_failed_no_generate'))
+      return
+    }
     setGenError('')
     setGenerating(true)
     try {
@@ -325,8 +374,10 @@ export default function TableEditorPage() {
 
       await saveToParquet(blankRows)
 
+      dataFetchSeqRef.current++ // invalidate any in-flight initial fetch
       setTableRows(id, table.id, blankRows)
       setDisplayedRows(blankRows)
+      setCurrentPage(1)
       setGeneratedColumns(new Set())
     } catch (err) {
       setGenError(err instanceof Error ? err.message : t('table.gen_fail_short'))
@@ -409,9 +460,12 @@ export default function TableEditorPage() {
         rows.push({ ...existing, [col.name]: values[i] ?? null })
       }
 
-      setDisplayedRows(rows)
-      setTableRows(id, table.id, rows)
+      // Persist first, then update the UI: if the Parquet write fails, the
+      // store/localStorage must not show data that a reload would lose.
       await saveToParquet(rows)
+      setDisplayedRows(rows)
+      setCurrentPage(1)
+      setTableRows(id, table.id, rows)
       setGeneratedColumns(prev => new Set(prev).add(col.id))
     } catch (err) {
       setGenError(err instanceof Error ? err.message : t('table.gen_fail_short'))
@@ -420,6 +474,7 @@ export default function TableEditorPage() {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -446,6 +501,7 @@ export default function TableEditorPage() {
         generationCode: '',
       }))
       setEditColumns(newCols)
+      setSelectedEditColumnId(newCols[0]?.id || '')
       updateTable(id, table.id, { columns: newCols })
       setEditMode(true)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -471,18 +527,67 @@ export default function TableEditorPage() {
   const handleColDragEnd = () => setColDragIdx(null)
 
   const startEdit = () => {
+    const editableColumns = JSON.parse(JSON.stringify(table.columns)) as ColumnDef[]
     setEditName(table.name)
-    setEditColumns(JSON.parse(JSON.stringify(table.columns)))
+    setEditColumns(editableColumns)
+    setSelectedEditColumnId(editableColumns[0]?.id || '')
     setEditMode(true)
   }
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     const invalid = editColumns.find(c => !c.name.trim())
     if (invalid) {
       setGenError(t('table.col_name_required'))
       return
     }
-    updateTable(id, table.id, { name: editName, columns: editColumns })
+    const newName = editName.trim()
+    if (!newName) {
+      setGenError(t('table.table_name_required'))
+      return
+    }
+    if (newName !== table.name && tables.some(t => t.id !== table.id && t.name === newName)) {
+      setGenError(t('table.name_exists'))
+      return
+    }
+    const renamed = newName !== table.name
+    const oldName = table.name
+
+    // Detect column-set changes against persisted Parquet data: renaming,
+    // deleting, or reordering columns does not rewrite the stored schema, so
+    // exported rows would silently mismatch. Warn and keep the editor open.
+    const hasGeneratedData = (table.rowCount ?? 0) > 0 || (table.rows?.length ?? 0) > 0
+    if (hasGeneratedData) {
+      const oldKeys = table.columns.map(c => c.name)
+      const newKeys = editColumns.map(c => c.name)
+      const keysChanged = oldKeys.length !== newKeys.length
+        || oldKeys.some((name, index) => name !== newKeys[index])
+      if (keysChanged) {
+        setGenError(t('table.schema_change_warning'))
+        return
+      }
+    }
+
+    updateTable(id, table.id, { name: newName, columns: editColumns })
+    if (renamed) {
+      try {
+        const res = await fetch('/api/data', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: id, fromTable: oldName, toTable: newName }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => null)
+          const msg = (body && typeof body.error === 'string' && body.error) || t('table.rename_failed')
+          setGenError(msg)
+          updateTable(id, table.id, { name: oldName, columns: editColumns })
+          return
+        }
+      } catch {
+        setGenError(t('table.rename_failed'))
+        updateTable(id, table.id, { name: oldName, columns: editColumns })
+        return
+      }
+    }
     setEditMode(false)
     setGenError('')
     // Schema changed — reset generate button state
@@ -494,17 +599,26 @@ export default function TableEditorPage() {
   }
 
   const addEditColumn = (afterIndex?: number) => {
+    const column = emptyColumn()
     setEditColumns(prev => {
       if (afterIndex !== undefined && afterIndex >= 0 && afterIndex < prev.length) {
-        return [...prev.slice(0, afterIndex + 1), emptyColumn(), ...prev.slice(afterIndex + 1)]
+        return [...prev.slice(0, afterIndex + 1), column, ...prev.slice(afterIndex + 1)]
       }
-      return [...prev, emptyColumn()]
+      return [...prev, column]
     })
+    setSelectedEditColumnId(column.id)
   }
 
   const removeEditColumn = (colId: string) => {
     if (editColumns.length <= 1) return
-    setEditColumns(prev => prev.filter(c => c.id !== colId))
+    setEditColumns(prev => {
+      const removedIndex = prev.findIndex(column => column.id === colId)
+      const next = prev.filter(column => column.id !== colId)
+      if (selectedEditColumnId === colId) {
+        setSelectedEditColumnId(next[Math.min(Math.max(removedIndex, 0), next.length - 1)]?.id || '')
+      }
+      return next
+    })
   }
 
   const handleDragStart = (i: number) => setDragIndex(i)
@@ -526,9 +640,9 @@ export default function TableEditorPage() {
   )
 
   return (
-    <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-4">
+    <main className={styles.editorPage}>
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className={styles.editorHeader}>
         <div className="flex items-center gap-3">
           <Link href={`/project/${id}`} className="text-gv-text-dim hover:text-gv-pink transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -537,7 +651,7 @@ export default function TableEditorPage() {
           </Link>
           <h2 className="text-lg font-semibold text-gv-text">{table.name}</h2>
         </div>
-        <div className="flex items-center gap-2">
+        <div className={styles.editorActions}>
           <input ref={nuwaFileRef} type="file" accept=".nuwa" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportNuwa(f); if (nuwaFileRef.current) nuwaFileRef.current.value = '' }} />
           <button onClick={() => nuwaFileRef.current?.click()} disabled={importingNuwa}
@@ -552,21 +666,21 @@ export default function TableEditorPage() {
               {t('table.export_menu')}
             </button>
             {showExportMenu && (
-              <div ref={exportMenuRef} className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gv-border bg-white shadow-lg z-50 overflow-hidden">
+              <div ref={exportMenuRef} className={`absolute right-0 top-full mt-1 w-44 rounded-lg border border-ui-border bg-ui-surface shadow-lg z-50 overflow-hidden ${styles.exportMenu}`}>
                 <button onClick={() => { downloadFile(exportJson(table), `${table.name}.json`, 'application/json'); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">JSON</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors">JSON</button>
                 <button onClick={() => { handleExportCsv(); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">CSV</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors">CSV</button>
                 <button onClick={() => { downloadFile(exportExcel(table), `${table.name}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Excel (XLSX)</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors">Excel (XLSX)</button>
                 <button onClick={() => { downloadFile(exportXml(table), `${table.name}.xml`, 'application/xml'); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">XML</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors">XML</button>
                 <button onClick={() => { downloadFile(exportSql(table), `${table.name}.sql`, 'text/plain'); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">SQL INSERT</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors">SQL INSERT</button>
                 <button onClick={() => { const a = document.createElement('a'); a.href = `/api/data/download?projectId=${encodeURIComponent(id)}&tableName=${encodeURIComponent(table.name)}`; a.download = `${table.name}.parquet`; document.body.appendChild(a); a.click(); document.body.removeChild(a); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors">Parquet</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors">Parquet</button>
                 <button onClick={() => { handleExportNuwa(); setShowExportMenu(false) }}
-                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-gv-pink/5 transition-colors border-t border-gv-border/50">{t('table.export_nuwa')}</button>
+                  className="w-full text-left px-4 py-2 text-sm text-gv-text hover:bg-ui-icon-accent-soft transition-colors border-t border-ui-border">{t('table.export_nuwa')}</button>
               </div>
             )}
           </div>
@@ -574,58 +688,185 @@ export default function TableEditorPage() {
       </div>
 
       {/* Two-column layout */}
-      <div className="flex gap-4 items-start">
+      <div className={`${styles.editorGrid} ${editMode ? styles.editorGridEditing : ''}`}>
+        <nav className={`${styles.workspaceModes} ${styles.workspaceModeBar}`} aria-label={t('table.workspace_modes')}>
+          <button type="button" aria-current={!editMode && workspaceMode === 'data' ? 'page' : undefined} onClick={() => { setEditMode(false); setWorkspaceMode('data') }}>
+            {t('table.data_view')}
+          </button>
+          <button type="button" aria-current={!editMode && workspaceMode === 'statistics' ? 'page' : undefined} disabled={displayedRows.length === 0} onClick={() => { setEditMode(false); setWorkspaceMode('statistics') }}>
+            {t('stats.title')}
+          </button>
+          <button type="button" aria-current={editMode ? 'page' : undefined} onClick={startEdit}>
+            {t('table.edit_schema')}
+          </button>
+          <span>{table.columns.length} {t('table.columns_unit')} / {displayedRows.length > 0 ? displayedRows.length : (table.rowCount ?? 0)} {t('table.rows')}</span>
+        </nav>
         {/* LEFT ~30% — Column schema + edit */}
-        <div className="w-[30%] flex-shrink-0 space-y-3">
+        <div className={`${styles.schemaPanel} ${editMode ? styles.schemaPanelEditing : ''}`}>
 
-      {editMode ? (
-        <div className="card p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gv-text text-sm">{t('table.edit_schema')}</h3>
-            <button onClick={() => setEditMode(false)} className="text-gv-text-dim hover:text-gv-pink transition-colors">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+      {!editMode && (
+        <nav
+          className={styles.tableWorkbenchGuide}
+          aria-label={t('table.workbench_guide')}
+          style={{ '--guide-index': hoveredGuideIndex ?? (workspaceMode === 'statistics' ? 2 : 0) } as React.CSSProperties}
+          onPointerLeave={() => setHoveredGuideIndex(null)}
+        >
+          <div className={styles.tableWorkbenchGuideHeader}>
+            <strong>{t('table.workbench_guide')}</strong>
+          </div>
+          <div className={styles.tableWorkbenchGuideOptions}>
+            <span className={styles.tableWorkbenchGuideIndicator} aria-hidden="true" />
+            <button type="button" aria-current={workspaceMode === 'data' ? 'page' : undefined} onPointerEnter={() => setHoveredGuideIndex(0)} onClick={() => setWorkspaceMode('data')}>
+              <span aria-hidden="true"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M4 7h16M4 12h16M4 17h10" /></svg></span>
+              <span><strong>{t('table.data_view')}</strong><small>{t('table.data_view_help')}</small></span>
+            </button>
+            <button type="button" onPointerEnter={() => setHoveredGuideIndex(1)} onClick={startEdit}>
+              <span aria-hidden="true"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M4 6h16M4 12h16M4 18h10M8 4v4m8 2v4m-6 2v4" /></svg></span>
+              <span><strong>{t('table.edit_schema')}</strong><small>{t('table.schema_view_help')}</small></span>
+            </button>
+            <button type="button" aria-current={workspaceMode === 'statistics' ? 'page' : undefined} disabled={displayedRows.length === 0} onPointerEnter={() => setHoveredGuideIndex(2)} onClick={() => setWorkspaceMode('statistics')}>
+              <span aria-hidden="true"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M5 19V9m7 10V5m7 14v-7" /></svg></span>
+              <span><strong>{t('stats.title')}</strong><small>{t('table.stats_view_help')}</small></span>
             </button>
           </div>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-gv-text-dim mb-1">{t('table.name')}</label>
-              <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)}
-                className="input-field w-full py-2 text-sm" />
+        </nav>
+      )}
+
+      {editMode && (
+        <aside className={styles.editBaseSidebar} aria-label={t('table.workbench_guide')}>
+          <nav
+            className={styles.tableWorkbenchGuide}
+            aria-label={t('table.workbench_guide')}
+            style={{ '--guide-index': hoveredGuideIndex ?? 1 } as React.CSSProperties}
+            onPointerLeave={() => setHoveredGuideIndex(null)}
+          >
+            <div className={styles.tableWorkbenchGuideHeader}>
+              <strong>{t('table.workbench_guide')}</strong>
             </div>
-            {editColumns.map((col, i) => (
-              <React.Fragment key={col.id}>
-              <div
-                className={`rounded-lg border p-3 space-y-2 transition-all duration-200 ${
-                  dragIndex === i ? 'opacity-50 border-gv-pink shadow-[0_0_16px_var(--color-gv-pink-glow)]' : 'border-gv-border'
-                }`}
-                draggable
-                onDragStart={() => handleDragStart(i)}
-                onDragOver={(e) => handleDragOver(e, i)}
-                onDragEnd={handleDragEnd}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="cursor-grab active:cursor-grabbing text-gv-text-muted hover:text-gv-pink select-none transition-colors" title={t('table.drag_hint')}>
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <div className={styles.tableWorkbenchGuideOptions}>
+              <span className={styles.tableWorkbenchGuideIndicator} aria-hidden="true" />
+              <button type="button" onPointerEnter={() => setHoveredGuideIndex(0)} onClick={() => { setEditMode(false); setWorkspaceMode('data') }}>
+                <span aria-hidden="true"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M4 7h16M4 12h16M4 17h10" /></svg></span>
+                <span><strong>{t('table.data_view')}</strong><small>{t('table.data_view_help')}</small></span>
+              </button>
+              <button type="button" aria-current="page" onPointerEnter={() => setHoveredGuideIndex(1)}>
+                <span aria-hidden="true"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M4 6h16M4 12h16M4 18h10M8 4v4m8 2v4m-6 2v4" /></svg></span>
+                <span><strong>{t('table.edit_schema')}</strong><small>{t('table.schema_view_help')}</small></span>
+              </button>
+              <button type="button" disabled={displayedRows.length === 0} onPointerEnter={() => setHoveredGuideIndex(2)} onClick={() => { setEditMode(false); setWorkspaceMode('statistics') }}>
+                <span aria-hidden="true"><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M5 19V9m7 10V5m7 14v-7" /></svg></span>
+                <span><strong>{t('stats.title')}</strong><small>{t('table.stats_view_help')}</small></span>
+              </button>
+            </div>
+          </nav>
+          <section className={styles.editBaseColumns}>
+            <div className={styles.editBaseColumnsHeader}>
+              <strong>{t('table.columns')}</strong>
+              <span>{generatedColumns.size}/{table.columns.length}</span>
+            </div>
+            <div className={styles.editBaseColumnList}>
+              {table.columns.map(column => (
+                <div key={column.id}>
+                  <span className={styles.editBaseColumnCopy}>
+                    <strong>{column.name}</strong>
+                    <small>{t(TYPE_KEY[column.type])}</small>
+                  </span>
+                  {generatedColumns.has(column.id) ? (
+                    <span className={styles.generatedMark} aria-hidden="true">✓</span>
+                  ) : (
+                    <button type="button" onClick={() => handleGenerateColumn(column)} disabled={columnGenerating != null}>
+                      {columnGenerating === column.id ? '…' : t('table.generate')}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
+      )}
+
+      {editMode ? (
+        <div className={styles.schemaWorkbench}>
+          <aside className={styles.schemaDirectory} aria-label={t('table.edit_field_directory')}>
+            <div className={styles.schemaDirectoryHeader}>
+              <div>
+                <h3>{t('table.edit_schema')}</h3>
+                <p>{t('table.edit_schema_help')}</p>
+              </div>
+              <span>{editColumns.length}</span>
+            </div>
+            <nav className={styles.editFieldList}>
+              {editColumns.map((column, index) => (
+                <div
+                  key={column.id}
+                  draggable
+                  onDragStart={() => handleDragStart(index)}
+                  onDragOver={event => handleDragOver(event, index)}
+                  onDragEnd={handleDragEnd}
+                  className={dragIndex === index ? styles.editFieldDragging : undefined}
+                >
+                  <span className={styles.editDragHandle} title={t('table.drag_hint')} aria-hidden="true">
+                    <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20">
                       <path d="M7 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM7 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM13 14a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
                     </svg>
-                  </div>
-                  <span className="text-xs text-gv-text-muted w-5">{i + 1}</span>
-                  <div className="flex-1 flex flex-col gap-2">
+                  </span>
+                  <button
+                    type="button"
+                    aria-current={selectedEditColumnId === column.id ? 'page' : undefined}
+                    onClick={() => setSelectedEditColumnId(column.id)}
+                  >
+                    <strong>{column.name || t('table.unnamed_field')}</strong>
+                    <small>{index + 1} · {t(TYPE_KEY[column.type])}</small>
+                  </button>
+                </div>
+              ))}
+            </nav>
+            <button type="button" className={styles.addFieldButton} onClick={() => addEditColumn()}>
+              <span aria-hidden="true">+</span>{t('table.add_col')}
+            </button>
+          </aside>
+
+          <section className={styles.schemaEditorCanvas}>
+            <header>
+              <div>
+                <span>{t('table.editing_field')}</span>
+                <h3>{editColumns.find(column => column.id === selectedEditColumnId)?.name || t('table.unnamed_field')}</h3>
+              </div>
+              <button type="button" onClick={() => setEditMode(false)} aria-label={t('table.discard_changes')}>
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" /></svg>
+              </button>
+            </header>
+            <div className={styles.tableNameEditor}>
+              <label htmlFor="edit-table-name">{t('table.name')}</label>
+              <input id="edit-table-name" type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="input-field" />
+            </div>
+            {editColumns.filter(column => column.id === selectedEditColumnId).map(col => {
+              const i = editColumns.findIndex(column => column.id === col.id)
+              return (
+              <div key={col.id} className={styles.fieldEditor}>
+                <div className={styles.fieldEditorHeading}>
+                  <span>{t('table.field_basics')}</span>
+                  <div className={styles.fieldIdentityControls}>
                     <input type="text" value={col.name} onChange={(e) => updateEditCol(col.id, { name: e.target.value })}
                       placeholder={t('table.col_name')}
-                      className="w-full input-field py-2 text-sm" />
+                      className="input-field" />
                     <select value={col.type} onChange={(e) => updateEditCol(col.id, { type: e.target.value as ColumnType })}
-                      className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-2 text-sm focus:outline-none focus:border-gv-pink">
+                      className={styles.fieldTypeSelect}>
                       {COLUMN_TYPES.map(ct => (<option key={ct.value} value={ct.value}>{t(ct.key)}</option>))}
                     </select>
                   </div>
                   {editColumns.length > 1 && (
-                    <button onClick={() => removeEditColumn(col.id)} className="text-gv-pink/60 hover:text-gv-pink p-1 transition-colors"
-                      title={t('app.delete')}>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    <button type="button" onClick={() => removeEditColumn(col.id)} className={styles.removeFieldButton}>
+                      {t('table.remove_field')}
                     </button>
                   )}
                 </div>
+                <section className={styles.fieldRuleSection}>
+                  <div className={styles.fieldRuleHeading}>
+                    <strong>{t('table.field_generation')}</strong>
+                    <small>{t('table.field_generation_help')}</small>
+                  </div>
+                  <div className={styles.fieldRuleControls}>
                 {col.type === 'text' && (
                   <textarea value={col.llmPrompt || ''} onChange={(e) => updateEditCol(col.id, { llmPrompt: e.target.value })}
                     placeholder={t('table.text_prompt_placeholder')}
@@ -642,13 +883,13 @@ export default function TableEditorPage() {
                     {col.foreignTable && (
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
-                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
+                          <option value="">{t('table.local_match_auto')}</option>
                           {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
-                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
@@ -658,7 +899,7 @@ export default function TableEditorPage() {
                         placeholder={t('table.number_prompt_placeholder')}
                         rows={1}
                         onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
-                        className="flex-1 input-field py-1.5 text-xs font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
+                        className="flex-1 input-field py-1.5 text-sm font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
@@ -668,7 +909,7 @@ export default function TableEditorPage() {
                           updateEditCol(col.id, { generationCode: result.code || `// ${result.error || 'Error'}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
-                        className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        className="px-3 py-1.5 text-sm rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
                         {t('table.ai_gen_code')}
                       </button>
                     </div>
@@ -680,18 +921,7 @@ export default function TableEditorPage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => new Date() })
-                            const testParentRow = { id: 1, name: 'test', price: 100 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!)
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
                             alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
@@ -727,13 +957,13 @@ export default function TableEditorPage() {
                     {col.foreignTable && (
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
-                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
+                          <option value="">{t('table.local_match_auto')}</option>
                           {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
-                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
@@ -741,7 +971,7 @@ export default function TableEditorPage() {
                     {col.foreignTable && (
                       <select value={col.parentDateColumn || ''} onChange={(e) => updateEditCol(col.id, { parentDateColumn: e.target.value || undefined })}
                         className="w-full rounded-lg border border-gv-border bg-gv-bg text-gv-text px-3 py-2 text-sm focus:outline-none focus:border-gv-pink">
-                        <option value="">选择外表日期字段（手动写公式则留空）</option>
+                        <option value="">{t('table.parent_date_pick')}</option>
                         {allTables.find(t => t.id === col.foreignTable)?.columns.filter(c => c.type === 'date').map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                       </select>
                     )}
@@ -763,7 +993,7 @@ export default function TableEditorPage() {
                                 dist[ri] = { ...dist[ri], ratio: Number(e.target.value) || 0 }
                                 updateEditCol(col.id, { dateDistribution: dist })
                               }}
-                              className="flex-1 input-field py-1 text-xs min-w-0"
+                              className="flex-1 input-field py-1 text-sm min-w-0"
                             />
                           </div>
                         ))}
@@ -774,7 +1004,7 @@ export default function TableEditorPage() {
                         placeholder={t('table.date_prompt_placeholder')}
                         rows={1}
                         onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
-                        className="flex-1 input-field py-1.5 text-xs font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
+                        className="flex-1 input-field py-1.5 text-sm font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
@@ -784,29 +1014,18 @@ export default function TableEditorPage() {
                           updateEditCol(col.id, { generationCode: result.code || `// ${result.error || 'Error'}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
-                        className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        className="px-3 py-1.5 text-sm rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
                         {t('table.ai_gen_code')}
                       </button>
                     </div>
                     <input type="text" value={col.generationCode || ''} onChange={(e) => updateEditCol(col.id, { generationCode: e.target.value })}
                       placeholder={t('table.code_placeholder_short')}
-                      className="input-field w-full py-2 text-xs font-mono" />
+                      className="input-field w-full py-2 text-sm font-mono" />
                     {col.generationCode && col.generationCode !== '...' && (
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => new Date() })
-                            const testParentRow = { id: 1, name: 'test', price: 100 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!)
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v}`).join('\n')}`)
                           } catch (err) {
                             alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
@@ -828,13 +1047,13 @@ export default function TableEditorPage() {
                     {col.foreignTable && (
                       <div className="flex gap-2">
                         <select value={col.localMatchColumn || ''} onChange={(e) => updateEditCol(col.id, { localMatchColumn: e.target.value || undefined })}
-                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">本表关联列（自动）</option>
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
+                          <option value="">{t('table.local_match_auto')}</option>
                           {table.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                         <select value={col.foreignColumn || ''} onChange={(e) => updateEditCol(col.id, { foreignColumn: e.target.value || undefined })}
-                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-xs focus:outline-none focus:border-gv-pink">
-                          <option value="">外表关联列（默认 id）</option>
+                          className="flex-1 rounded-lg border border-gv-border bg-gv-bg text-gv-text px-2 py-1.5 text-sm focus:outline-none focus:border-gv-pink">
+                          <option value="">{t('table.foreign_col_default')}</option>
                           {allTables.find(t => t.id === col.foreignTable)?.columns.map(c => (<option key={c.id} value={c.name}>{c.name}</option>))}
                         </select>
                       </div>
@@ -844,7 +1063,7 @@ export default function TableEditorPage() {
                         placeholder={t('table.bool_prompt_placeholder')}
                         rows={1}
                         onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
-                        className="flex-1 input-field py-1.5 text-xs font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
+                        className="flex-1 input-field py-1.5 text-sm font-sans resize-none overflow-x-auto whitespace-nowrap prompt-input" />
                       <button type="button"
                         onClick={async () => {
                           if (!col.llmPrompt?.trim()) return
@@ -854,7 +1073,7 @@ export default function TableEditorPage() {
                           updateEditCol(col.id, { generationCode: result.code || `// ${result.error || 'Error'}` })
                         }}
                         disabled={!col.llmPrompt?.trim()}
-                        className="px-3 py-1.5 text-xs rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                        className="px-3 py-1.5 text-sm rounded-lg border border-gv-pink/30 text-gv-pink hover:bg-gv-pink/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
                         {t('table.ai_gen_code')}
                       </button>
                     </div>
@@ -865,18 +1084,7 @@ export default function TableEditorPage() {
                       <button type="button"
                         onClick={() => {
                           try {
-                            const testRefData = { users: [{ id: 1, name: 'test' }], orders: [{ id: 1 }], products: [{ id: 1 }] }
-                            const testPick = (arr: unknown[]) => (Array.isArray(arr) && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : undefined)
-                            const testRandomInt = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a
-                            const testRandomFloat = (a: number, b: number) => Math.random() * (b - a) + a
-                            const testRow = new Proxy({}, { get: () => Math.random() > 0.5 ? 1 : 0 })
-                            const testParentRow = { id: 1, name: 'test', is_premium: 1 }
-                            const fn = new Function('index', 'totalRows', 'previousValues', 'refData', 'row', 'randomInt', 'randomFloat', 'pick', 'parentRow',
-                              col.generationCode!.includes('return ') ? col.generationCode! : `return (${col.generationCode})`)
-                            const results: unknown[] = []
-                            for (let i = 0; i < 5; i++) {
-                              results.push(fn(i, 5, results, testRefData, testRow, testRandomInt, testRandomFloat, testPick, testParentRow))
-                            }
+                            const results = previewGenerationExpression(col.generationCode!, 'boolean')
                             alert(`Test results (5):\n${results.map((v, i) => `  [${i}] ${v ? '1 (true)' : '0 (false)'}`).join('\n')}`)
                           } catch (err) {
                             alert(`Code error: ${err instanceof Error ? err.message : String(err)}`)
@@ -919,8 +1127,10 @@ export default function TableEditorPage() {
                     {PHONE_COUNTRIES.map(c => (<option key={c.value} value={c.value}>{t(c.key)}</option>))}
                   </select>
                 )}
+                  </div>
+                </section>
                 {/* Nullable setting for all column types */}
-                <div className="border-t border-gv-border/50 pt-2 mt-2" draggable="false" onDragStart={(e) => e.stopPropagation()}>
+                <div className={styles.fieldOptionRow} draggable="false" onDragStart={(e) => e.stopPropagation()}>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -949,25 +1159,21 @@ export default function TableEditorPage() {
                     </div>
                   )}
                 </div>
+                <button type="button" onClick={() => addEditColumn(i)} className={styles.insertFieldButton}>
+                  <span aria-hidden="true">+</span>{t('table.insert_after_field')}
+                </button>
               </div>
-              <button type="button" onClick={() => addEditColumn(i)}
-                className="w-full mt-1 mb-1 rounded-lg border-2 border-dashed border-gv-border hover:border-gv-pink/50 py-2 text-sm text-gv-text-dim hover:text-gv-pink transition-colors"
-                title={t('table.insert_col_hint')}>
-                {t('table.insert_col')}
-              </button>
-              </React.Fragment>
-            ))}
-          </div>
-          <div className="flex gap-2 mt-4">
-            <button onClick={saveEdit}
-              className="btn-primary rounded-lg px-4 py-2 text-sm">{t('table.save_changes')}</button>
-            <button onClick={() => setEditMode(false)}
-              className="btn-outline rounded-lg px-4 py-2 text-sm">{t('table.discard_changes')}</button>
-          </div>
+              )
+            })}
+            <div className={styles.schemaEditorActions}>
+              <button onClick={saveEdit} className="btn-primary rounded-lg px-4 py-2 text-sm">{t('table.save_changes')}</button>
+              <button onClick={() => setEditMode(false)} className="btn-outline rounded-lg px-4 py-2 text-sm">{t('table.discard_changes')}</button>
+            </div>
+          </section>
         </div>
       ) : (
         /* Column Info (read-only) */
-        <div className="card p-4">
+        <div className={`card p-4 ${styles.schemaCard}`}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gv-text">
               {t('table.columns')}
@@ -977,10 +1183,7 @@ export default function TableEditorPage() {
                 </span>
               )}
             </h3>
-            <button onClick={startEdit}
-              className="btn-outline rounded-lg px-2.5 py-1 text-xs">
-              {t('table.edit_schema')}
-            </button>
+            <span className={styles.schemaHint}>{t('table.drag_hint')}</span>
           </div>
         <div className="space-y-1">
           {table.columns.map((col, i) => (
@@ -1001,7 +1204,7 @@ export default function TableEditorPage() {
               </div>
               {/* Col 2: name + type stacked */}
               <div className="flex flex-col gap-0.5 flex-shrink-0 min-w-[60px]">
-                <span className="font-medium text-gv-text text-xs">{col.name}</span>
+                <span className="font-medium text-gv-text text-sm">{col.name}</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium self-start ${
                   col.type === 'foreign_key' || col.type === 'foreign_key_array' ? 'bg-gv-pink/10 text-gv-pink' :
                   col.type === 'text' ? 'bg-gv-green/10 text-gv-green-dark' :
@@ -1092,25 +1295,14 @@ export default function TableEditorPage() {
       </div>
       )}
 
-      {/* LEFT panel tools */}
-      {!editMode && (
-        <>
-          {hasUnresolvedFK && (
-            <p className="text-xs text-gv-pink-dark">{t('table.fk_missing_warn')}</p>
-          )}
-          {emptyPromptCols.length > 0 && (
-            <p className="text-xs text-gv-pink-dark">
-              {t('table.prompt_empty_warn', emptyPromptCols.map(c => c.name).join(', '))}
-            </p>
-          )}
-        </>
-      )}
       </div> {/* end left panel */}
 
       {/* RIGHT 3/4 — Generate + Table */}
-      <div className="flex-1 min-w-0 space-y-3">
+      {!editMode && <div className={styles.dataWorkspace}>
+        {workspaceMode === 'data' ? (
+          <>
         {/* Compact toolbar */}
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className={styles.generationToolbar}>
           <div className="flex items-center gap-1.5">
             <input type="number" value={rowCount} onChange={(e) => setRowCount(Number(e.target.value))}
               min={1} max={1000}
@@ -1129,39 +1321,45 @@ export default function TableEditorPage() {
           )}
         </div>
         {genError && (
-          <div className="rounded-lg bg-gv-pink/10 border border-gv-pink/30 p-2 text-xs text-gv-pink-dark whitespace-pre-wrap">{genError}</div>
+          <div className={styles.generationError} role="alert">{genError}</div>
         )}
 
-      {/* Stats Panel */}
-      {displayedRows.length > 0 && <StatsPanel columns={table.columns} rows={displayedRows} t={t} />}
-
       {/* Data Table */}
-      <div className="card overflow-hidden">
+      <div className={`card overflow-hidden ${styles.dataCard}`}>
         {displayedRows.length === 0 ? (
           rowsLoading ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gv-text-dim">
-              <div className="w-8 h-8 border-2 border-gv-pink/30 border-t-gv-pink rounded-full animate-spin mb-3" />
+            <div className={styles.dataState}>
+              <div className="w-8 h-8 border-2 border-gv-pink/30 border-t-gv-pink rounded-full animate-spin" />
               <p>{t('app.loading')}</p>
             </div>
-          ) : (
-          <div className="flex flex-col items-center justify-center py-16 text-gv-text-dim">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-gv-pink/10 to-gv-green/10 flex items-center justify-center mb-3 border border-gv-border">
-              <svg className="w-6 h-6 text-gv-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7C5 3 4 4 4 7z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 3v18M16 3v18M3 8h18M3 16h18" />
+          ) : loadFailed ? (
+            <div className={styles.dataState} role="alert">
+              <svg className="w-6 h-6 text-gv-pink" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v4m0 4h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0Z" />
               </svg>
+              <p>{t('table.load_failed_hint')}</p>
+              <button type="button" onClick={() => setLoadRetry(n => n + 1)}
+                className="mt-2 rounded-lg border border-gv-border px-3 py-1.5 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/50 transition-colors">
+                {t('table.retry_load')}
+              </button>
             </div>
+          ) : (
+          <div className={styles.dataState}>
+            <svg className="w-6 h-6 text-gv-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7C5 3 4 4 4 7z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 3v18M16 3v18M3 8h18M3 16h18" />
+            </svg>
             <p>{t('table.no_data')}</p>
           </div>
         )
       ) : (
           <>
-            <div className="flex items-center justify-between px-4 py-2 border-b border-gv-border/50 bg-gv-bg/50">
-              <div className="flex items-center gap-2 text-xs text-gv-text-dim">
+            <div className={styles.tableControls}>
+              <div>
                 <span>{t('table.per_page')}</span>
                 {[50, 100].map(n => (
                   <button key={n} onClick={() => { setPageSize(n); setCurrentPage(1) }}
-                    className={`px-2 py-0.5 rounded border transition-colors ${pageSize === n ? 'border-gv-pink bg-gv-pink/10 text-gv-pink' : 'border-gv-border hover:border-gv-pink/50'}`}>{n}</button>
+                    aria-pressed={pageSize === n}>{n}</button>
                 ))}
                 <span>{t('table.page_info', displayedRows.length)}</span>
               </div>
@@ -1170,164 +1368,223 @@ export default function TableEditorPage() {
                 const start = (currentPage - 1) * pageSize
                 const end = Math.min(start + pageSize, displayedRows.length)
                 return (
-                  <div className="flex items-center gap-1 text-xs text-gv-text-dim">
+                  <div>
                     <span>{start + 1}-{end} / {displayedRows.length}</span>
                     <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}
-                      className="px-1.5 py-0.5 rounded border border-gv-border hover:border-gv-pink/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">&lt;</button>
+                      aria-label={t('table.previous_page')}>&lt;</button>
                     <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}
-                      className="px-1.5 py-0.5 rounded border border-gv-border hover:border-gv-pink/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">&gt;</button>
+                      aria-label={t('table.next_page')}>&gt;</button>
                   </div>
                 )
               })()}
             </div>
-            <div className="relative">
-              <div className="overflow-x-auto max-h-[32rem]">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 z-10">
-                    <tr className="border-b border-gv-border bg-gradient-to-r from-gv-pink/5 to-gv-green/5 backdrop-blur-sm">
-                      <th className="text-left px-4 py-2.5 text-xs text-gv-text-dim font-medium w-10">#</th>
+            <div className={styles.dataTableScroll}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th className={styles.rowNumber}>#</th>
                       {table.columns.map(col => (
-                        <th key={col.id} className="text-left px-3 py-2.5 text-xs text-gv-text-dim font-medium whitespace-nowrap">{col.name}</th>
+                        <th key={col.id}>{col.name}<small>{t(TYPE_KEY[col.type])}</small></th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {displayedRows.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((row, i) => (
-                      <tr key={i} className="border-b border-gv-border/50 hover:bg-gv-pink/[0.03] transition-colors">
-                        <td className="px-4 py-2 text-gv-text-muted text-xs">{(currentPage - 1) * pageSize + i + 1}</td>
+                      <tr key={i}>
+                        <td className={styles.rowNumber}>{(currentPage - 1) * pageSize + i + 1}</td>
                         {table.columns.map(col => (
-                          <td key={col.id} className="px-3 py-2 max-w-[200px] truncate text-gv-text text-xs">{renderCellValue(row[col.name])}</td>
+                          <td key={col.id}><span title={String(row[col.name] ?? 'null')}>{renderCellValue(row[col.name])}</span></td>
                         ))}
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
-              <div className="pointer-events-none absolute right-0 top-[2.125rem] bottom-0 w-8 bg-gradient-to-r from-transparent to-gv-bg/60" />
             </div>
           </>
         )}
         </div>
-      </div> {/* end right panel */}
+          </>
+        ) : (
+          <StatsPanel columns={table.columns} rows={displayedRows} t={t} onClose={() => setWorkspaceMode('data')} />
+        )}
+      </div>} {/* end right panel */}
     </div> {/* end flex */}
     </main>
   )
 }
 
-function StatsPanel({ columns, rows, t }: { columns: ColumnDef[]; rows: Record<string, unknown>[]; t: (key: string, ...args: (string | number)[]) => string }) {
-  const [open, setOpen] = useState(false)
-  if (!open) {
-    return (
-      <button onClick={() => setOpen(true)}
-        className="mt-4 w-full rounded-lg border-2 border-dashed border-gv-border py-3 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/40 transition-colors">
-        {t('stats.title')}
-      </button>
-    )
-  }
+function StatsPanel({ columns, rows, t, onClose }: {
+  columns: ColumnDef[]
+  rows: Record<string, unknown>[]
+  t: (key: string, ...args: (string | number)[]) => string
+  onClose: () => void
+}) {
+  const [selectedColumnId, setSelectedColumnId] = useState(columns[0]?.id ?? '')
+  const selectedColumn = columns.find(column => column.id === selectedColumnId) ?? columns[0]
+
+  // Memoize stats: parent re-renders (hover, drag, input) must not recompute
+  // the whole column distribution on every pass.
+  const stats = useMemo(
+    () => selectedColumn ? computeColumnStats(selectedColumn, rows) : null,
+    [selectedColumn, rows],
+  )
+
+  if (!selectedColumn || !stats) return null
 
   return (
-    <div className="mt-4 card p-5">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-gv-text">{t('stats.title')}</h3>
-        <button onClick={() => setOpen(false)} className="text-gv-text-muted hover:text-gv-pink transition-colors">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-        </button>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        {columns.map(col => {
-          const stats = computeColumnStats(col, rows)
-          return <StatCard key={col.id} col={col} stats={stats} t={t} />
-        })}
-      </div>
-      <button onClick={() => setOpen(false)}
-        className="mt-4 w-full rounded-lg border border-gv-border py-2 text-sm text-gv-text-dim hover:text-gv-pink hover:border-gv-pink/40 transition-colors">
-        {t('stats.close')}
-      </button>
-    </div>
+    <section className={styles.statisticsPanel} aria-labelledby="field-statistics-title">
+      <aside className={styles.statisticsDirectory}>
+        <div className={styles.statisticsDirectoryHeader}>
+          <strong>{t('table.columns')}</strong>
+          <span>{columns.length}</span>
+        </div>
+        <div className={styles.statisticsFieldList} role="tablist" aria-label={t('stats.select_field')}>
+          {columns.map(column => (
+            <button
+              type="button"
+              role="tab"
+              id={`stats-tab-${column.id}`}
+              aria-controls="field-statistics-panel"
+              aria-selected={selectedColumn.id === column.id}
+              key={column.id}
+              onClick={() => setSelectedColumnId(column.id)}
+            >
+              <strong>{column.name}</strong>
+              <small>{t(TYPE_KEY[column.type])}</small>
+            </button>
+          ))}
+        </div>
+      </aside>
+      <section
+        className={styles.statisticsCanvas}
+        id="field-statistics-panel"
+        role="tabpanel"
+        aria-labelledby={`stats-tab-${selectedColumn.id}`}
+      >
+        <header>
+          <div>
+            <span>{t(stats.type === 'number' ? TYPE_KEY.number : TYPE_KEY[selectedColumn.type])}</span>
+            <h2 id="field-statistics-title">{selectedColumn.name}</h2>
+          </div>
+          <button type="button" onClick={onClose}>{t('stats.close')}</button>
+        </header>
+        <StatCard stats={stats} t={t} />
+        <footer>{t('stats.source_rows', rows.length)}</footer>
+      </section>
+    </section>
   )
 }
 
-function StatCard({ col, stats, t }: { col: ColumnDef; stats: ColumnStats; t: (key: string, ...args: (string | number)[]) => string }) {
+function getStatMetrics(stats: ColumnStats, t: (key: string, ...args: (string | number)[]) => string) {
+  switch (stats.type) {
+    case 'number':
+      return [[t('stats.count'), stats.count], [t('stats.mean'), stats.mean.toFixed(2)], [t('stats.median'), stats.median.toFixed(2)], [t('stats.min_max'), `${stats.min} / ${stats.max}`]]
+    case 'text':
+      return [[t('stats.count'), stats.count], [t('stats.unique'), stats.uniqueCount], [t('stats.avg_len'), `${stats.avgLength.toFixed(0)} ${t('stats.chars')}`], [t('stats.min_max_len'), `${stats.minLength} / ${stats.maxLength}`]]
+    case 'date':
+      return [[t('stats.count'), stats.count], [t('stats.earliest'), stats.min || '-'], [t('stats.latest'), stats.max || '-'], [t('stats.span'), `${stats.spanDays} ${t('stats.days')}`]]
+    case 'boolean':
+      return [[t('stats.count'), stats.count], ['True', stats.trueCount], ['False', stats.falseCount], [t('stats.true_ratio'), `${(stats.trueRatio * 100).toFixed(1)}%`]]
+    case 'id':
+      return [[t('stats.count'), stats.count], [t('stats.unique'), stats.uniqueCount], [t('stats.duplicates'), stats.duplicateCount], [t('stats.unique_rate'), `${stats.count > 0 ? ((stats.uniqueCount / stats.count) * 100).toFixed(1) : 0}%`]]
+    case 'foreign_key':
+    case 'phone':
+      return [[t('stats.count'), stats.count], [t('stats.distinct'), stats.distinctCount], [t('stats.nulls'), stats.nullCount]]
+    case 'city':
+      return [[t('stats.count'), stats.count], [t('stats.distinct'), stats.distinctCount]]
+    default:
+      return [[t('stats.count'), stats.count]]
+  }
+}
+
+function StatCard({ stats, t }: { stats: ColumnStats; t: (key: string, ...args: (string | number)[]) => string }) {
+  const metrics = getStatMetrics(stats, t)
   return (
-    <div className="rounded-lg border border-gv-border p-3 text-xs bg-gv-bg/50">
-      <div className="font-medium text-sm text-gv-text mb-2">{col.name}</div>
-      {stats.type === 'number' && <NumStatCard stats={stats} t={t} />}
-      {stats.type === 'text' && <TextStatCard stats={stats} t={t} />}
-      {stats.type === 'date' && <DateStatCard stats={stats} t={t} />}
-      {stats.type === 'boolean' && <BoolStatCard stats={stats} t={t} />}
-      {stats.type === 'id' && <IdStatCard stats={stats} t={t} />}
-      {stats.type === 'foreign_key' && <FkStatCard stats={stats} t={t} />}
-      {stats.type === 'phone' && <PhoneStatCard stats={stats} t={t} />}
-      {stats.type === 'city' && <CityStatCard stats={stats} t={t} />}
-      {stats.type === 'unknown' && <p className="text-gv-text-dim">{t('stats.total_rows', stats.count)}</p>}
+    <div className={styles.statisticsContent}>
+      <dl className={styles.statisticsMetrics}>
+        {metrics.map(([label, value]) => (
+          <div key={String(label)}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className={styles.statisticsDistribution}>
+        <div>
+          <h3>{t('stats.distribution')}</h3>
+          <p>{t('stats.distribution_help')}</p>
+        </div>
+        {stats.type === 'number' && <NumStatCard stats={stats} t={t} />}
+        {stats.type === 'text' && <TextStatCard stats={stats} t={t} />}
+        {stats.type === 'date' && <DateStatCard stats={stats} t={t} />}
+        {stats.type === 'boolean' && <BoolStatCard stats={stats} />}
+        {stats.type === 'id' && <IdStatCard stats={stats} t={t} />}
+        {stats.type === 'foreign_key' && <FkStatCard stats={stats} t={t} />}
+        {stats.type === 'phone' && <PhoneStatCard stats={stats} t={t} />}
+        {stats.type === 'city' && <CityStatCard stats={stats} t={t} />}
+        {stats.type === 'unknown' && <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>}
+      </div>
     </div>
   )
 }
 
 function tinyBar(v: number, max: number) {
-  const pct = max > 0 ? Math.round((v / max) * 100) : 0
+  const scale = max > 0 ? Math.max(0, Math.min(1, v / max)) : 0
   return (
-    <span className="inline-block h-2 bg-gradient-to-r from-gv-pink to-gv-green rounded-sm ml-1" style={{ width: `${Math.max(pct, 1)}%`, minWidth: pct > 0 ? '4px' : '0' }} />
+    <span className={styles.statBarTrack} aria-hidden="true">
+      <span className={styles.statBarFill} style={{ '--stat-scale': scale } as React.CSSProperties} />
+    </span>
   )
 }
 
 function NumStatCard({ stats, t }: { stats: NumStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxHist = Math.max(...stats.histogram.map(h => h.count), 1)
+  if (stats.histogram.length === 0) return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
   return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.mean')}</span><span className="font-mono text-gv-text">{stats.mean.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>{t('stats.median')}</span><span className="font-mono text-gv-text">{stats.median.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>{t('stats.std')}</span><span className="font-mono text-gv-text">{stats.std.toFixed(2)}</span></div>
-      <div className="flex justify-between"><span>{t('stats.min_max')}</span><span className="font-mono text-gv-text">{stats.min} / {stats.max}</span></div>
-      <div className="flex justify-between"><span>{t('stats.q1_q3')}</span><span className="font-mono text-gv-text">{stats.q1.toFixed(1)} / {stats.q3.toFixed(1)}</span></div>
-      <div className="mt-2">
-        <p className="text-gv-text-muted mb-1">{t('stats.distribution')}</p>
-        {stats.histogram.map((h, i) => (
-          <div key={i} className="flex items-center gap-1 text-xs">
-            <span className="w-14 text-right font-mono">{h.binStart}</span>
-            <span>-</span>
-            <span className="w-14 font-mono">{h.binEnd}</span>
-            <span className="font-mono text-gv-text-muted">{h.count}</span>
-            {tinyBar(h.count, maxHist)}
-          </div>
-        ))}
-      </div>
+    <div className={styles.statDetailRows}>
+      {stats.histogram.map((h, i) => (
+        <div key={i} className={styles.statDetailRow}>
+          <span>{h.binStart} - {h.binEnd}</span>
+          {tinyBar(h.count, maxHist)}
+          <strong>{h.count}</strong>
+        </div>
+      ))}
     </div>
   )
 }
 
 function TextStatCard({ stats, t }: { stats: TextStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxW = Math.max(...stats.topWords.map(w => w.count), 1)
+  const maxCity = Math.max(...stats.cityWords.map(w => w.count), 1)
+  if (stats.topWords.length === 0 && stats.cityWords.length === 0) return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
   return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.avg_len')}</span><span className="font-mono text-gv-text">{stats.avgLength.toFixed(0)} {t('stats.chars')}</span></div>
-      <div className="flex justify-between"><span>{t('stats.min_max_len')}</span><span className="font-mono text-gv-text">{stats.minLength} / {stats.maxLength}</span></div>
-      <div className="flex justify-between"><span>{t('stats.unique')}</span><span className="font-mono text-gv-text">{stats.uniqueCount}</span></div>
+    <div className={styles.statDetailGroups}>
       {stats.topWords.length > 0 && (
-        <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">{t('stats.top_words')}</p>
+        <div className={styles.statDetailGroup}>
+          <h4>{t('stats.top_words')}</h4>
+          <div className={styles.statDetailRows}>
           {stats.topWords.map((w, i) => (
-            <div key={i} className="flex items-center gap-1">
-              <span className="font-mono w-20 truncate">{w.word}</span>
-              <span className="font-mono text-gv-text-muted">{w.count}</span>
+            <div key={i} className={styles.statDetailRow}>
+              <span>{w.word}</span>
               {tinyBar(w.count, maxW)}
+              <strong>{w.count}</strong>
             </div>
           ))}
+          </div>
         </div>
       )}
       {stats.cityWords.length > 0 && (
-        <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">{t('stats.city_mentions')}</p>
+        <div className={styles.statDetailGroup}>
+          <h4>{t('stats.city_mentions')}</h4>
+          <div className={styles.statDetailRows}>
           {stats.cityWords.map((c, i) => (
-            <div key={i} className="flex items-center gap-1">
-              <span className="font-mono w-16 truncate text-xs">{c.city}</span>
-              <span className="text-xs text-gv-text-muted w-16 truncate">{c.province}</span>
-              <span className="font-mono text-gv-text-muted text-xs">{c.count}</span>
-              {tinyBar(c.count, Math.max(...stats.cityWords.map(w => w.count), 1))}
+            <div key={i} className={styles.statDetailRow}>
+              <span>{c.city} / {c.province}</span>
+              {tinyBar(c.count, maxCity)}
+              <strong>{c.count}</strong>
             </div>
           ))}
+          </div>
         </div>
       )}
     </div>
@@ -1336,102 +1593,68 @@ function TextStatCard({ stats, t }: { stats: TextStats; t: (key: string, ...args
 
 function DateStatCard({ stats, t }: { stats: DateStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxM = Math.max(...stats.byMonth.map(m => m.count), 1)
+  if (stats.byMonth.length === 0) return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
   return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.earliest')}</span><span className="font-mono text-xs truncate max-w-[140px]">{stats.min}</span></div>
-      <div className="flex justify-between"><span>{t('stats.latest')}</span><span className="font-mono text-xs truncate max-w-[140px]">{stats.max}</span></div>
-      <div className="flex justify-between"><span>{t('stats.span')}</span><span className="font-mono text-gv-text">{stats.spanDays} {t('stats.days')}</span></div>
-      {stats.byMonth.length > 0 && (
-        <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">{t('stats.by_month')}</p>
-          {stats.byMonth.map((m, i) => (
-            <div key={i} className="flex items-center gap-1">
-              <span className="font-mono w-16">{m.month}</span>
-              <span className="font-mono text-gv-text-muted">{m.count}</span>
-              {tinyBar(m.count, maxM)}
-            </div>
-          ))}
+    <div className={styles.statDetailRows}>
+      {stats.byMonth.map((m, i) => (
+        <div key={i} className={styles.statDetailRow}>
+          <span>{m.month}</span>
+          {tinyBar(m.count, maxM)}
+          <strong>{m.count}</strong>
         </div>
-      )}
+      ))}
     </div>
   )
 }
 
-function BoolStatCard({ stats, t }: { stats: BoolStats; t: (key: string, ...args: (string | number)[]) => string }) {
+function BoolStatCard({ stats }: { stats: BoolStats }) {
+  const max = Math.max(stats.trueCount, stats.falseCount, 1)
   return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>True (1)</span><span className="font-mono text-gv-text">{stats.trueCount}</span></div>
-      <div className="flex justify-between"><span>False (0)</span><span className="font-mono text-gv-text">{stats.falseCount}</span></div>
-      <div className="flex justify-between"><span>{t('stats.true_ratio')}</span><span className="font-mono text-gv-text">{(stats.trueRatio * 100).toFixed(1)}%</span></div>
-      <div className="mt-1 bg-gv-bg rounded-full h-2 overflow-hidden">
-        <div className="h-full bg-gradient-to-r from-gv-green to-gv-pink rounded-full transition-all" style={{ width: `${stats.trueRatio * 100}%` }} />
-      </div>
+    <div className={styles.statDetailRows}>
+      <div className={styles.statDetailRow}><span>True</span>{tinyBar(stats.trueCount, max)}<strong>{stats.trueCount}</strong></div>
+      <div className={styles.statDetailRow}><span>False</span>{tinyBar(stats.falseCount, max)}<strong>{stats.falseCount}</strong></div>
     </div>
   )
 }
 
 function IdStatCard({ stats, t }: { stats: IdStats; t: (key: string, ...args: (string | number)[]) => string }) {
-  return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.unique')}</span><span className="font-mono text-gv-text">{stats.uniqueCount}</span></div>
-      <div className="flex justify-between"><span>{t('stats.duplicates')}</span><span className="font-mono text-gv-text">{stats.duplicateCount}</span></div>
-      <div className="flex justify-between"><span>{t('stats.unique_rate')}</span><span className="font-mono text-gv-text">{stats.count > 0 ? ((stats.uniqueCount / stats.count) * 100).toFixed(1) : 0}%</span></div>
-    </div>
-  )
+  void stats
+  return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
 }
 
 function FkStatCard({ stats, t }: { stats: FkStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxV = Math.max(...stats.topValues.map(v => v.count), 1)
+  if (stats.topValues.length === 0) return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
   return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.distinct')}</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
-      <div className="flex justify-between"><span>{t('stats.nulls')}</span><span className="font-mono text-gv-text">{stats.nullCount}</span></div>
-      {stats.topValues.length > 0 && (
-        <div className="mt-2">
-          <p className="text-gv-text-muted mb-1">{t('stats.top_values')}</p>
-          {stats.topValues.map((v, i) => (
-            <div key={i} className="flex items-center gap-1">
-              <span className="font-mono text-xs truncate w-16">{v.value}</span>
-              <span className="font-mono text-gv-text-muted">{v.count}</span>
-              {tinyBar(v.count, maxV)}
-            </div>
-          ))}
+    <div className={styles.statDetailRows}>
+      {stats.topValues.map((v, i) => (
+        <div key={i} className={styles.statDetailRow}>
+          <span>{v.value}</span>
+          {tinyBar(v.count, maxV)}
+          <strong>{v.count}</strong>
         </div>
-      )}
+      ))}
     </div>
   )
 }
 
 function PhoneStatCard({ stats, t }: { stats: PhoneStats; t: (key: string, ...args: (string | number)[]) => string }) {
-  return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.distinct')}</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
-      <div className="flex justify-between"><span>{t('stats.nulls')}</span><span className="font-mono text-gv-text">{stats.nullCount}</span></div>
-    </div>
-  )
+  void stats
+  return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
 }
 
 function CityStatCard({ stats, t }: { stats: CityStats; t: (key: string, ...args: (string | number)[]) => string }) {
   const maxP = Math.max(...stats.byProvince.map(p => p.count), 1)
+  if (stats.byProvince.length === 0) return <p className={styles.statisticsEmptyDetail}>{t('stats.no_distribution')}</p>
   return (
-    <div className="space-y-1.5 text-gv-text-dim">
-      <div className="flex justify-between"><span>{t('stats.count')}</span><span className="font-mono text-gv-text">{stats.count}</span></div>
-      <div className="flex justify-between"><span>{t('stats.distinct')}</span><span className="font-mono text-gv-text">{stats.distinctCount}</span></div>
-      <div className="mt-2">
-        <p className="text-gv-text-muted mb-1">{t('stats.by_province')}</p>
-        {stats.byProvince.map((p, i) => (
-          <div key={i} className="flex items-center gap-1">
-            <span className="w-16 truncate text-xs">{p.province}</span>
-            <span className="font-mono text-gv-text-muted text-xs">{p.count}</span>
-            {tinyBar(p.count, maxP)}
-          </div>
-        ))}
-      </div>
+    <div className={styles.statDetailRows}>
+      {stats.byProvince.map((p, i) => (
+        <div key={i} className={styles.statDetailRow}>
+          <span>{p.province}</span>
+          {tinyBar(p.count, maxP)}
+          <strong>{p.count}</strong>
+        </div>
+      ))}
     </div>
   )
 }

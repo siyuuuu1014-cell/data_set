@@ -1,6 +1,24 @@
 import type { ColumnDef } from './types'
 import { CITY_DATA, getCityProvince } from './city-data'
 
+// Pre-built city lookup: city name (longest first so '浦东新区' wins over
+// shorter names) → { country, province }. Built once at module load instead of
+// rescanning every row × every country × every city.
+const CITY_LOOKUP: { city: string; country: string; province: string }[] = []
+{
+  const seen = new Map<string, string>()
+  for (const [country, entries] of Object.entries(CITY_DATA)) {
+    for (const entry of entries) {
+      for (const city of entry.cities) {
+        if (seen.has(city)) continue
+        seen.set(city, country)
+        CITY_LOOKUP.push({ city, country, province: entry.province })
+      }
+    }
+  }
+  CITY_LOOKUP.sort((left, right) => right.city.length - left.city.length)
+}
+
 // ──── Types ────
 
 export interface NumStats {
@@ -83,6 +101,11 @@ export function computeColumnStats(
 ): ColumnStats {
   const values = rows.map(r => r[col.name]).filter(v => v !== null && v !== undefined)
 
+  // Imported and LLM-generated datasets can contain numeric values in a legacy
+  // text column. Statistics should describe the real data instead of showing a
+  // word-frequency chart for values such as rates, scores, prices, or counts.
+  if (col.type === 'text' && isNumericSeries(values)) return computeNumStats(values)
+
   switch (col.type) {
     case 'number':
       return computeNumStats(values)
@@ -105,10 +128,22 @@ export function computeColumnStats(
   }
 }
 
+function isNumericSeries(values: unknown[]): boolean {
+  const populated = values.filter(value => String(value).trim() !== '')
+  if (populated.length === 0) return false
+  const numericCount = populated.filter(value => Number.isFinite(Number(value))).length
+  return numericCount / populated.length >= 0.9
+}
+
 // ──── Number: normal distribution stats ────
 
 function computeNumStats(values: unknown[]): NumStats {
-  const nums = values.map(v => Number(v)).filter(n => !isNaN(n))
+  // Skip empty strings — Number('') is 0, which would skew mean/min/max
+  const nums = values
+    .map(v => (typeof v === 'string' ? v.trim() : v))
+    .filter(v => v !== '' && v !== null && v !== undefined)
+    .map(v => Number(v))
+    .filter(Number.isFinite)
   const n = nums.length
   if (n === 0) {
     return { type: 'number', count: 0, mean: 0, median: 0, std: 0, min: 0, max: 0, q1: 0, q3: 0, histogram: [] }
@@ -132,11 +167,16 @@ function computeNumStats(values: unknown[]): NumStats {
   const histogram: NumStats['histogram'] = []
   for (let i = 0; i < binCount; i++) {
     const binStart = min + i * binWidth
-    const binEnd = i === binCount - 1 ? max + 0.001 : binStart + binWidth
+    const isLast = i === binCount - 1
+    // Last bucket must include the maximum value (no upper bound rounding loss)
+    const binEnd = isLast ? max : binStart + binWidth
+    const count = isLast
+      ? sorted.filter(v => v >= binStart && v <= binEnd).length
+      : sorted.filter(v => v >= binStart && v < binEnd).length
     histogram.push({
       binStart: Math.round(binStart * 100) / 100,
       binEnd: Math.round(binEnd * 100) / 100,
-      count: sorted.filter(v => v >= binStart && v < binEnd).length,
+      count,
     })
   }
 
@@ -182,21 +222,17 @@ function computeTextStats(values: unknown[]): TextStats {
     .slice(0, 15)
     .map(([word, count]) => ({ word, count }))
 
-  // City name detection
+  // City name detection: single pass over the pre-built index per row
   const cityMap = new Map<string, { city: string; province: string; count: number }>()
   for (const s of strs) {
-    for (const [country, entries] of Object.entries(CITY_DATA)) {
-      for (const entry of entries) {
-        for (const city of entry.cities) {
-          if (s.includes(city)) {
-            const key = `${country}:${city}`
-            const existing = cityMap.get(key)
-            if (existing) {
-              existing.count++
-            } else {
-              cityMap.set(key, { city, province: entry.province, count: 1 })
-            }
-          }
+    for (const { city, country, province } of CITY_LOOKUP) {
+      if (s.includes(city)) {
+        const key = `${country}:${city}`
+        const existing = cityMap.get(key)
+        if (existing) {
+          existing.count++
+        } else {
+          cityMap.set(key, { city, province, count: 1 })
         }
       }
     }
@@ -256,13 +292,13 @@ function computeDateStats(values: unknown[]): DateStats {
   }
 
   parsed.sort((a, b) => a.d.getTime() - b.d.getTime())
-  const min = String(values[0])
-  const max = String(values[values.length - 1])
   const minD = parsed[0].d
   const maxD = parsed[parsed.length - 1].d
+
+  // ── by month ──
   const spanDays = Math.round((maxD.getTime() - minD.getTime()) / 86400000)
 
-  // Monthly distribution
+  // Monthly distribution — no truncation: cross-year data must keep every month
   const monthMap = new Map<string, number>()
   for (const p of parsed) {
     const key = `${p.d.getFullYear()}-${String(p.d.getMonth() + 1).padStart(2, '0')}`
@@ -270,7 +306,6 @@ function computeDateStats(values: unknown[]): DateStats {
   }
   const byMonth = [...monthMap.entries()]
     .sort()
-    .slice(0, 12)
     .map(([month, count]) => ({ month, count }))
 
   return { type: 'date', count: n, min: String(parsed[0].label), max: String(parsed[parsed.length - 1].label), spanDays, byMonth }

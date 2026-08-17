@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs'
-import { join } from 'path'
+import { getParquetPath } from '@/services/parquet'
+import { assertSafeIdentifier, assertSafeFileStem, isUnsafePathError } from '@/services/server-paths'
 
 // GET ?projectId=X&tableName=Y — download Parquet file
 export async function GET(request: Request) {
@@ -11,8 +12,15 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Missing params' }, { status: 400 })
   }
 
-  const dir = join(process.cwd(), 'generated_data', projectId)
-  const filePath = join(dir, `${tableName}.parquet`)
+  let filePath: string
+  try {
+    assertSafeIdentifier(projectId, 'project ID')
+    assertSafeFileStem(tableName, 'table name')
+    filePath = getParquetPath(projectId, tableName)
+  } catch (err) {
+    if (isUnsafePathError(err)) return Response.json({ error: err.message }, { status: 400 })
+    throw err
+  }
 
   if (!existsSync(filePath)) {
     return Response.json({ error: 'Parquet file not found' }, { status: 404 })

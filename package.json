@@ -6,11 +6,19 @@
     "postinstall": "node scripts/postinstall.js",
     "setup": "node scripts/setup.js",
     "dev": "node scripts/setup.js && next dev",
+    "dev:all": "concurrently -n next,worker -c cyan,green \"npm run dev\" \"powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/start-video-worker.ps1 -Dev\"",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test:node": "node --import tsx --test tests/*.test.ts tests/video-annotation/*.test.ts",
+    "test:worker": "node scripts/run-worker-tests.mjs",
+    "test": "npm run test:node && npm run test:worker && npm run typecheck && npm run lint"
   },
   "dependencies": {
+    "busboy": "^1.6.0",
+    "geist": "^1.7.2",
+    "jszip": "^3.10.1",
     "next": "16.2.9",
     "parquetjs": "^0.11.2",
     "react": "19.2.4",
@@ -18,12 +26,16 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/busboy": "^1.5.4",
+    "@types/jszip": "^3.4.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^10.0.4",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }

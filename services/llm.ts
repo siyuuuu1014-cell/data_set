@@ -11,6 +11,7 @@ export async function callLlm(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemPrompt, userPrompt, cacheKey }),
+    signal: AbortSignal.timeout(60000),
   })
 
   const data = await res.json()
@@ -23,28 +24,31 @@ export async function callLlm(
 const BATCH_SIZE = 20
 const MAX_CONCURRENT = 10
 
-/** Post a single chunk to /api/llm, with one retry on failure. */
-async function postChunk(systemPrompt: string, chunk: string[]): Promise<string[]> {
+/** Post a single chunk to /api/llm, with one retry on failure. Returns null on final failure. */
+async function postChunk(systemPrompt: string, chunk: string[]): Promise<string[] | null> {
   const doFetch = async () => {
     const res = await fetch('/api/llm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemPrompt, userPrompts: chunk }),
+      signal: AbortSignal.timeout(120000),
     })
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || `LLM API error ${res.status}`)
     return (data.results || []) as string[]
   }
 
+  // First attempt
   try {
     return await doFetch()
-  } catch (err) {
-    // Retry once
+  } catch {
+    // Retry once; on final failure return null so callers can surface the
+    // failure instead of silently producing empty values.
     try {
       return await doFetch()
     } catch (retryErr) {
       console.error(`[llm batch] chunk failed after retry:`, retryErr)
-      return new Array(chunk.length).fill('')
+      return null
     }
   }
 }
@@ -53,11 +57,12 @@ async function postChunk(systemPrompt: string, chunk: string[]): Promise<string[
  * Generate values for many rows via concurrent LLM batch calls.
  * Splits prompts into chunks of BATCH_SIZE, fires up to MAX_CONCURRENT
  * requests in parallel, merges results in original order.
+ * Failed chunks yield null entries (preserving order) instead of empty strings.
  */
 export async function callLlmBatch(
   systemPrompt: string,
   userPrompts: string[]
-): Promise<string[]> {
+): Promise<(string | null)[]> {
   const total = userPrompts.length
 
   // Split into chunks
@@ -67,7 +72,7 @@ export async function callLlmBatch(
   }
 
   // Pre-alloc results array to preserve order
-  const chunkResults: string[][] = new Array(chunks.length)
+  const chunkResults: (string[] | null)[] = new Array(chunks.length)
 
   // Worker pool: each worker grabs the next unprocessed chunk index
   let cursor = 0
@@ -84,11 +89,11 @@ export async function callLlmBatch(
   await Promise.all(workers)
 
   // Flatten preserving original order
-  const merged: string[] = []
+  const merged: (string | null)[] = []
   for (let i = 0; i < chunks.length; i++) {
     const res = chunkResults[i]
     for (let j = 0; j < chunks[i].length; j++) {
-      merged.push(res?.[j] ?? '')
+      merged.push(res?.[j] ?? null)
     }
   }
 
@@ -104,6 +109,7 @@ export async function callLlmVision(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemPrompt, userPrompt, images }),
+    signal: AbortSignal.timeout(120000),
   })
 
   const data = await res.json()
@@ -122,6 +128,7 @@ export async function testLlmConnection(): Promise<{ ok: boolean; error?: string
         systemPrompt: 'Reply with only the word "OK".',
         userPrompt: 'Ping',
       }),
+      signal: AbortSignal.timeout(30000),
     })
     const data = await res.json()
     if (res.ok) return { ok: true }

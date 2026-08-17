@@ -1,5 +1,6 @@
 // Post-install: replace lzo with stub so parquetjs optional dep resolves
 // The real lzo package has native bindings that may not compile.
+/* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('fs')
 const path = require('path')
 

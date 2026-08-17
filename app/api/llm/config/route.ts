@@ -1,6 +1,9 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import type { NextRequest } from 'next/server'
 import type { LlmConfig } from '@/services/types'
+import { UnsafeLlmUrlError, validateLlmBaseUrl } from '@/services/llm-url-policy'
+import { deploymentMutationDenied } from '@/services/video-annotation/admin-access'
 
 const CONFIG_DIR = join(process.cwd(), 'configs')
 const CONFIG_FILE = join(CONFIG_DIR, 'llm-config.json')
@@ -37,7 +40,9 @@ export async function GET() {
   })
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const denied = deploymentMutationDenied(request)
+  if (denied) return denied
   try {
     const body = await request.json()
     const existing = readConfig()
@@ -49,9 +54,13 @@ export async function POST(request: Request) {
       apiFormat: body.apiFormat ?? existing?.apiFormat ?? 'openai',
     }
 
+    validateLlmBaseUrl(config.baseUrl)
     writeConfig(config)
     return Response.json({ ok: true })
   } catch (err) {
+    if (err instanceof UnsafeLlmUrlError) {
+      return Response.json({ error: err.message }, { status: 400 })
+    }
     return Response.json({ error: '保存失败' }, { status: 500 })
   }
 }

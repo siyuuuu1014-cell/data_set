@@ -4,61 +4,74 @@ import { useStore } from '@/services/store'
 import { useLang } from '@/services/i18n'
 import Link from 'next/link'
 import { useParams, usePathname } from 'next/navigation'
+import { WorkspaceHeader } from '@/components/WorkspaceHeader'
+import { EmptyState, PageShell } from '@/components/ui'
+import styles from '../project-management.module.css'
 
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const { id } = useParams<{ id: string }>()
-  const { projects } = useStore()
+  const { projects, hydrated } = useStore()
   const { t } = useLang()
   const pathname = usePathname()
   const project = projects.find(p => p.id === id)
 
-  if (!project) {
+  if (pathname.includes('/annotate')) return children
+
+  if (!hydrated) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-lg text-gv-text-dim">{t('project.not_found')}</p>
-          <Link href="/" className="text-sm text-gv-pink hover:underline mt-2 inline-block">
-            {t('app.back')}
-          </Link>
-        </div>
+      <div className={styles.notFoundShell}>
+        <WorkspaceHeader />
+        <PageShell width="full" className={styles.notFound}>
+          <p className={styles.projectLoading} role="status" aria-live="polite">{t('app.loading')}</p>
+        </PageShell>
       </div>
     )
   }
 
-  const tabs = [
-    { label: t('project.tables'), href: `/project/${id}` },
-  ]
+  if (!project) {
+    return (
+      <div className={styles.notFoundShell}>
+        <WorkspaceHeader />
+        <div className={styles.projectContextBar}>
+          <div className={styles.projectContext}>
+            <Link href="/projects" className={styles.contextBack} aria-label={t('app.back')}>
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </Link>
+            <div className={styles.projectMeta}>
+              <p className={styles.projectType}>{t('workspace.synthetic')}</p>
+              <h1 className={styles.projectName}>{t('project.not_found')}</h1>
+            </div>
+          </div>
+        </div>
+        <PageShell width="full" className={styles.notFound}>
+          <EmptyState
+            title={t('project.not_found')}
+            description={t('project.not_found_desc')}
+            action={<Link href="/projects" className={styles.backTextLink}>{t('app.back')}</Link>}
+          />
+        </PageShell>
+      </div>
+    )
+  }
 
   return (
     <div className="flex-1 flex flex-col">
-      <header className="border-b border-gv-border/50">
-        <div className="px-8 py-5 flex items-center gap-3">
-          <Link href="/" className="text-gv-text-dim hover:text-gv-pink transition-colors flex-shrink-0">
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <WorkspaceHeader />
+      <div className={styles.projectContextBar}>
+        <div className={styles.projectContext}>
+          <Link href="/projects" className={styles.contextBack} aria-label={t('app.back')}>
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </Link>
-          <h1 className="text-lg font-semibold text-gv-text">{project.name}</h1>
-          <nav className="flex gap-1 ml-4">
-            {tabs.map(tab => {
-              const isActive = pathname === tab.href
-              return (
-                <Link
-                  key={tab.href}
-                  href={tab.href}
-                  className={`px-3 py-1 text-sm font-medium rounded transition-colors ${
-                    isActive
-                      ? 'text-gv-pink bg-gv-pink/10'
-                      : 'text-gv-text-dim hover:text-gv-text hover:bg-gv-surface'
-                  }`}
-                >
-                  {tab.label}
-                </Link>
-              )
-            })}
-          </nav>
+          <div className={styles.projectMeta}>
+            <p className={styles.projectType}>{t('workspace.synthetic')}</p>
+            <h1 className={styles.projectName}>{project.name}</h1>
+          </div>
         </div>
-      </header>
+      </div>
       {children}
     </div>
   )
